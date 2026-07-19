@@ -5,10 +5,10 @@
 
 **Precise calorie tracking for agents—nutrition math belongs in code, not in a prompt.**
 
-`nomnomcli` is an offline-first nutrition ledger for agent workflows. A person can say
-“я съел борщ 300г и два куска хлеба”; their agent translates that into a `nomnom` command,
-then narrates the deterministic JSON. Food matching, unit conversion, macro arithmetic,
-and persistence all happen inside the CLI against SQLite. There is no LLM in the program.
+`nomnomcli` is an offline-first nutrition ledger for agent workflows. A person can describe
+a meal in their own language; their agent translates that into a `nomnom` command, then
+narrates the deterministic JSON. Food matching, unit conversion, macro arithmetic, and
+persistence all happen inside the CLI against SQLite. There is no LLM in the program.
 
 ## Install
 
@@ -41,7 +41,7 @@ Human-readable tables are the default. Add `--json` to any command for stable ma
 ### Log free text
 
 ```sh
-nomnom log --parse "борщ 300г, хлеб 2 куска, гречка 150 г" --json
+nomnom log --parse "borscht 300g, bread 2 pieces, cooked buckwheat 150g" --json
 ```
 
 ```json
@@ -56,17 +56,18 @@ nomnom log --parse "борщ 300г, хлеб 2 куска, гречка 150 г" 
 }
 ```
 
-Supported quantity units are kilograms, grams (`g`, `grams`, `г`, `гр`, `грамм`),
-millilitres (`ml`, `мл`), and pieces (`pieces`, `pcs`, `шт`, `куска`). Piece conversion only
-works for foods with a deterministic bundled piece weight. Millilitres use a bundled density
-when available and otherwise the documented water-equivalent default of 1 g/ml. An explicit
-per-piece weight always wins, so both `хлеб 2 куска по 40г` and `яйцо 3 штуки по 50 г` multiply
-the supplied count by the supplied grams.
+Supported quantity units include kilograms, grams (`g`, `grams`), millilitres (`ml`),
+and pieces (`piece`, `pieces`, `pc`, `pcs`). The parser also ships language-specific aliases
+and accepts localized unit forms; agents may translate natural-language input into these stable
+commands. Piece conversion only works for foods with a deterministic bundled piece weight.
+Millilitres use a bundled density when available and otherwise the documented water-equivalent
+default of 1 g/ml. An explicit per-piece weight always wins, so both `bread 2 pieces at 40g`
+and `egg 3 pieces at 50g` multiply the supplied count by the supplied grams.
 
-Size descriptors and fractions use the packaged deterministic table below. Supported size words
-include `небольшой` / `небольших` / `маленький` / `small`, `средний` / `medium`, and
-`крупный` / `large`, including the grammatical case forms shown by normal Russian ingredient
-phrases. Fractions are `половина` / `половины` / `half` / `1/2` and `четверть` / `quarter`.
+Size descriptors and fractions use the packaged deterministic table below. Built-in English
+forms include `small`, `medium`, and `large`; language-specific aliases (including Russian
+inflections) are supported by the parser without making a particular language the public API.
+Fractions include `half`, `1/2`, and `quarter`.
 
 | Food | Small | Medium | Large |
 | --- | ---: | ---: | ---: |
@@ -83,9 +84,9 @@ phrases. Fractions are `половина` / `половины` / `half` / `1/2` 
 
 These are transparent portion assumptions, not measured weights. JSON adds `assumed`,
 `assumption`, and a top-level `assumptions` list only where relevant; human-readable output prints
-the same assumptions. Prefixes `яичница из`, `омлет из`, `салат из`, and `каша из` decompose the
-following comma/`и` ingredient list. The CLI calculates only ingredients that were stated and
-never silently adds oil.
+the same assumptions. Supported dish prefixes are intentionally data-driven; the current
+built-ins include omelette, salad, and porridge equivalents. The CLI calculates only ingredients
+that were stated and never silently adds oil.
 
 Direct logging is useful after the human clarifies an unresolved item:
 
@@ -126,7 +127,7 @@ values must be finite and non-negative, while a piece weight must be greater tha
 ```sh
 nomnom stats today
 nomnom stats week --json
-nomnom search "творог" --json
+nomnom search "cottage cheese" --json
 ```
 
 Stats include totals and each stored meal. User data defaults to
