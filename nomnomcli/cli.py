@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Sequence
 
@@ -32,6 +33,10 @@ def _print_log(result: dict, as_json: bool) -> None:
     print("Logged:")
     for item in result["items"]:
         print(f"  {item['name']:<38} {item['grams']:>8.2f} g  {item['kcal']:>8.2f} kcal")
+    if result.get("assumptions"):
+        print("Assumptions:")
+        for assumption in result["assumptions"]:
+            print(f"  - {assumption}")
     print(f"Total: {_nutrition_line(result['totals'])}")
 
 
@@ -71,6 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
+    add = commands.add_parser("add", help="pin a branded product in the user cache")
+    add.add_argument("--name", required=True)
+    add.add_argument("--brand", required=True)
+    add.add_argument("--kcal", type=float, required=True)
+    add.add_argument("--protein", type=float, required=True)
+    add.add_argument("--fat", type=float, required=True)
+    add.add_argument("--carbs", type=float, required=True)
+    add.add_argument("--piece-grams", type=float)
+    add.add_argument("--json", action="store_true", help="machine-readable JSON output")
+
     recipe = commands.add_parser("recipe", help="import and log recipes")
     recipe_commands = recipe.add_subparsers(dest="recipe_command", required=True)
     recipe_add = recipe_commands.add_parser("add", help="import schema.org Recipe from a URL")
@@ -87,6 +102,45 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> int:
     with connect() as connection:
         repository = FoodRepository(connection)
+        if args.command == "add":
+            nutrients = (args.kcal, args.protein, args.fat, args.carbs)
+            if not args.name.strip() or not args.brand.strip():
+                raise NomnomError("invalid_product", "Name and brand must not be empty")
+            if any(not math.isfinite(value) or value < 0 for value in nutrients):
+                raise NomnomError(
+                    "invalid_nutrition", "Nutrition values must be finite and non-negative"
+                )
+            if args.piece_grams is not None and (
+                not math.isfinite(args.piece_grams) or args.piece_grams <= 0
+            ):
+                raise NomnomError(
+                    "invalid_piece_grams", "Piece grams must be finite and greater than zero"
+                )
+            food = repository.add_food(
+                name=args.name,
+                brand=args.brand,
+                kcal=args.kcal,
+                protein=args.protein,
+                fat=args.fat,
+                carbs=args.carbs,
+                piece_grams=args.piece_grams,
+            )
+            result = {
+                "name": food.name,
+                "brand": food.brand,
+                "source": food.source,
+                "kcal_per_100g": round(food.kcal, 2),
+                "protein_per_100g": round(food.protein, 2),
+                "fat_per_100g": round(food.fat, 2),
+                "carbs_per_100g": round(food.carbs, 2),
+                "piece_grams": food.piece_grams,
+            }
+            if args.json:
+                print(_json_output(result))
+            else:
+                print(f"Pinned: {food.name} ({food.kcal:.2f} kcal/100g)")
+            return 0
+
         if args.command == "log":
             if args.food:
                 if args.grams is None:
@@ -103,6 +157,9 @@ def _run(args: argparse.Namespace) -> int:
             totals = total_items(resolved)
             log_id = store_log(connection, items, totals)
             result = {"items": items, "totals": totals, "log_id": log_id}
+            assumptions = [item["assumption"] for item in items if item.get("assumption")]
+            if assumptions:
+                result["assumptions"] = assumptions
             _print_log(result, args.json)
             return 0
 

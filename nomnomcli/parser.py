@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from fractions import Fraction
+from importlib.resources import files
 
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
@@ -23,6 +25,80 @@ COMPACT_QUANTITY = re.compile(
 LEADING_QUANTITY = re.compile(
     rf"^(?P<amount>{NUMBER})\s*(?P<unit>{UNIT})\s+(?:of\s+)?(?P<food>.+)$", re.IGNORECASE
 )
+PER_PIECE_QUANTITY = re.compile(
+    rf"^(?P<food>.+?)\s+(?P<amount>{NUMBER})\s*"
+    rf"(?P<unit>pieces?|pcs?|шт(?:ук[аи]?)?|куск(?:а|ов)?|кус(?:ок|ка|ков))\s+"
+    rf"(?:по|at|each)\s+(?P<each>{NUMBER})\s*"
+    r"(?P<mass_unit>g|gr|grams?|гр|г|грамм(?:а|ов)?)$",
+    re.IGNORECASE,
+)
+
+SIZE_ALIASES = {
+    "small": {
+        "небольшой",
+        "небольшая",
+        "небольшое",
+        "небольшого",
+        "небольших",
+        "маленький",
+        "маленькая",
+        "маленькое",
+        "маленького",
+        "маленьких",
+        "small",
+    },
+    "medium": {
+        "средний",
+        "средняя",
+        "среднее",
+        "среднего",
+        "средней",
+        "средних",
+        "medium",
+    },
+    "large": {
+        "крупный",
+        "крупная",
+        "крупное",
+        "крупного",
+        "крупной",
+        "крупных",
+        "large",
+    },
+}
+SIZE_BY_ALIAS = {alias: size for size, aliases in SIZE_ALIASES.items() for alias in aliases}
+FRACTION_ALIASES = {
+    "половина": 0.5,
+    "половины": 0.5,
+    "half": 0.5,
+    "1/2": 0.5,
+    "четверть": 0.25,
+    "quarter": 0.25,
+}
+DESCRIPTOR_PIECE = re.compile(
+    rf"^(?:(?P<amount>{NUMBER}|половина|половины|half|четверть|quarter)\s+)?"
+    rf"(?P<size>{'|'.join(sorted(SIZE_BY_ALIAS, key=lambda value: (-len(value), value)))})\s+"
+    r"(?P<food>.+)$",
+    re.IGNORECASE,
+)
+FRACTION_PIECE = re.compile(
+    r"^(?P<amount>половина|половины|half|1/2|четверть|quarter)\s+(?P<food>.+)$",
+    re.IGNORECASE,
+)
+DISH_PREFIX = re.compile(r"^(?:яичница из|омлет из|салат из|каша из)\s+", re.IGNORECASE)
+
+
+def _piece_weight_data() -> tuple[dict, dict[str, tuple[str, dict]]]:
+    data = json.loads(files("nomnomcli.data").joinpath("piece_weights.json").read_text())
+    aliases = {
+        alias.casefold().replace("ё", "е"): (label, entry)
+        for label, entry in data.items()
+        for alias in entry["aliases"]
+    }
+    return data, aliases
+
+
+_PIECE_WEIGHTS, PIECE_BY_ALIAS = _piece_weight_data()
 
 
 def parse_number(value: str) -> float:
@@ -64,8 +140,67 @@ def _quantity_to_grams(amount: float, unit: str, food) -> float:
     return amount
 
 
+def _format_amount(value: float) -> str:
+    if value == 0.5:
+        return "1/2"
+    if value == 0.25:
+        return "1/4"
+    return str(int(value)) if value.is_integer() else str(value)
+
+
+def _format_grams(value: float) -> str:
+    return str(int(value)) if value.is_integer() else str(round(value, 2))
+
+
+def _parse_descriptor_piece(cleaned: str, repository: FoodRepository) -> ResolvedItem | None:
+    match = DESCRIPTOR_PIECE.match(cleaned)
+    size = None
+    if not match:
+        match = FRACTION_PIECE.match(cleaned)
+        if not match:
+            return None
+        size = "medium"
+    else:
+        size = SIZE_BY_ALIAS[match.group("size").casefold().replace("ё", "е")]
+
+    amount_text = match.group("amount")
+    amount = FRACTION_ALIASES.get(amount_text.casefold()) if amount_text else 1.0
+    if amount is None:
+        amount = parse_number(amount_text)
+    if amount <= 0:
+        raise NomnomError("invalid_quantity", "Quantity must be greater than zero")
+
+    food_alias = " ".join(match.group("food").casefold().replace("ё", "е").split())
+    piece = PIECE_BY_ALIAS.get(food_alias)
+    if not piece:
+        return None
+    label, entry = piece
+    food, confidence = repository.resolve(entry["food"])
+    grams = amount * float(entry[size])
+    noun = entry["plural"] if amount > 1 else label
+    assumption = f"{_format_amount(amount)} {size} {noun} = {_format_grams(grams)}g"
+    return scale_food(
+        food,
+        grams,
+        confidence,
+        assumed=True,
+        assumption=assumption,
+    )
+
+
 def parse_item_phrase(phrase: str, repository: FoodRepository) -> ResolvedItem:
     cleaned = " ".join(phrase.strip().split())
+    descriptor_item = _parse_descriptor_piece(cleaned, repository)
+    if descriptor_item:
+        return descriptor_item
+    per_piece = PER_PIECE_QUANTITY.match(cleaned)
+    if per_piece:
+        food, confidence = repository.resolve(per_piece.group("food").strip(" -"))
+        amount = parse_number(per_piece.group("amount"))
+        each = parse_number(per_piece.group("each"))
+        if amount <= 0 or each <= 0:
+            raise NomnomError("invalid_quantity", "Quantity must be greater than zero")
+        return scale_food(food, amount * each, confidence)
     match = TRAILING_QUANTITY.match(cleaned) or COMPACT_QUANTITY.match(cleaned)
     if not match:
         raise NomnomError(
@@ -82,7 +217,14 @@ def parse_item_phrase(phrase: str, repository: FoodRepository) -> ResolvedItem:
 
 
 def parse_free_text(text: str, repository: FoodRepository) -> list[ResolvedItem]:
-    phrases = [part.strip() for part in re.split(r"[,;\n]+", text) if part.strip()]
+    cleaned_text = text.strip()
+    dish = DISH_PREFIX.match(cleaned_text)
+    if dish:
+        cleaned_text = cleaned_text[dish.end() :]
+        separator = r"[,;\n]+|\s+и\s+"
+    else:
+        separator = r"[,;\n]+"
+    phrases = [part.strip() for part in re.split(separator, cleaned_text) if part.strip()]
     if not phrases:
         raise NomnomError("empty_input", "No food items were provided")
     items = []

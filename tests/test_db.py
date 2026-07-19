@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from nomnomcli.db import connect, get_stats, store_log
@@ -41,3 +42,23 @@ def test_empty_stats(user_db):
         result = get_stats(connection, "today", now)
     assert result["meals"] == []
     assert result["totals"]["kcal"] == 0
+
+
+def test_connect_migrates_v01_food_cache(user_db):
+    with sqlite3.connect(user_db) as connection:
+        connection.execute(
+            """CREATE TABLE food_cache (
+                name TEXT PRIMARY KEY COLLATE NOCASE,
+                kcal REAL NOT NULL,
+                protein REAL NOT NULL,
+                fat REAL NOT NULL,
+                carbs REAL NOT NULL,
+                piece_grams REAL,
+                density_g_ml REAL,
+                source TEXT NOT NULL,
+                fdc_id INTEGER
+            )"""
+        )
+    with connect(user_db) as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(food_cache)")}
+    assert {"barcode", "brand", "lookup_query", "alternatives_json"} <= columns

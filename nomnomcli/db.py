@@ -18,7 +18,11 @@ CREATE TABLE IF NOT EXISTS food_cache (
     piece_grams REAL,
     density_g_ml REAL,
     source TEXT NOT NULL,
-    fdc_id INTEGER
+    fdc_id INTEGER,
+    barcode TEXT,
+    brand TEXT,
+    lookup_query TEXT,
+    alternatives_json TEXT
 );
 CREATE TABLE IF NOT EXISTS log_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,6 +65,22 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     connection.executescript(SCHEMA)
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(food_cache)").fetchall()
+    }
+    migrations = {
+        "barcode": "ALTER TABLE food_cache ADD COLUMN barcode TEXT",
+        "brand": "ALTER TABLE food_cache ADD COLUMN brand TEXT",
+        "lookup_query": "ALTER TABLE food_cache ADD COLUMN lookup_query TEXT",
+        "alternatives_json": "ALTER TABLE food_cache ADD COLUMN alternatives_json TEXT",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_food_cache_lookup_query "
+        "ON food_cache(lookup_query COLLATE NOCASE)"
+    )
     try:
         yield connection
         connection.commit()

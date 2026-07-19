@@ -14,6 +14,9 @@ class Food:
     density_g_ml: float | None = None
     source: str = "bundled"
     fdc_id: int | None = None
+    barcode: str | None = None
+    brand: str | None = None
+    alternatives: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,9 +28,15 @@ class ResolvedItem:
     fat: float
     carbs: float
     match_confidence: float
+    assumed: bool | None = None
+    assumption: str | None = None
+    source: str | None = None
+    barcode: str | None = None
+    brand: str | None = None
+    alternatives: tuple[dict[str, str], ...] | None = None
 
-    def to_dict(self) -> dict[str, str | float]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, str | float | bool]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 NUTRIENT_KEYS = ("kcal", "protein", "fat", "carbs")
@@ -37,8 +46,16 @@ def round_nutrition(value: float) -> float:
     return round(value + 1e-12, 2)
 
 
-def scale_food(food: Food, grams: float, confidence: float) -> ResolvedItem:
+def scale_food(
+    food: Food,
+    grams: float,
+    confidence: float,
+    *,
+    assumed: bool | None = None,
+    assumption: str | None = None,
+) -> ResolvedItem:
     factor = grams / 100.0
+    is_branded = food.source in {"openfoodfacts", "user"}
     return ResolvedItem(
         name=food.name,
         grams=round_nutrition(grams),
@@ -47,6 +64,12 @@ def scale_food(food: Food, grams: float, confidence: float) -> ResolvedItem:
         fat=round_nutrition(food.fat * factor),
         carbs=round_nutrition(food.carbs * factor),
         match_confidence=round(confidence, 2),
+        assumed=assumed,
+        assumption=assumption,
+        source=food.source if is_branded else None,
+        barcode=food.barcode,
+        brand=food.brand,
+        alternatives=food.alternatives or None,
     )
 
 
