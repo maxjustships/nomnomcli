@@ -7,12 +7,36 @@ import pytest
 import requests
 
 from nomnomcli.errors import NomnomError
+from nomnomcli.models import Food
 
 
 def test_russian_synonym_resolution(repository):
     food, confidence = repository.resolve("творог")
     assert food.name == "cottage cheese, 4% milkfat"
     assert confidence == 0.98
+
+
+@pytest.mark.parametrize(
+    ("query", "name", "macros", "density"),
+    [
+        ("соевый изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("изолят соевого белка", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("молоко 3%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
+        ("молоко 3.2%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
+    ],
+)
+def test_requested_food_synonyms(repository, query, name, macros, density):
+    food, confidence = repository.resolve(query)
+    assert food.name == name
+    assert (food.kcal, food.protein, food.fat, food.carbs) == macros
+    assert food.density_g_ml == density
+    assert confidence == 0.98
+
+
+def test_generic_milk_synonym_still_resolves_to_whole_milk(repository):
+    food, _ = repository.resolve("молоко")
+    assert food.name == "milk, whole"
 
 
 def test_yo_normalization(repository):
@@ -29,6 +53,7 @@ def test_search_russian_query(repository):
 
 def test_offline_not_found(repository, monkeypatch):
     monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     with pytest.raises(NomnomError) as caught:
         repository.resolve("definitely not a food")
     assert caught.value.details["offline"] is True
@@ -61,6 +86,7 @@ def test_usda_fallback_is_cached(repository, monkeypatch):
             }
 
     monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
     food, confidence = repository.resolve("remote test food")
     assert (food.kcal, confidence) == (123, 0.72)
@@ -89,3 +115,128 @@ def test_every_synonym_target_exists(repository):
     with sqlite3.connect(repository.food_db_path) as connection:
         names = {row[0].casefold() for row in connection.execute("SELECT name FROM foods")}
     assert set(raw.values()) <= names
+
+
+def test_off_result_is_cached_with_alternatives(repository, monkeypatch):
+    calls = []
+    matches = [
+        Food(
+            "Whole Grain Bread — Acme",
+            250,
+            9,
+            4,
+            45,
+            source="openfoodfacts",
+            barcode="1",
+            brand="Acme",
+        ),
+        Food(
+            "Seeded Bread — Acme",
+            240,
+            10,
+            5,
+            40,
+            source="openfoodfacts",
+            barcode="2",
+            brand="Acme",
+        ),
+    ]
+
+    def search(query, page_size=5):
+        calls.append((query, page_size))
+        return matches
+
+    monkeypatch.setattr(repository.off_client, "search", search)
+    food, confidence = repository.resolve("Acme bread")
+    assert food.name == "Whole Grain Bread — Acme"
+    assert confidence == 0.76
+    assert food.alternatives == (
+        {"name": "Seeded Bread — Acme", "brand": "Acme", "barcode": "2"},
+    )
+
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("cached lookup must not use OFF"),
+    )
+    cached, cached_confidence = repository.resolve("Acme bread")
+    assert cached == food
+    assert cached_confidence == 1.0
+    assert calls == [("Acme bread", 5)]
+
+
+def test_named_brand_never_substitutes_generic_food(repository, monkeypatch):
+    branded = Food(
+        "Acme Wheat Bread",
+        260,
+        10,
+        4,
+        46,
+        source="openfoodfacts",
+        barcode="42",
+        brand="Acme",
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [branded])
+    food, _ = repository.resolve("bread Acme")
+    assert food == branded
+    assert food.name != "bread, wheat"
+
+
+def test_tokenwise_manual_brand_match_precedes_off(repository, monkeypatch):
+    expected = repository.add_food(
+        name="harry's sandwich bread",
+        brand="Harry's",
+        kcal=265,
+        protein=8,
+        fat=3.2,
+        carbs=49,
+        piece_grams=40,
+    )
+    monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("manual brand match must not use OFF"),
+    )
+
+    food, confidence = repository.resolve("хлеб harry's")
+
+    assert food == expected
+    assert confidence == 0.85
+
+
+def test_query_matching_off_brand_beats_generic_top_hit(repository, monkeypatch):
+    generic = Food(
+        "Generic Wheat Bread",
+        252,
+        9,
+        4,
+        46,
+        source="openfoodfacts",
+        barcode="generic",
+    )
+    branded = Food(
+        "Acme Wheat Bread",
+        260,
+        10,
+        4,
+        46,
+        source="openfoodfacts",
+        barcode="branded",
+        brand="Acme",
+    )
+    monkeypatch.setattr(
+        repository.off_client, "search", lambda *args, **kwargs: [generic, branded]
+    )
+    food, _ = repository.resolve("Acme bread")
+    assert food.name == branded.name
+    assert food.barcode == branded.barcode
+    assert food.alternatives[0]["barcode"] == "generic"
+
+
+def test_off_no_results_has_actionable_error(repository, monkeypatch):
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [])
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("Missing Brand bar")
+    assert caught.value.code == "food_not_found"
+    assert "nomnom add" in caught.value.details["action"]

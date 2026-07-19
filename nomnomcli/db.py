@@ -8,8 +8,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS food_cache (
+LATEST_SCHEMA_VERSION = 2
+V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
+
+LATEST_SCHEMA = (
+    """CREATE TABLE food_cache (
     name TEXT PRIMARY KEY COLLATE NOCASE,
     kcal REAL NOT NULL,
     protein REAL NOT NULL,
@@ -18,9 +21,13 @@ CREATE TABLE IF NOT EXISTS food_cache (
     piece_grams REAL,
     density_g_ml REAL,
     source TEXT NOT NULL,
-    fdc_id INTEGER
-);
-CREATE TABLE IF NOT EXISTS log_entries (
+    fdc_id INTEGER,
+    barcode TEXT,
+    brand TEXT,
+    lookup_query TEXT,
+    alternatives_json TEXT
+)""",
+    """CREATE TABLE log_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     logged_at TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'food',
@@ -30,9 +37,9 @@ CREATE TABLE IF NOT EXISTS log_entries (
     protein REAL NOT NULL,
     fat REAL NOT NULL,
     carbs REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_log_entries_logged_at ON log_entries(logged_at);
-CREATE TABLE IF NOT EXISTS recipes (
+)""",
+    "CREATE INDEX idx_log_entries_logged_at ON log_entries(logged_at)",
+    """CREATE TABLE recipes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
     source_url TEXT NOT NULL,
@@ -43,8 +50,79 @@ CREATE TABLE IF NOT EXISTS recipes (
     fat_per_serving REAL NOT NULL,
     carbs_per_serving REAL NOT NULL,
     created_at TEXT NOT NULL
-);
-"""
+)""",
+)
+
+
+def _table_names(connection: sqlite3.Connection) -> set[str]:
+    rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _set_user_version(connection: sqlite3.Connection, version: int) -> None:
+    connection.execute(f"PRAGMA user_version = {version}")
+
+
+def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
+    if "food_cache" not in _table_names(connection):
+        raise sqlite3.DatabaseError("schema v1 is missing the food_cache table")
+    columns = _column_names(connection, "food_cache")
+    additions = {
+        "barcode": "ALTER TABLE food_cache ADD COLUMN barcode TEXT",
+        "brand": "ALTER TABLE food_cache ADD COLUMN brand TEXT",
+        "lookup_query": "ALTER TABLE food_cache ADD COLUMN lookup_query TEXT",
+        "alternatives_json": "ALTER TABLE food_cache ADD COLUMN alternatives_json TEXT",
+    }
+    for column, statement in additions.items():
+        if column not in columns:
+            connection.execute(statement)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_food_cache_lookup_query "
+        "ON food_cache(lookup_query COLLATE NOCASE)"
+    )
+
+
+MIGRATIONS = {1: _migrate_v1_to_v2}
+
+
+def _initialize_database(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version > LATEST_SCHEMA_VERSION:
+            raise sqlite3.DatabaseError(
+                f"database schema version {version} is newer than supported "
+                f"version {LATEST_SCHEMA_VERSION}"
+            )
+
+        if version == 0 and _table_names(connection) & V1_TABLES:
+            version = 1
+            _set_user_version(connection, version)
+
+        if version == 0:
+            for statement in LATEST_SCHEMA:
+                connection.execute(statement)
+            _set_user_version(connection, LATEST_SCHEMA_VERSION)
+        else:
+            while version < LATEST_SCHEMA_VERSION:
+                MIGRATIONS[version](connection)
+                version += 1
+                _set_user_version(connection, version)
+            missing = V1_TABLES - _table_names(connection)
+            for statement in LATEST_SCHEMA:
+                if "TABLE " not in statement:
+                    continue
+                table = statement.split("TABLE ", 1)[1].split(" ", 1)[0].strip().strip("(")
+                if table in missing:
+                    connection.execute(statement)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def default_db_path() -> Path:
@@ -59,9 +137,9 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
     db_path = Path(path) if path is not None else default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    connection.executescript(SCHEMA)
     try:
+        connection.row_factory = sqlite3.Row
+        _initialize_database(connection)
         yield connection
         connection.commit()
     finally:

@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -24,6 +25,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "nomnomcli" / "data" / "foods.sqlite"
 SYNONYM_SEED = ROOT / "scripts" / "synonym_foods.json"
+CURATED_OVERRIDES = ROOT / "scripts" / "food_overrides.json"
 
 SCHEMA = """
 DROP TABLE IF EXISTS foods;
@@ -110,6 +112,18 @@ SEED_FOODS = [
     ("salmon, cooked", 206.0, 22.1, 12.35, 0.0, 140.0, None, "USDA SR Legacy", 175168),
     ("tuna, canned in water", 116.0, 25.51, 0.82, 0.0, None, None, "USDA SR Legacy", 175159),
     ("egg, whole, boiled", 155.0, 12.58, 10.61, 1.12, 50.0, None, "USDA SR Legacy", 173424),
+    (
+        "soy protein isolate",
+        370.0,
+        90.0,
+        1.5,
+        3.0,
+        None,
+        None,
+        "user-specified/curated",
+        None,
+    ),
+    ("milk, 3%", 60.0, 2.9, 3.0, 4.7, None, 1.03, "user-specified/curated", None),
     ("milk, whole", 61.0, 3.15, 3.25, 4.8, None, 1.03, "USDA SR Legacy", 171265),
     ("kefir, plain", 43.0, 3.79, 1.02, 4.77, None, 1.03, "USDA-derived", None),
     ("cottage cheese, 4% milkfat", 98.0, 11.12, 4.3, 3.38, None, None, "USDA SR Legacy", 172179),
@@ -349,17 +363,48 @@ def load_synonym_seed() -> list[tuple]:
     return [tuple(row) for row in json.loads(SYNONYM_SEED.read_text())]
 
 
+def load_curated_overrides() -> list[tuple]:
+    """Load reviewed v0.2 profiles that replace known bad canonicalized rows."""
+    source = "USDA-like reference profile (v0.2 curated)"
+    return [
+        (*tuple(row), source, None)
+        for row in json.loads(CURATED_OVERRIDES.read_text(encoding="utf-8"))
+    ]
+
+
+def load_existing_database(path: Path) -> list[tuple]:
+    """Read the tracked corpus before applying deterministic offline corrections."""
+    if not path.exists():
+        return []
+    with sqlite3.connect(path) as connection:
+        return connection.execute(
+            """SELECT name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id
+            FROM foods"""
+        ).fetchall()
+
+
 def build_database(output: Path, rows: list[tuple]) -> int:
     unique = {row[0].casefold(): row for row in rows}
     # Curated rows win so synonyms and deterministic piece weights remain stable.
     unique.update({row[0].casefold(): row for row in SEED_FOODS})
+    # Reviewed overrides win over both imported data and the legacy synonym seed.
+    unique.update({row[0].casefold(): row for row in load_curated_overrides()})
     output.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(output) as connection:
-        connection.executescript(SCHEMA)
-        connection.executemany(
-            "INSERT INTO foods VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            sorted(unique.values(), key=lambda row: row[0].casefold()),
-        )
+    with tempfile.NamedTemporaryFile(
+        dir=output.parent, prefix=f".{output.name}.", suffix=".tmp", delete=False
+    ) as handle:
+        temporary_output = Path(handle.name)
+    try:
+        with sqlite3.connect(temporary_output) as connection:
+            connection.executescript(SCHEMA)
+            connection.executemany(
+                "INSERT INTO foods VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                sorted(unique.values(), key=lambda row: row[0].casefold()),
+            )
+        temporary_output.chmod(0o644)
+        os.replace(temporary_output, output)
+    finally:
+        temporary_output.unlink(missing_ok=True)
     return len(unique)
 
 
@@ -378,9 +423,19 @@ def main() -> int:
     parser.add_argument(
         "--seed-only", action="store_true", help="build only curated rows (for offline development)"
     )
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help="apply curated corrections to the existing bundled corpus without network access",
+    )
     args = parser.parse_args()
     rows = []
-    if args.source_json:
+    if args.update_existing:
+        rows = load_existing_database(args.output)
+        if not rows:
+            print(f"existing database is required: {args.output}", file=sys.stderr)
+            return 2
+    elif args.source_json:
         rows = load_usda_download(args.source_json, args.target)
         synonym_rows, unresolved = synonym_rows_from_download(args.source_json)
         rows.extend(synonym_rows)

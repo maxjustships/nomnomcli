@@ -1,25 +1,25 @@
 [
   [
     "apple juice",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    46,
+    0.1,
+    0.1,
+    11.3,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.04,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "apricots, dried",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    241,
+    3.4,
+    0.5,
+    62.6,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "barley, pearled, cooked",
@@ -56,14 +56,14 @@
   ],
   [
     "beer",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    43,
+    0.5,
+    0,
+    3.6,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.01,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "beets, cooked",
@@ -100,36 +100,36 @@
   ],
   [
     "brandy",
-    246.0,
-    17.3,
-    7.03,
-    66.2,
+    246,
+    0,
+    0,
+    0,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from Oat bran, raw)",
-    168872
+    0.95,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "bread, french",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    289,
+    12,
+    2.3,
+    55,
+    30,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "bread, pita",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    275,
+    9.1,
+    1.2,
+    55.7,
+    60,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "bread, whole-wheat",
@@ -144,25 +144,25 @@
   ],
   [
     "breakfast cereal",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    379,
+    6.5,
+    1.5,
+    87,
+    30,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "broccoli, cooked",
-    25.0,
+    25,
     3.83,
     0.52,
-    3.12,
+    1.25,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from Broccoli raab, cooked)",
-    170382
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "bulgur, cooked",
@@ -177,36 +177,36 @@
   ],
   [
     "caesar salad",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    190,
+    7,
+    15,
+    8,
+    180,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "candy",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    394,
+    0,
+    3.3,
+    90,
+    10,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cashew nuts",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    553,
+    18.2,
+    43.9,
+    30.2,
+    1.6,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "catsup",
@@ -221,14 +221,14 @@
   ],
   [
     "cauliflower, cooked",
-    32.0,
+    32,
     3.04,
     0.31,
-    6.28,
+    4.26,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from Cauliflower, green, cooked, with salt)",
-    169391
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "celery, raw",
@@ -254,25 +254,25 @@
   ],
   [
     "cheese, mozzarella",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    280,
+    28,
+    17,
+    3.1,
+    28,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cheese, parmesan",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    431,
+    38,
+    29,
+    4.1,
+    5,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cherries, raw",
@@ -287,25 +287,25 @@
   ],
   [
     "chicken nuggets",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    296,
+    15.3,
+    19.8,
+    14.1,
+    20,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "chicken soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    40,
+    3,
+    1.2,
+    4.5,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "chicken, cooked",
@@ -320,36 +320,36 @@
   ],
   [
     "chicken, fried",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    246,
+    30,
+    13,
+    0,
+    120,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "chocolate, dark",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    598,
+    7.8,
+    42.6,
+    45.9,
+    10,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cocoa powder",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    228,
+    19.6,
+    13.7,
+    6.6,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cod, cooked",
@@ -364,14 +364,14 @@
   ],
   [
     "cola",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    37,
+    0,
+    0,
+    9.2,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.04,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cookies",
@@ -386,14 +386,14 @@
   ],
   [
     "cornmeal porridge",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    65,
+    1.4,
+    0.5,
+    13.7,
+    250,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "couscous, cooked",
@@ -408,25 +408,25 @@
   ],
   [
     "crab salad",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    180,
+    7,
+    14,
+    7,
+    180,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "crackers, whole-wheat",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    427,
+    10.6,
+    14.1,
+    69.6,
+    12,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cream",
@@ -452,25 +452,25 @@
   ],
   [
     "croissant",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    406,
+    8.2,
+    21,
+    45.8,
+    57,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "cultured milk",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    56,
+    3,
+    2.5,
+    4.2,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.03,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "currants, raw",
@@ -496,14 +496,14 @@
   ],
   [
     "dill weed, fresh",
-    43.0,
+    43,
     3.46,
     1.12,
-    7.02,
+    4.77,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from Dill weed, fresh)",
-    172233
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "egg, white, cooked",
@@ -518,14 +518,14 @@
   ],
   [
     "egg, whole, fried",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    196,
+    13.6,
+    14.8,
+    0.8,
+    50,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "egg, yolk, cooked",
@@ -551,36 +551,36 @@
   ],
   [
     "fermented baked milk",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    67,
+    3,
+    4,
+    4.2,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.03,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "fish roe",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    264,
+    24.6,
+    17.9,
+    4,
+    15,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "fish soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    40,
+    3.5,
+    1,
+    4.2,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "fish, cooked",
@@ -606,14 +606,14 @@
   ],
   [
     "fruit compote beverage",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    60,
+    0.2,
+    0,
+    15,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "garlic, raw",
@@ -628,36 +628,36 @@
   ],
   [
     "goulash",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    154,
+    14,
+    8.5,
+    5.5,
+    250,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "granola",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    471,
+    10,
+    20,
+    64,
+    50,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "granola bar",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    433,
+    8,
+    16,
+    64,
+    40,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "grapes, raw",
@@ -683,58 +683,58 @@
   ],
   [
     "herring",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    203,
+    23,
+    12,
+    0,
+    100,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "hummus",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    166,
+    7.9,
+    9.6,
+    14.3,
+    30,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "ice cream, vanilla",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    207,
+    3.5,
+    11,
+    23.6,
+    66,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "imitation crab",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    95,
+    7.6,
+    0.5,
+    15,
+    25,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "jam",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    278,
+    0.4,
+    0.1,
+    69,
+    20,
+    1.33,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "kiwifruit, raw",
@@ -749,14 +749,14 @@
   ],
   [
     "kvass",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    27,
+    0.2,
+    0,
+    6.5,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.01,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "lamb, cooked",
@@ -771,25 +771,25 @@
   ],
   [
     "lemonade",
-    47.0,
-    1.5,
-    0.3,
-    16.0,
+    47,
+    0,
+    0,
+    11.75,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from Lemon peel, raw)",
-    167749
+    1.04,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "lentil soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    60,
+    3.7,
+    1,
+    8,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "liver, cooked",
@@ -826,25 +826,25 @@
   ],
   [
     "mayonnaise",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    680,
+    1,
+    75,
+    0.6,
+    15,
+    0.91,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "meat kebab",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    210,
+    18,
+    14,
+    3,
+    100,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "meatballs",
@@ -870,14 +870,14 @@
   ],
   [
     "milk, condensed, sweetened",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    321,
+    7.9,
+    8.7,
+    54.4,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.3,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "millet, cooked",
@@ -892,25 +892,25 @@
   ],
   [
     "muesli",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    360,
+    10,
+    6,
+    64,
+    50,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "mushroom soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    30,
+    1.5,
+    1,
+    3.8,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "mushrooms, cooked",
@@ -947,36 +947,36 @@
   ],
   [
     "oil, sunflower",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    884,
+    0,
+    100,
+    0,
+    14,
+    0.92,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "orange juice",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    45,
+    0.7,
+    0.2,
+    10.4,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    1.04,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "pea soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    60,
+    3.5,
+    1.2,
+    8.8,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "peach, raw",
@@ -1046,25 +1046,25 @@
   ],
   [
     "pistachio nuts",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    562,
+    20.2,
+    45.3,
+    27.2,
+    1,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "pizza",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    266,
+    11,
+    10,
+    33,
+    100,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "plum, raw",
@@ -1090,58 +1090,58 @@
   ],
   [
     "potato chips",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    536,
+    7,
+    35,
+    53,
+    15,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "potatoes, french fried",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    312,
+    3.4,
+    15,
+    41,
+    80,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "potatoes, fried",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    192,
+    2.8,
+    9.5,
+    24,
+    150,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "protein bar",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    350,
+    30,
+    10,
+    35,
+    60,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "protein powder",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    400,
+    75,
+    6,
+    11.5,
+    30,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "prunes",
@@ -1156,14 +1156,14 @@
   ],
   [
     "pumpkin seeds",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    559,
+    30.2,
+    49,
+    10.7,
+    0.2,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "pumpkin, cooked",
@@ -1222,14 +1222,14 @@
   ],
   [
     "sardines",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    208,
+    24.6,
+    11.5,
+    0,
+    90,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "sausage, cooked",
@@ -1244,25 +1244,25 @@
   ],
   [
     "semolina porridge",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    80,
+    2.5,
+    1,
+    14.8,
+    250,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "shawarma",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    215,
+    15,
+    12,
+    12,
+    300,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "shrimp, cooked",
@@ -1277,36 +1277,36 @@
   ],
   [
     "soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    40,
+    2,
+    1.5,
+    4.5,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "sour cream",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    198,
+    2.4,
+    19.4,
+    4.6,
+    15,
+    1.02,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "soy sauce",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    53,
+    8.1,
+    0.6,
+    4.9,
+    15,
+    1.16,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "squid, cooked",
@@ -1321,14 +1321,14 @@
   ],
   [
     "stew",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    90,
+    7,
+    5,
+    4.5,
+    250,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "strawberries, raw",
@@ -1343,25 +1343,25 @@
   ],
   [
     "sunflower seeds",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    584,
+    20.8,
+    51.5,
+    20,
+    0.2,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "sushi",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    150,
+    5,
+    1,
+    30,
+    30,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "tofu",
@@ -1376,14 +1376,14 @@
   ],
   [
     "tomato soup",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
-    null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    30,
+    1.2,
+    0.8,
+    4.5,
+    350,
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "trout, cooked",
@@ -1409,79 +1409,79 @@
   ],
   [
     "vegetable salad",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    40,
+    1.5,
+    2,
+    4,
+    180,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "vegetable stew",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    40,
+    2,
+    1,
+    5.75,
+    250,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "vinaigrette salad",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    122,
+    1.7,
+    7.8,
+    11.2,
+    180,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "vodka",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    231,
+    0,
+    0,
+    0,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    0.95,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "water",
-    11.0,
-    2.3,
-    0.1,
-    1.29,
+    0,
+    0,
+    0,
+    0,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from Watercress, raw)",
-    170068
+    1,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "wine",
-    157.0,
-    12.6,
-    9.79,
-    4.57,
+    83,
+    0.1,
+    0,
+    2.6,
     null,
-    null,
-    "USDA FDC SR Legacy (canonicalized from APPLEBEE'S, chili)",
-    169018
+    0.99,
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ],
   [
     "zucchini, cooked",
-    15.0,
+    15,
     1.14,
     0.36,
-    2.69,
+    1.8,
     null,
     null,
-    "USDA FDC SR Legacy (canonicalized from Squash, summer, zucchini, includes skin, cooked, boiled, drained, with salt)",
-    170534
+    "USDA-like reference profile (v0.2 curated)",
+    null
   ]
 ]

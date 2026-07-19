@@ -1,5 +1,63 @@
 # Test Plan
 
+## v0.2 Source
+- Task: Validate nomnomcli v0.2 issues #1, #2, and #3.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-19
+
+## v0.2 Validation Scope
+- In scope: RU/EN sizes and fractions, Russian food inflection, dish decomposition, explicit per-piece grams, assumption contracts, OFF v2 normalization/failures/cache/ambiguity, manual branded cache entries, bundled database quality, version/docs/skill, isolated CLI smoke.
+- Out of scope: live OFF/USDA availability and broad natural-language parsing beyond documented deterministic forms.
+
+## v0.2 Fixtures and Network Rules
+- Package fixture: `piece_weights.json`; database fixture: regenerated bundled `foods.sqlite`; mutable state: pytest temp databases.
+- All OFF HTTP outcomes are mocked: success, 503, malformed JSON, ambiguous products, and no results.
+- The exact branded smoke uses `nomnom add` in `/tmp/nomnomcli-v02-smoke.sqlite` before logging, so it is offline and reproducible.
+
+## v0.2 Test Levels
+
+### Unit
+- Descriptor morphology, half/quarter fractions, default and explicit counts, exact size-table weights.
+- OFF URL/params/timeout, nutrient normalization, barcode/source, deterministic alternatives.
+- Data rows satisfy 4P+9F+4C within tolerance, with explicit ethanol treatment for alcohol.
+
+### Integration
+- Dish prefixes split ingredients and never add oil; JSON/text assumptions remain additive.
+- Cached/manual branded products outrank network and generic rows; OFF successes persist in user cache.
+- `nomnom add` validates positive nutrition/piece values and supports subsequent parsing offline.
+
+### End-to-End / Smoke
+- Exact Russian dish plus Harry's bread phrase in a dedicated `/tmp` database.
+- Generic `хлеб 2 куска по 40г` explicit-weight phrase.
+
+## v0.2 Negative / Edge Cases
+- OFF network error, HTTP 503, malformed payload, missing/invalid products, ambiguity, and offline cached fallback.
+- Named brand not found must return actionable add/search suggestions without generic substitution.
+- Zero/negative add values and missing required CLI arguments fail with stable JSON where argparse permits.
+- No unjustified placeholder kcal=157 rows; oil and water invariants are exact.
+
+## v0.2 Acceptance Gates
+- [x] Focused red/green test runs retained in the audit log.
+- [x] `python scripts/build_mini_db.py --update-existing`
+- [x] `pytest`
+- [x] `ruff check .`
+- [x] Exact isolated smoke commands and JSON inspection.
+- [x] Clean diff/junk audit and local conventional commit.
+
+## v0.2 Command Matrix
+```sh
+pytest -q tests/test_parser.py tests/test_cli.py
+pytest -q tests/test_off.py tests/test_foods.py tests/test_cli.py
+python scripts/build_mini_db.py --update-existing
+pytest -q tests/test_data_quality.py
+pytest
+ruff check .
+```
+
+## v0.2 Open Risks
+- Some legacy non-placeholder rows may reveal unrelated macro/energy inconsistencies; only safe, data-quality-scoped corrections belong in this release.
+
 ## Source
 - Task: Validate nomnomcli v0.1 against its acceptance brief.
 - Plan file: `docs/plans.md`

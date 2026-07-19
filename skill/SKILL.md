@@ -25,11 +25,15 @@ curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.s
    quantities they supplied.
 2. Run `nomnom log --parse "борщ 300г, хлеб 2 куска" --json`.
 3. Show the resolved canonical names, grams, and totals returned by the CLI.
-4. Ask the user to confirm that the resolution and weights are correct before
-   treating or narrating the entry as final.
+4. Show every returned `assumptions` entry (for example, `small egg = 45g`) and
+   any branded `alternatives` before asking the user to confirm the resolution.
 
-The v0.1 CLI stores successful logs immediately, so do not silently change or
+The v0.2 CLI stores successful logs immediately, so do not silently change or
 rerun a successful entry. Clearly tell the user before any corrective re-log.
+
+Supported dish prefixes (`яичница из`, `омлет из`, `салат из`, `каша из`) are
+decomposed into the ingredients the user named. Never add oil or another missing
+ingredient. Size/fraction weights are CLI assumptions, not measured amounts.
 
 ## Direct food flow
 
@@ -47,11 +51,13 @@ The CLI exits non-zero and returns a JSON `error` object. Read its `code`,
 `message`, and `details`.
 
 - `food_not_found`: ask what exact food/product they meant. Search with
-  `nomnom search "query" --json`, then retry with the selected name.
+  `nomnom search "query" --json`, then retry with the selected name. For a
+  branded product, offer to pin label values using `nomnom add --name NAME
+  --brand BRAND --kcal ... --protein ... --fat ... --carbs ...`.
 - `quantity_required`: ask for grams, millilitres, or a supported piece count.
 - `piece_weight_unknown`: ask for grams, then retry using `--food --grams`.
-- Any network/API error: explain that nothing was estimated and ask whether to
-  retry or choose an offline database match.
+- Any Open Food Facts/USDA error: explain that nothing was estimated and ask
+  whether to retry or pin the product-label values with `nomnom add`.
 
 Do not replace an unresolved food with a merely similar food without explicit
 human approval.

@@ -113,7 +113,7 @@ def fetch_recipe(
         response = requests.get(
             url,
             timeout=20,
-            headers={"User-Agent": "nomnomcli/0.1 (+https://github.com/maxjustships/nomnomcli)"},
+            headers={"User-Agent": "nomnomcli/0.2 (+https://github.com/maxjustships/nomnomcli)"},
         )
         response.raise_for_status()
     except requests.RequestException as exc:

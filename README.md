@@ -59,7 +59,33 @@ nomnom log --parse "борщ 300г, хлеб 2 куска, гречка 150 г" 
 Supported quantity units are kilograms, grams (`g`, `grams`, `г`, `гр`, `грамм`),
 millilitres (`ml`, `мл`), and pieces (`pieces`, `pcs`, `шт`, `куска`). Piece conversion only
 works for foods with a deterministic bundled piece weight. Millilitres use a bundled density
-when available and otherwise the documented v0.1 water-equivalent default of 1 g/ml.
+when available and otherwise the documented water-equivalent default of 1 g/ml. An explicit
+per-piece weight always wins, so both `хлеб 2 куска по 40г` and `яйцо 3 штуки по 50 г` multiply
+the supplied count by the supplied grams.
+
+Size descriptors and fractions use the packaged deterministic table below. Supported size words
+include `небольшой` / `небольших` / `маленький` / `small`, `средний` / `medium`, and
+`крупный` / `large`, including the grammatical case forms shown by normal Russian ingredient
+phrases. Fractions are `половина` / `половины` / `half` / `1/2` and `четверть` / `quarter`.
+
+| Food | Small | Medium | Large |
+| --- | ---: | ---: | ---: |
+| Egg | 45 g | 55 g | 65 g |
+| Tomato | 60 g | 100 g | 150 g |
+| Onion | 50 g | 80 g | 120 g |
+| Apple | 149 g | 182 g | 223 g |
+| Banana | 101 g | 118 g | 136 g |
+| Orange | 96 g | 131 g | 184 g |
+| Potato | 130 g | 173 g | 299 g |
+| Carrot | 50 g | 61 g | 72 g |
+| Cucumber | 150 g | 200 g | 280 g |
+| Pepper | 74 g | 119 g | 164 g |
+
+These are transparent portion assumptions, not measured weights. JSON adds `assumed`,
+`assumption`, and a top-level `assumptions` list only where relevant; human-readable output prints
+the same assumptions. Prefixes `яичница из`, `омлет из`, `салат из`, and `каша из` decompose the
+following comma/`и` ingredient list. The CLI calculates only ingredients that were stated and
+never silently adds oil.
 
 Direct logging is useful after the human clarifies an unresolved item:
 
@@ -69,6 +95,31 @@ nomnom log --food "buckwheat" --grams 150 --json
 
 Unknown foods fail with a non-zero exit and a JSON error; the CLI never substitutes invented
 nutrition values.
+
+### Branded products and offline pinning
+
+Resolution order is exact local data, local search, Open Food Facts, then an actionable error
+(with the existing opt-in USDA fallback retained when `NOMNOM_USDA_KEY` is set). A named brand is
+never silently replaced by a bundled generic food. OFF uses its v2 search endpoint with a
+10-second timeout; successful per-100g results are cached in the user database with source,
+brand, and barcode. If OFF returns several relevant products, the first result follows OFF's
+relevance order and JSON includes the remaining `alternatives` additively.
+
+Network, HTTP, and malformed-response failures return stable error JSON without estimating
+nutrition. Set `NOMNOM_OFFLINE=1` to disable all remote fallback, or
+`NOMNOM_DISABLE_OFF=1` to disable OFF while retaining an explicitly configured USDA fallback.
+Pin the values from a product label to make a branded product available offline:
+
+```sh
+nomnom add \
+  --name "whole-grain bread" --brand "Example Bakery" \
+  --kcal 250 --protein 9 --fat 4 --carbs 45 \
+  --piece-grams 40 --json
+nomnom log --parse "whole-grain bread Example Bakery 2 pieces" --json
+```
+
+All nutrition arguments to `nomnom add` are per 100 g. `--piece-grams` is optional; supplied
+values must be finite and non-negative, while a piece weight must be greater than zero.
 
 ### Stats and search
 
@@ -80,6 +131,11 @@ nomnom search "творог" --json
 
 Stats include totals and each stored meal. User data defaults to
 `~/.local/share/nomnomcli/nomnom.sqlite3`; set `NOMNOM_DB_PATH` to choose another database.
+
+### Upgrading
+
+User database schema migrations run automatically when `nomnom` opens the database. Existing
+logs, cached foods, and recipes are upgraded in place and are never reset or recreated.
 
 ### Recipes
 
@@ -119,9 +175,14 @@ can all matter more than decimal places.
   salad use clearly labelled representative per-100g profiles.
 - The Russian layer contains more than 200 everyday aliases. A synonym chooses a canonical food;
   it does not claim that every homemade version has identical nutrition.
-- Set `NOMNOM_USDA_KEY` to opt into FoodData Central fallback for an otherwise uncached food.
-  Successful results are cached in the user database. With no key, all food lookup is offline.
-- Network access never happens during ordinary log, search, stats, or recipe-log commands.
+- Open Food Facts is the default fallback for an otherwise unresolved log/direct-food query.
+  Its product data is licensed by OFF and normalized from the returned per-100g nutriments.
+- Set `NOMNOM_USDA_KEY` to retain the opt-in FoodData Central fallback. Successful remote results
+  are cached in the user database. Search, stats, and recipe-log commands remain local-only;
+  recipe import fetches its requested URL.
+- The descriptor table is a reviewed set of USDA-average-like edible-piece weights stored in
+  `nomnomcli/data/piece_weights.json`. Bundled regional dishes and the v0.2 replacement profiles
+  are explicitly labelled typical/USDA-like reference values rather than fabricated USDA IDs.
 
 For best results, weigh the edible portion and use a specific food description. Treat typical
 dish rows as transparent defaults and add a real recipe when ingredient-level precision matters.
@@ -133,9 +194,10 @@ dish rows as transparent defaults and add a real recipe when ingredient-level pr
   unsupported or malformed sites fail explicitly instead of adding a large parser dependency.
 - **Two SQLite databases:** shipped foods are immutable package data; user logs, recipes, and USDA
   cache remain in a writable local database.
-- **Comma-separated parser:** v0.1 deliberately accepts constrained phrases rather than pretending
-  to understand arbitrary prose. Agents should normalize speech into explicit item phrases.
-- **Immediate successful logs:** the agent shows the returned resolution for confirmation, but v0.1
+- **Constrained parser:** v0.2 accepts explicit comma-separated phrases plus documented dish
+  prefixes, conjunctions, size descriptors, fractions, and per-piece grams rather than pretending
+  to understand arbitrary prose.
+- **Immediate successful logs:** the agent shows the returned resolution for confirmation, but v0.2
   does not implement a pending/confirm transaction state.
 
 ## Development
@@ -153,7 +215,15 @@ NOMNOM_USDA_KEY=your-key python scripts/build_mini_db.py
 ```
 
 Maintainers can also pass `--source-json` with the official SR Legacy JSON download for a
-rate-limit-free build. CI runs pytest and Ruff on Python 3.11 and 3.12.
+rate-limit-free build. Apply the checked-in v0.2 corrections deterministically to the tracked
+431-food corpus without network access:
+
+```sh
+python scripts/build_mini_db.py --update-existing
+```
+
+The reviewed overrides live in `scripts/food_overrides.json`; the generated package database is
+`nomnomcli/data/foods.sqlite`. CI runs pytest and Ruff on Python 3.11 and 3.12.
 
 ## License
 
