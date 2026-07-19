@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from nomnomcli.db import LATEST_SCHEMA_VERSION, connect, get_stats, store_log
 
 ITEM = {
@@ -15,6 +17,67 @@ ITEM = {
     "match_confidence": 1.0,
 }
 TOTALS = {"kcal": 55.0, "protein": 2.5, "fat": 2.1, "carbs": 6.4}
+
+
+@pytest.fixture
+def v2_database(tmp_path):
+    database = tmp_path / "v2.sqlite3"
+    with sqlite3.connect(database) as legacy:
+        legacy.executescript(
+            """
+            PRAGMA user_version = 2;
+            CREATE TABLE food_cache (
+                name TEXT PRIMARY KEY COLLATE NOCASE,
+                kcal REAL NOT NULL,
+                protein REAL NOT NULL,
+                fat REAL NOT NULL,
+                carbs REAL NOT NULL,
+                piece_grams REAL,
+                density_g_ml REAL,
+                source TEXT NOT NULL,
+                fdc_id INTEGER,
+                barcode TEXT,
+                brand TEXT,
+                lookup_query TEXT,
+                alternatives_json TEXT
+            );
+            CREATE TABLE log_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                logged_at TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'food',
+                label TEXT,
+                items_json TEXT NOT NULL,
+                kcal REAL NOT NULL,
+                protein REAL NOT NULL,
+                fat REAL NOT NULL,
+                carbs REAL NOT NULL
+            );
+            CREATE INDEX idx_log_entries_logged_at ON log_entries(logged_at);
+            CREATE TABLE recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                source_url TEXT NOT NULL,
+                servings REAL NOT NULL,
+                ingredients_json TEXT NOT NULL,
+                kcal_per_serving REAL NOT NULL,
+                protein_per_serving REAL NOT NULL,
+                fat_per_serving REAL NOT NULL,
+                carbs_per_serving REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO food_cache VALUES
+                ('v2 egg', 155, 12.58, 10.61, 1.12, 50, NULL, 'user', NULL,
+                 NULL, 'Fixture', 'v2 egg fixture', '[]');
+            INSERT INTO log_entries VALUES
+                (9, '2026-07-19T12:00:00+00:00', 'food', 'v2 lunch',
+                 '[{"name":"v2 egg"}]', 155, 12.58, 10.61, 1.12);
+            INSERT INTO recipes VALUES
+                (4, 'V2 eggs', 'https://example.test/v2-eggs', 2,
+                 '[{"name":"v2 egg"}]', 77.5, 6.29, 5.305, 0.56,
+                 '2026-07-19T11:00:00+00:00');
+            """
+        )
+    return database
 
 
 def test_connect_migrates_v1_database_without_losing_data(tmp_path):
@@ -125,6 +188,62 @@ def test_connect_creates_fresh_database_at_latest_schema(tmp_path):
         assert {
             row[1] for row in connection.execute("PRAGMA table_info(food_cache)").fetchall()
         } >= {"name", "barcode"}
+        assert "food_aliases" in {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+
+def test_connect_migrates_v2_to_v3_without_losing_user_data(v2_database):
+    with connect(v2_database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert tuple(connection.execute("SELECT * FROM food_cache").fetchone()) == (
+            "v2 egg",
+            155.0,
+            12.58,
+            10.61,
+            1.12,
+            50.0,
+            None,
+            "user",
+            None,
+            None,
+            "Fixture",
+            "v2 egg fixture",
+            "[]",
+        )
+        assert tuple(connection.execute("SELECT * FROM log_entries").fetchone()) == (
+            9,
+            "2026-07-19T12:00:00+00:00",
+            "food",
+            "v2 lunch",
+            '[{"name":"v2 egg"}]',
+            155.0,
+            12.58,
+            10.61,
+            1.12,
+        )
+        assert tuple(connection.execute("SELECT * FROM recipes").fetchone()) == (
+            4,
+            "V2 eggs",
+            "https://example.test/v2-eggs",
+            2.0,
+            '[{"name":"v2 egg"}]',
+            77.5,
+            6.29,
+            5.305,
+            0.56,
+            "2026-07-19T11:00:00+00:00",
+        )
+        assert connection.execute("SELECT count(*) FROM food_aliases").fetchone()[0] == 0
+
+    with connect(v2_database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM recipes").fetchone()[0] == 1
 
 
 def test_today_stats_aggregate(user_db):

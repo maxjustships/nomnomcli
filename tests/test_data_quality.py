@@ -13,6 +13,8 @@ REMOVED_FOOD_INPUTS = (
     "scripts/build_mini_db.py",
     "scripts/synonym_foods.json",
     "scripts/food_overrides.json",
+    "nomnomcli/data/food_aliases.json",
+    "nomnomcli/data/aliases.json",
 )
 
 
@@ -48,3 +50,11 @@ def test_package_version_is_030():
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert __version__ == "0.3.0"
     assert 'version = "0.3.0"' in metadata
+
+
+def test_readme_documents_language_agnostic_agent_contract():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "## Canonical agent input contract" in readme
+    assert "food name + quantity + unit + optional modifiers" in readme
+    assert "### Adding a new language" in readme
+    assert "parser code changes are not required for ordinary unit aliases" in readme

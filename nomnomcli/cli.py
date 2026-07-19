@@ -86,6 +86,18 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument("--piece-grams", type=float)
     add.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
+    alias = commands.add_parser("alias", help="manage user food aliases")
+    alias_commands = alias.add_subparsers(dest="alias_command", required=True)
+    alias_add = alias_commands.add_parser("add", help="map a phrase to a cached food")
+    alias_add.add_argument("phrase")
+    alias_add.add_argument("canonical_food_name")
+    alias_add.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    alias_list = alias_commands.add_parser("list", help="list user food aliases")
+    alias_list.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    alias_remove = alias_commands.add_parser("remove", help="remove a user food alias")
+    alias_remove.add_argument("phrase")
+    alias_remove.add_argument("--json", action="store_true", help="machine-readable JSON output")
+
     recipe = commands.add_parser("recipe", help="import and log recipes")
     recipe_commands = recipe.add_subparsers(dest="recipe_command", required=True)
     recipe_add = recipe_commands.add_parser("add", help="import schema.org Recipe from a URL")
@@ -102,6 +114,34 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> int:
     with connect() as connection:
         repository = FoodRepository(connection)
+        if args.command == "alias":
+            if args.alias_command == "add":
+                result = repository.add_alias(args.phrase, args.canonical_food_name)
+                if args.json:
+                    print(_json_output(result))
+                else:
+                    print(
+                        f"Alias added: {result['phrase']} -> "
+                        f"{result['canonical_food_name']}"
+                    )
+                return 0
+            if args.alias_command == "list":
+                result = repository.list_aliases()
+                if args.json:
+                    print(_json_output(result))
+                elif result:
+                    for alias in result:
+                        print(f"{alias['phrase']} -> {alias['canonical_food_name']}")
+                else:
+                    print("No aliases.")
+                return 0
+            result = repository.remove_alias(args.phrase)
+            if args.json:
+                print(_json_output(result))
+            else:
+                print(f"Alias removed: {result['phrase']}")
+            return 0
+
         if args.command == "add":
             nutrients = (args.kcal, args.protein, args.fat, args.carbs)
             if not args.name.strip() or not args.brand.strip():

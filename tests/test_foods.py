@@ -352,3 +352,113 @@ def test_query_matching_off_brand_beats_generic_top_hit(repository, monkeypatch)
     assert food.name == branded.name
     assert food.barcode == branded.barcode
     assert food.alternatives[0]["barcode"] == "generic"
+
+
+def test_user_alias_crud_normalizes_phrase_and_requires_exact_cached_target(repository):
+    target = repository.add_food(
+        name="Яйцо",
+        brand="Ферма",
+        kcal=155,
+        protein=12.58,
+        fat=10.61,
+        carbs=1.12,
+        piece_grams=50,
+    )
+
+    added = repository.add_alias("  Яйцо   варёное  ", target.name.lower())
+    assert added == {
+        "phrase": "Яйцо варёное",
+        "canonical_food_name": "Яйцо — Ферма",
+    }
+    assert repository.list_aliases() == [added]
+
+    with pytest.raises(NomnomError) as duplicate:
+        repository.add_alias("яйцо вареное", target.name)
+    assert duplicate.value.code == "alias_exists"
+
+    removed = repository.remove_alias("ЯЙЦО ВАРЕНОЕ")
+    assert removed == added
+    assert repository.list_aliases() == []
+
+    with pytest.raises(NomnomError) as missing:
+        repository.remove_alias("яйцо варёное")
+    assert missing.value.code == "alias_not_found"
+
+
+def test_alias_target_must_be_exact_local_cache_name(repository, monkeypatch):
+    repository.add_food(
+        name="egg",
+        brand="Fixture",
+        kcal=155,
+        protein=12.58,
+        fat=10.61,
+        carbs=1.12,
+        piece_grams=50,
+    )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("alias creation must stay local"),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.add_alias("яйцо", "egg")
+
+    assert caught.value.code == "alias_target_not_found"
+
+
+def test_alias_precedes_exact_cache_but_only_for_the_exact_phrase(repository):
+    shadowed = repository.add_food(
+        name="breakfast",
+        brand="Cache",
+        kcal=100,
+        protein=2,
+        fat=2,
+        carbs=18,
+    )
+    target = repository.add_food(
+        name="egg",
+        brand="Target",
+        kcal=155,
+        protein=12.58,
+        fat=10.61,
+        carbs=1.12,
+        piece_grams=50,
+    )
+    repository.add_alias(shadowed.name, target.name)
+
+    aliased, confidence = repository.resolve(shadowed.name, allow_remote=False)
+    longer, longer_confidence = repository.resolve(
+        f"{shadowed.name} bowl", allow_remote=False
+    )
+
+    assert aliased == target
+    assert confidence == 1.0
+    assert longer == shadowed
+    assert longer_confidence == 0.85
+
+
+def test_dangling_alias_fails_without_remote_fallback(repository, monkeypatch):
+    target = repository.add_food(
+        name="egg",
+        brand="Fixture",
+        kcal=155,
+        protein=12.58,
+        fat=10.61,
+        carbs=1.12,
+    )
+    repository.add_alias("яйцо", target.name)
+    repository.user_connection.execute(
+        "DELETE FROM food_cache WHERE name = ?", (target.name,)
+    )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("dangling aliases must not use remote lookup"),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("яйцо")
+
+    assert caught.value.code == "alias_target_not_found"
+    assert caught.value.details["canonical_food_name"] == target.name

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import requests
 
 from nomnomcli.cli import main
@@ -317,3 +318,101 @@ def test_cli_off_failure_is_clear_error_json(user_db, monkeypatch, capsys):
     assert error["error"]["code"] == "openfoodfacts_unavailable"
     assert error["error"]["details"]["status"] == 503
     assert "nomnom add" in error["error"]["details"]["offline_escape"]
+
+
+def test_cli_alias_crud_json(user_db, monkeypatch, capsys):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    assert (
+        main(
+            [
+                "add",
+                "--name",
+                "egg",
+                "--brand",
+                "Fixture",
+                "--kcal",
+                "155",
+                "--protein",
+                "12.58",
+                "--fat",
+                "10.61",
+                "--carbs",
+                "1.12",
+                "--piece-grams",
+                "50",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    canonical_name = json.loads(capsys.readouterr().out)["name"]
+
+    assert main(["alias", "add", "яйцо", canonical_name, "--json"]) == 0
+    added = json.loads(capsys.readouterr().out)
+    assert added == {"phrase": "яйцо", "canonical_food_name": canonical_name}
+
+    assert main(["alias", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == [added]
+
+    assert main(["alias", "remove", "ЯЙЦО", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == added
+
+    assert main(["alias", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "error_code"),
+    [
+        (["alias", "add", "яйцо", "missing food", "--json"], "alias_target_not_found"),
+        (["alias", "remove", "missing", "--json"], "alias_not_found"),
+    ],
+)
+def test_cli_alias_errors_are_structured_json(
+    user_db, monkeypatch, capsys, argv, error_code
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+
+    assert main(argv) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["code"] == error_code
+
+
+def test_cli_required_harrys_alias_flow(user_db, monkeypatch, capsys):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    assert (
+        main(
+            [
+                "add",
+                "--name",
+                "harry's american sandwich",
+                "--brand",
+                "Harry's",
+                "--kcal",
+                "265",
+                "--protein",
+                "8",
+                "--fat",
+                "3.2",
+                "--carbs",
+                "49",
+                "--piece-grams",
+                "40",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    canonical_name = json.loads(capsys.readouterr().out)["name"]
+    assert canonical_name == "harry's american sandwich — Harry's"
+
+    assert main(["alias", "add", "хлеб harry's", canonical_name, "--json"]) == 0
+    capsys.readouterr()
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    assert main(["log", "--parse", "хлеб harry's 2 куска по 40г", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["items"][0]["name"] == canonical_name
+    assert result["items"][0]["source"] == "user"
+    assert result["items"][0]["grams"] == 80
