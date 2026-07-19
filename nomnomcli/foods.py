@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
 from dataclasses import replace
-from importlib.resources import files
-from pathlib import Path
 
 import requests
 
@@ -14,13 +13,86 @@ from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
 
+USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
+USDA_KEY_REQUIRED_MESSAGE = (
+    f"USDA FoodData Central API key required. Get a free key at {USDA_SETUP_URL}, "
+    "then set NOMNOM_USDA_KEY."
+)
+USDA_KEY_SETUP = f"Get a free key at {USDA_SETUP_URL} then: export NOMNOM_USDA_KEY=..."
+
 
 def normalize_name(value: str) -> str:
     return " ".join(value.casefold().replace("ё", "е").strip().split())
 
 
 def _name_tokens(value: str) -> set[str]:
-    return set(re.findall(r"\w+(?:['’]\w+)*", normalize_name(value)))
+    return {
+        _comparison_token(token)
+        for token in re.findall(r"\w+(?:['’]\w+)*", normalize_name(value))
+    }
+
+
+def _comparison_token(token: str) -> str:
+    if re.fullmatch(r"я(?:й|и)ц(?:о|а|у|ом|е|ы)?", token):
+        return "яйц"
+    if re.fullmatch(r"[a-z]+", token) and len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    if re.search(r"[а-я]", token):
+        for ending in ("ыми", "ими", "ого", "ему", "ами", "ями", "ые", "ие", "ый", "ий"):
+            if len(token) > len(ending) + 2 and token.endswith(ending):
+                return token[: -len(ending)]
+    return token
+
+
+_FOOD_TYPE_MARKERS = {
+    "cheese": {"cheese", "сыр", "сыры"},
+    "eggs": {"egg", "яйц"},
+    "nuts": {"nut", "орех", "орехи", "орехов"},
+}
+
+
+def _food_types(tokens: set[str]) -> set[str]:
+    return {
+        food_type
+        for food_type, markers in _FOOD_TYPE_MARKERS.items()
+        if tokens & markers
+    }
+
+
+def _off_confidence(query: str, food: Food) -> float:
+    query_tokens = _name_tokens(query)
+    category_tokens = _name_tokens(" ".join(food.categories))
+    query_types = _food_types(query_tokens)
+    category_types = _food_types(category_tokens)
+    if query_types and category_types and query_types.isdisjoint(category_types):
+        return 0.0
+    candidate_tokens = _name_tokens(" ".join((food.name, food.brand or "")))
+    if not query_tokens:
+        return 0.0
+    return len(query_tokens & candidate_tokens) / len(query_tokens)
+
+
+def _candidate_details(food: Food, confidence: float) -> dict:
+    return {
+        key: value
+        for key, value in {
+            "name": food.name,
+            "brand": food.brand,
+            "barcode": food.barcode,
+            "confidence": round(confidence, 2),
+        }.items()
+        if value is not None
+    }
+
+
+def _usda_serving_grams(record: dict) -> float | None:
+    if str(record.get("servingSizeUnit") or "").casefold() not in {"g", "gram", "grams"}:
+        return None
+    try:
+        value = float(record.get("servingSize"))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def _brand_matches_query(food: Food, query: str) -> bool:
@@ -38,23 +110,10 @@ def _brand_matches_query(food: Food, query: str) -> bool:
 class FoodRepository:
     def __init__(self, user_connection: sqlite3.Connection) -> None:
         self.user_connection = user_connection
-        self.food_db_path = Path(str(files("nomnomcli.data").joinpath("foods.sqlite")))
-        synonyms_path = files("nomnomcli.data").joinpath("synonyms_ru.json")
-        raw_synonyms = json.loads(synonyms_path.read_text())
-        self.synonyms = {normalize_name(key): value for key, value in raw_synonyms.items()}
         self.off_client = OpenFoodFactsClient()
 
     def _canonicalize_query(self, query: str) -> str:
-        normalized = normalize_name(query)
-        if canonical := self.synonyms.get(normalized):
-            return canonical
-        for synonym, canonical in sorted(
-            self.synonyms.items(), key=lambda item: (-len(item[0]), item[0])
-        ):
-            normalized = re.sub(
-                rf"(?<!\w){re.escape(synonym)}(?!\w)", canonical, normalized
-            )
-        return normalize_name(normalized)
+        return normalize_name(query)
 
     def _row_to_food(self, row: sqlite3.Row) -> Food:
         columns = set(row.keys())
@@ -84,14 +143,7 @@ class FoodRepository:
             LIMIT 1""",
             (name, normalize_name(name), normalize_name(name)),
         ).fetchone()
-        if cached:
-            return self._row_to_food(cached)
-        with sqlite3.connect(self.food_db_path) as connection:
-            connection.row_factory = sqlite3.Row
-            row = connection.execute(
-                "SELECT * FROM foods WHERE name = ? COLLATE NOCASE", (name,)
-            ).fetchone()
-            return self._row_to_food(row) if row else None
+        return self._row_to_food(cached) if cached else None
 
     def resolve(self, query: str, *, allow_remote: bool = True) -> tuple[Food, float]:
         normalized = normalize_name(query)
@@ -116,13 +168,17 @@ class FoodRepository:
             if first.startswith(canonical) or canonical.startswith(first):
                 return matches[0], 0.8
 
-        off_enabled = (
-            allow_remote
-            and not os.getenv("NOMNOM_OFFLINE")
-            and not os.getenv("NOMNOM_DISABLE_OFF")
-        )
+        remote_enabled = allow_remote and not os.getenv("NOMNOM_OFFLINE")
+        off_enabled = remote_enabled and not os.getenv("NOMNOM_DISABLE_OFF")
+        api_key = os.getenv("NOMNOM_USDA_KEY")
+        low_confidence_error: NomnomError | None = None
         if off_enabled:
-            off_matches = self.off_client.search(query, page_size=5)
+            try:
+                off_matches = self.off_client.search(query, page_size=5)
+            except NomnomError:
+                if not api_key:
+                    raise
+                off_matches = []
             if off_matches:
                 matching_brand = next(
                     (food for food in off_matches if _brand_matches_query(food, query)), None
@@ -132,26 +188,69 @@ class FoodRepository:
                         matching_brand,
                         *(food for food in off_matches if food is not matching_brand),
                     ]
-                alternatives = tuple(
-                    {
-                        key: value
-                        for key, value in {
-                            "name": alternative.name,
-                            "brand": alternative.brand,
-                            "barcode": alternative.barcode,
-                        }.items()
-                        if value is not None
-                    }
-                    for alternative in off_matches[1:]
-                )
-                food = replace(off_matches[0], alternatives=alternatives)
-                self._cache_food(food, lookup_query=query)
-                return food, 0.76
+                scored = [(food, _off_confidence(query, food)) for food in off_matches]
+                accepted = [match for match in scored if match[1] >= 0.5]
+                if not accepted:
+                    candidate, confidence = scored[0]
+                    low_confidence_error = NomnomError(
+                        "off_low_confidence",
+                        f"Open Food Facts candidate is too weak for: {query}",
+                        details={
+                            "food": query,
+                            "threshold": 0.5,
+                            "candidate": _candidate_details(candidate, confidence),
+                            "alternatives": [
+                                _candidate_details(food, score) for food, score in scored[1:]
+                            ],
+                            "action": (
+                                "Try a more specific name, configure NOMNOM_USDA_KEY, or pin "
+                                "verified label values with nomnom add"
+                            ),
+                        },
+                    )
+                else:
+                    accepted.sort(key=lambda match: -match[1])
+                    selected, confidence = accepted[0]
+                    off_matches = [
+                        selected,
+                        *(food for food in off_matches if food is not selected),
+                    ]
+                    alternatives = tuple(
+                        {
+                            key: value
+                            for key, value in {
+                                "name": alternative.name,
+                                "brand": alternative.brand,
+                                "barcode": alternative.barcode,
+                            }.items()
+                            if value is not None
+                        }
+                        for alternative in off_matches[1:]
+                    )
+                    food = replace(off_matches[0], alternatives=alternatives)
+                    self._cache_food(food, lookup_query=query)
+                    return food, confidence
 
-        api_key = os.getenv("NOMNOM_USDA_KEY")
-        if allow_remote and api_key:
+        if remote_enabled and api_key:
             return self._fetch_usda(query, api_key), 0.72
+        if low_confidence_error is not None:
+            raise low_confidence_error
         suggestions = [food.name for food in matches[:3]]
+        if remote_enabled:
+            raise NomnomError(
+                "usda_key_required",
+                USDA_KEY_REQUIRED_MESSAGE,
+                details={
+                    "food": query,
+                    "setup_url": USDA_SETUP_URL,
+                    "setup": USDA_KEY_SETUP,
+                    "environment_variable": "NOMNOM_USDA_KEY",
+                    "action": (
+                        "Set NOMNOM_USDA_KEY or pin verified nutrition with nomnom add "
+                        "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
+                    ),
+                },
+            )
         raise NomnomError(
             "food_not_found",
             f"Could not resolve food: {query}",
@@ -178,14 +277,6 @@ class FoodRepository:
             (pattern, pattern, f"{canonical}%", limit),
         ).fetchall()
         rows.extend(cached)
-        with sqlite3.connect(self.food_db_path) as connection:
-            connection.row_factory = sqlite3.Row
-            bundled = connection.execute(
-                """SELECT * FROM foods WHERE name LIKE ? COLLATE NOCASE
-                ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, length(name), name LIMIT ?""",
-                (pattern, f"{canonical}%", limit),
-            ).fetchall()
-            rows.extend(bundled)
         unique: dict[str, Food] = {}
         for row in rows:
             food = self._row_to_food(row)
@@ -194,38 +285,35 @@ class FoodRepository:
 
     def _ranked_user_cache_matches(self, query: str, limit: int) -> list[sqlite3.Row]:
         query_tokens = _name_tokens(query)
-        ranked: list[tuple[float, int, int, str, sqlite3.Row]] = []
+        ranked: list[tuple[float, int, int, int, str, sqlite3.Row]] = []
         rows = self.user_connection.execute(
-            """SELECT * FROM food_cache
-            WHERE brand IS NOT NULL AND brand != ''
-            ORDER BY name COLLATE NOCASE"""
+            "SELECT * FROM food_cache ORDER BY name COLLATE NOCASE"
         ).fetchall()
         for row in rows:
             food = self._row_to_food(row)
-            if not _brand_matches_query(food, query):
-                continue
-            brand_tokens = _name_tokens(food.brand or "")
-            requested_product_tokens = query_tokens - brand_tokens
             candidate_tokens = _name_tokens(
                 " ".join(
                     value
                     for value in (food.name, food.brand, row["lookup_query"])
                     if value
                 )
-            ) - brand_tokens
-            overlap = requested_product_tokens & candidate_tokens
-            if not requested_product_tokens or not overlap:
+            )
+            overlap = query_tokens & candidate_tokens
+            if not query_tokens or len(overlap) / len(query_tokens) < 0.5:
                 continue
             ranked.append(
                 (
-                    len(overlap) / len(requested_product_tokens),
+                    len(overlap) / len(query_tokens),
                     len(overlap),
-                    len(candidate_tokens - requested_product_tokens),
+                    0 if food.source == "user" else 1,
+                    len(candidate_tokens - query_tokens),
                     normalize_name(food.name),
                     row,
                 )
             )
-        ranked.sort(key=lambda match: (-match[0], -match[1], match[2], match[3]))
+        ranked.sort(
+            key=lambda match: (-match[0], -match[1], match[2], match[3], match[4])
+        )
         return [match[-1] for match in ranked[:limit]]
 
     def _cache_food(self, food: Food, *, lookup_query: str) -> None:
@@ -302,7 +390,17 @@ class FoodRepository:
                 "usda_unavailable", "USDA fallback request failed", details={"food": query}
             ) from exc
         if not foods:
-            raise NomnomError("food_not_found", f"USDA could not resolve food: {query}")
+            raise NomnomError(
+                "food_not_found",
+                f"USDA could not resolve food: {query}",
+                details={
+                    "food": query,
+                    "action": (
+                        "Try a more specific name or pin verified nutrition with nomnom add "
+                        "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
+                    ),
+                },
+            )
         record = foods[0]
         nutrients = {}
         for item in record.get("foodNutrients", []):
@@ -319,23 +417,9 @@ class FoodRepository:
             protein=nutrients.get("protein", 0.0),
             fat=nutrients.get("total lipid (fat)", 0.0),
             carbs=nutrients.get("carbohydrate, by difference", 0.0),
-            source="USDA FDC API",
+            piece_grams=_usda_serving_grams(record),
+            source="usda",
             fdc_id=record.get("fdcId"),
         )
-        self.user_connection.execute(
-            """INSERT OR REPLACE INTO food_cache
-            (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                food.name,
-                food.kcal,
-                food.protein,
-                food.fat,
-                food.carbs,
-                None,
-                None,
-                food.source,
-                food.fdc_id,
-            ),
-        )
+        self._cache_food(food, lookup_query=query)
         return food

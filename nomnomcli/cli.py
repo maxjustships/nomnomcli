@@ -71,7 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
     stats.add_argument("period", choices=("today", "week"))
     stats.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
-    search = commands.add_parser("search", help="search the offline food database")
+    search = commands.add_parser("search", help="search the user food cache")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--json", action="store_true", help="machine-readable JSON output")

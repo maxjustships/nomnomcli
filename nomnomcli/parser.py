@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import re
 from fractions import Fraction
-from importlib.resources import files
 
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
@@ -87,20 +85,6 @@ FRACTION_PIECE = re.compile(
 )
 DISH_PREFIX = re.compile(r"^(?:яичница из|омлет из|салат из|каша из)\s+", re.IGNORECASE)
 
-
-def _piece_weight_data() -> tuple[dict, dict[str, tuple[str, dict]]]:
-    data = json.loads(files("nomnomcli.data").joinpath("piece_weights.json").read_text())
-    aliases = {
-        alias.casefold().replace("ё", "е"): (label, entry)
-        for label, entry in data.items()
-        for alias in entry["aliases"]
-    }
-    return data, aliases
-
-
-_PIECE_WEIGHTS, PIECE_BY_ALIAS = _piece_weight_data()
-
-
 def parse_number(value: str) -> float:
     normalized = value.replace(",", ".").strip()
     try:
@@ -170,15 +154,12 @@ def _parse_descriptor_piece(cleaned: str, repository: FoodRepository) -> Resolve
     if amount <= 0:
         raise NomnomError("invalid_quantity", "Quantity must be greater than zero")
 
-    food_alias = " ".join(match.group("food").casefold().replace("ё", "е").split())
-    piece = PIECE_BY_ALIAS.get(food_alias)
-    if not piece:
-        return None
-    label, entry = piece
-    food, confidence = repository.resolve(entry["food"])
-    grams = amount * float(entry[size])
-    noun = entry["plural"] if amount > 1 else label
-    assumption = f"{_format_amount(amount)} {size} {noun} = {_format_grams(grams)}g"
+    food_query = " ".join(match.group("food").split())
+    food, confidence = repository.resolve(food_query)
+    grams = _quantity_to_grams(amount, "pieces", food)
+    assumption = (
+        f"{_format_amount(amount)} {size} {food_query} = {_format_grams(grams)}g"
+    )
     return scale_food(
         food,
         grams,
