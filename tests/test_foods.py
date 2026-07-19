@@ -159,6 +159,29 @@ def test_named_brand_never_substitutes_generic_food(repository, monkeypatch):
     assert food.name != "bread, wheat"
 
 
+def test_tokenwise_manual_brand_match_precedes_off(repository, monkeypatch):
+    expected = repository.add_food(
+        name="harry's sandwich bread",
+        brand="Harry's",
+        kcal=265,
+        protein=8,
+        fat=3.2,
+        carbs=49,
+        piece_grams=40,
+    )
+    monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("manual brand match must not use OFF"),
+    )
+
+    food, confidence = repository.resolve("хлеб harry's")
+
+    assert food == expected
+    assert confidence == 0.85
+
+
 def test_query_matching_off_brand_beats_generic_top_hit(repository, monkeypatch):
     generic = Food(
         "Generic Wheat Bread",

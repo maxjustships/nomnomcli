@@ -144,17 +144,17 @@ def test_exact_issue_phrase_with_pinned_brand(user_db, monkeypatch, capsys):
             [
                 "add",
                 "--name",
-                "хлеб",
+                "harry's sandwich bread",
                 "--brand",
-                "harry's",
+                "Harry's",
                 "--kcal",
-                "250",
+                "265",
                 "--protein",
-                "9",
+                "8",
                 "--fat",
-                "4",
+                "3.2",
                 "--carbs",
-                "45",
+                "49",
                 "--piece-grams",
                 "40",
                 "--json",
@@ -171,6 +171,8 @@ def test_exact_issue_phrase_with_pinned_brand(user_db, monkeypatch, capsys):
     assert main(["log", "--parse", phrase, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert [item["grams"] for item in result["items"]] == [135, 30, 40, 80]
+    assert result["items"][3]["name"] == "harry's sandwich bread — Harry's"
+    assert result["items"][3]["source"] == "user"
     assert all(
         not item["name"].startswith("oil,") and not item["name"].endswith(" oil")
         for item in result["items"]

@@ -19,6 +19,10 @@ def normalize_name(value: str) -> str:
     return " ".join(value.casefold().replace("ё", "е").strip().split())
 
 
+def _name_tokens(value: str) -> set[str]:
+    return set(re.findall(r"\w+(?:['’]\w+)*", normalize_name(value)))
+
+
 def _brand_matches_query(food: Food, query: str) -> bool:
     if not food.brand:
         return False
@@ -39,6 +43,18 @@ class FoodRepository:
         raw_synonyms = json.loads(synonyms_path.read_text())
         self.synonyms = {normalize_name(key): value for key, value in raw_synonyms.items()}
         self.off_client = OpenFoodFactsClient()
+
+    def _canonicalize_query(self, query: str) -> str:
+        normalized = normalize_name(query)
+        if canonical := self.synonyms.get(normalized):
+            return canonical
+        for synonym, canonical in sorted(
+            self.synonyms.items(), key=lambda item: (-len(item[0]), item[0])
+        ):
+            normalized = re.sub(
+                rf"(?<!\w){re.escape(synonym)}(?!\w)", canonical, normalized
+            )
+        return normalize_name(normalized)
 
     def _row_to_food(self, row: sqlite3.Row) -> Food:
         columns = set(row.keys())
@@ -79,10 +95,18 @@ class FoodRepository:
 
     def resolve(self, query: str, *, allow_remote: bool = True) -> tuple[Food, float]:
         normalized = normalize_name(query)
-        canonical = self.synonyms.get(normalized, normalized)
+        exact = self._find_exact(normalized)
+        if exact:
+            return exact, 1.0
+
+        canonical = self._canonicalize_query(normalized)
         exact = self._find_exact(canonical)
         if exact:
             return exact, 0.98 if canonical != normalized else 1.0
+
+        ranked_cache_matches = self._ranked_user_cache_matches(canonical, limit=5)
+        if ranked_cache_matches:
+            return self._row_to_food(ranked_cache_matches[0]), 0.85
 
         matches = self.search(canonical, limit=5)
         if len(matches) == 1:
@@ -143,10 +167,10 @@ class FoodRepository:
         )
 
     def search(self, query: str, limit: int = 10) -> list[Food]:
-        normalized = normalize_name(query)
-        canonical = self.synonyms.get(normalized, normalized)
+        canonical = self._canonicalize_query(query)
         pattern = f"%{canonical}%"
         rows: list[sqlite3.Row] = []
+        rows.extend(self._ranked_user_cache_matches(canonical, limit))
         cached = self.user_connection.execute(
             """SELECT * FROM food_cache
             WHERE name LIKE ? COLLATE NOCASE OR lookup_query LIKE ? COLLATE NOCASE
@@ -167,6 +191,42 @@ class FoodRepository:
             food = self._row_to_food(row)
             unique.setdefault(normalize_name(food.name), food)
         return list(unique.values())[:limit]
+
+    def _ranked_user_cache_matches(self, query: str, limit: int) -> list[sqlite3.Row]:
+        query_tokens = _name_tokens(query)
+        ranked: list[tuple[float, int, int, str, sqlite3.Row]] = []
+        rows = self.user_connection.execute(
+            """SELECT * FROM food_cache
+            WHERE brand IS NOT NULL AND brand != ''
+            ORDER BY name COLLATE NOCASE"""
+        ).fetchall()
+        for row in rows:
+            food = self._row_to_food(row)
+            if not _brand_matches_query(food, query):
+                continue
+            brand_tokens = _name_tokens(food.brand or "")
+            requested_product_tokens = query_tokens - brand_tokens
+            candidate_tokens = _name_tokens(
+                " ".join(
+                    value
+                    for value in (food.name, food.brand, row["lookup_query"])
+                    if value
+                )
+            ) - brand_tokens
+            overlap = requested_product_tokens & candidate_tokens
+            if not requested_product_tokens or not overlap:
+                continue
+            ranked.append(
+                (
+                    len(overlap) / len(requested_product_tokens),
+                    len(overlap),
+                    len(candidate_tokens - requested_product_tokens),
+                    normalize_name(food.name),
+                    row,
+                )
+            )
+        ranked.sort(key=lambda match: (-match[0], -match[1], match[2], match[3]))
+        return [match[-1] for match in ranked[:limit]]
 
     def _cache_food(self, food: Food, *, lookup_query: str) -> None:
         self.user_connection.execute(
