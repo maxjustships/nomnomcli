@@ -16,6 +16,29 @@ def test_russian_synonym_resolution(repository):
     assert confidence == 0.98
 
 
+@pytest.mark.parametrize(
+    ("query", "name", "macros", "density"),
+    [
+        ("соевый изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("изолят соевого белка", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
+        ("молоко 3%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
+        ("молоко 3.2%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
+    ],
+)
+def test_requested_food_synonyms(repository, query, name, macros, density):
+    food, confidence = repository.resolve(query)
+    assert food.name == name
+    assert (food.kcal, food.protein, food.fat, food.carbs) == macros
+    assert food.density_g_ml == density
+    assert confidence == 0.98
+
+
+def test_generic_milk_synonym_still_resolves_to_whole_milk(repository):
+    food, _ = repository.resolve("молоко")
+    assert food.name == "milk, whole"
+
+
 def test_yo_normalization(repository):
     first, _ = repository.resolve("мед")
     second, _ = repository.resolve("мёд")

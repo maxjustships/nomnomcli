@@ -132,6 +132,11 @@ nomnom search "творог" --json
 Stats include totals and each stored meal. User data defaults to
 `~/.local/share/nomnomcli/nomnom.sqlite3`; set `NOMNOM_DB_PATH` to choose another database.
 
+### Upgrading
+
+User database schema migrations run automatically when `nomnom` opens the database. Existing
+logs, cached foods, and recipes are upgraded in place and are never reset or recreated.
+
 ### Recipes
 
 `recipe add` is the only normal command that fetches an arbitrary URL. It parses a
