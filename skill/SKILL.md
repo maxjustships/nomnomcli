@@ -1,9 +1,8 @@
 ---
 name: nomnomcli
 description: >-
-  Deterministic calorie and nutrition tracking. Use when the user asks to
-  "трекать калории", "посчитай калории", "что я сегодня ел", log food,
-  import a recipe, or review daily/weekly macros.
+  Runtime calorie and nutrition tracking. Use when the user asks to track food,
+  calculate calories or macros, import a recipe, or review daily/weekly totals.
 ---
 
 # nomnomcli
@@ -19,78 +18,79 @@ If `nomnom --help` is unavailable, ask permission and run:
 curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
 ```
 
-## Log free text: parse, show, confirm
+## Log free text
 
-1. Convert the user's foods into a comma-separated string while preserving the
-   quantities they supplied.
-2. Run `nomnom log --parse "борщ 300г, хлеб 2 куска" --json`.
-3. Show the resolved canonical names, grams, and totals returned by the CLI.
-4. Show every returned `assumptions` entry (for example, `small egg = 45g`) and
-   any branded `alternatives` before asking the user to confirm the resolution.
+1. Preserve every food and quantity the user supplied.
+2. Run `nomnom log --parse "FOOD QUANTITY, FOOD QUANTITY" --json`.
+3. Show returned canonical names, grams, confidence, totals, `alternatives`, and
+   every `assumptions` entry.
+4. Ask the user to confirm the resolution before relying on it.
 
-The v0.2 CLI stores successful logs immediately, so do not silently change or
-rerun a successful entry. Clearly tell the user before any corrective re-log.
+Successful logs are stored immediately. Do not silently correct or rerun one;
+tell the user before creating a replacement entry.
 
-Supported dish prefixes (`яичница из`, `омлет из`, `салат из`, `каша из`) are
-decomposed into the ingredients the user named. Never add oil or another missing
-ingredient. Size/fraction weights are CLI assumptions, not measured amounts.
+Supported dish prefixes split only named ingredients. Never add oil or another
+missing ingredient. Size words are parser syntax; piece grams must come from the
+resolved food record. If the record has no piece weight, ask for grams.
 
 ## Direct food flow
 
-When the user gives one unambiguous food and a weight, or after clarification:
+When the user gives one clear food and a measured weight:
 
 ```sh
-nomnom log --food "buckwheat" --grams 150 --json
+nomnom log --food "chickpeas, cooked" --grams 150 --json
 ```
 
-Always use the human's weight. Do not invent grams for a serving.
+Always use the human's weight.
 
-## Unresolved input
+## Unknown-food workflow: OFF → USDA → add → error
 
-The CLI exits non-zero and returns a JSON `error` object. Read its `code`,
-`message`, and `details`.
+The CLI automatically checks exact cache, cache search, then Open Food Facts.
+For an unresolved food:
 
-- `food_not_found`: ask what exact food/product they meant. Search with
-  `nomnom search "query" --json`, then retry with the selected name. For a
-  branded product, offer to pin label values using `nomnom add --name NAME
-  --brand BRAND --kcal ... --protein ... --fat ... --carbs ...`.
+1. Let OFF run. For `off_low_confidence`, show its `candidate` and
+   `alternatives`; do not accept one without the user's explicit choice.
+2. Let USDA run only when `NOMNOM_USDA_KEY` is configured. For
+   `usda_key_required`, offer the free-key setup URL returned in `details` and
+   ask the user to set the environment variable.
+3. If the user has verified label values, manually pin them:
+
+   ```sh
+   nomnom add --name NAME --brand BRAND --kcal KCAL \
+     --protein PROTEIN --fat FAT --carbs CARBS --piece-grams GRAMS --json
+   ```
+
+   Omit `--piece-grams` when the label does not provide a serving weight.
+4. If OFF, USDA, and a verified manual pin cannot resolve the food, report the
+   structured error. Never substitute a similar food or invent values.
+
+Other error handling:
+
 - `quantity_required`: ask for grams, millilitres, or a supported piece count.
-- `piece_weight_unknown`: ask for grams, then retry using `--food --grams`.
-- Any Open Food Facts/USDA error: explain that nothing was estimated and ask
-  whether to retry or pin the product-label values with `nomnom add`.
-
-Do not replace an unresolved food with a merely similar food without explicit
-human approval.
+- `piece_weight_unknown`: ask for grams, then retry with `--food --grams`.
+- `openfoodfacts_unavailable` / `usda_unavailable`: say that nothing was
+  estimated; offer retry or a verified manual pin.
 
 ## Stats
-
-Use machine output and summarize only returned values:
 
 ```sh
 nomnom stats today --json
 nomnom stats week --json
 ```
 
+Summarize only returned values.
+
 ## Recipes
 
-Import a schema.org recipe from a URL, show its resolution, and ask the human to
-check ingredients and servings:
-
 ```sh
-nomnom recipe add "https://example.com/recipe" --json
 nomnom recipe add "https://example.com/recipe" --servings 4 --json
-```
-
-Then log an eaten amount by stored recipe name:
-
-```sh
 nomnom recipe log "Recipe name" --portions 1.5 --json
 ```
 
-If an ingredient cannot be resolved, ask for clarification. Never complete
-recipe math yourself.
+Show resolved ingredients and servings. If any ingredient fails, ask for
+clarification; never complete recipe math yourself.
 
 ## Hard rule
 
-If `nomnom` cannot produce a nutrition value, say that the value is unresolved.
-Never estimate nutrition in the agent context.
+If `nomnom` cannot produce a nutrition value, say it is unresolved. Never
+estimate nutrition in the agent context.

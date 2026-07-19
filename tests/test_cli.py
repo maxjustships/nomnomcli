@@ -2,14 +2,95 @@ from __future__ import annotations
 
 import json
 
+import requests
+
 from nomnomcli.cli import main
+from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
 
 
-def test_cli_log_and_stats_json(user_db, monkeypatch, capsys):
+def test_cli_mocked_off_egg_dish_uses_runtime_serving_weight(
+    user_db, monkeypatch, capsys, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"products": [food_fixtures["off"]["egg"]]}
+
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    code = main(["log", "--parse", "яичница из 3 небольших яиц", "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert result["items"][0]["grams"] == 150
+    assert result["items"][0]["source"] == "openfoodfacts"
+
+
+def test_cli_mocked_cheese_for_pine_nuts_is_low_confidence_without_writes(
+    user_db, monkeypatch, capsys, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"products": [food_fixtures["off"]["cheese"]]}
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    code = main(["log", "--parse", "кедровые орехи 30 г", "--json"])
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert error["error"]["code"] == "off_low_confidence"
+    assert error["error"]["candidate"]["name"] == "Cheese — Wrong Match"
+    assert error["error"]["alternatives"] == []
+    assert error["error"]["details"]["candidate"]["name"] == "Cheese — Wrong Match"
+    assert "alternatives" in error["error"]["details"]
+    with connect(user_db) as connection:
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+
+
+def test_cli_no_usda_key_is_actionable_json_error(user_db, monkeypatch, capsys):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"products": []}
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    code = main(["log", "--food", "chickpeas cooked", "--grams", "100", "--json"])
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert error["error"]["code"] == "usda_key_required"
+    assert error["error"]["setup"] == (
+        "Get a free key at https://fdc.nal.usda.gov/api-key-signup.html then: "
+        "export NOMNOM_USDA_KEY=..."
+    )
+    assert error["error"]["details"]["setup_url"] == (
+        "https://fdc.nal.usda.gov/api-key-signup.html"
+    )
+
+
+def test_cli_log_and_stats_json(seeded_user_db, monkeypatch, capsys):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
     code = main(["log", "--parse", "борщ 300г, хлеб 2 куска, гречка 150 г", "--json"])
     logged = json.loads(capsys.readouterr().out)
     assert code == 0
@@ -41,8 +122,8 @@ def test_cli_direct_requires_grams(user_db, monkeypatch, capsys):
     assert error["error"]["code"] == "grams_required"
 
 
-def test_cli_search_json(user_db, monkeypatch, capsys):
-    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+def test_cli_search_json(seeded_user_db, monkeypatch, capsys):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
     code = main(["search", "борщ", "--json"])
     result = json.loads(capsys.readouterr().out)
     assert code == 0
@@ -55,16 +136,18 @@ def test_cli_search_json(user_db, monkeypatch, capsys):
     }
 
 
-def test_cli_json_and_text_surface_size_assumptions(user_db, monkeypatch, capsys):
-    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+def test_cli_json_and_text_surface_size_assumptions(
+    seeded_user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
     phrase = "омлет из 2 small eggs, половины небольшого томата"
 
     code = main(["log", "--parse", phrase, "--json"])
     result = json.loads(capsys.readouterr().out)
     assert code == 0
     assert result["assumptions"] == [
-        "2 small eggs = 90g",
-        "1/2 small tomato = 30g",
+        "2 small eggs = 100g",
+        "1/2 small томата = 50g",
     ]
     assert all(item["assumed"] is True for item in result["items"])
 
@@ -72,7 +155,7 @@ def test_cli_json_and_text_surface_size_assumptions(user_db, monkeypatch, capsys
     output = capsys.readouterr().out
     assert code == 0
     assert "Assumptions:" in output
-    assert "2 small eggs = 90g" in output
+    assert "2 small eggs = 100g" in output
 
 
 def test_cli_add_pins_branded_product_for_offline_piece_lookup(
@@ -137,8 +220,8 @@ def test_cli_add_rejects_invalid_nutrition(user_db, monkeypatch, capsys):
     assert error["error"]["code"] == "invalid_nutrition"
 
 
-def test_exact_issue_phrase_with_pinned_brand(user_db, monkeypatch, capsys):
-    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+def test_exact_issue_phrase_with_pinned_brand(seeded_user_db, monkeypatch, capsys):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
     assert (
         main(
             [
@@ -170,7 +253,7 @@ def test_exact_issue_phrase_with_pinned_brand(user_db, monkeypatch, capsys):
     )
     assert main(["log", "--parse", phrase, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert [item["grams"] for item in result["items"]] == [135, 30, 40, 80]
+    assert [item["grams"] for item in result["items"]] == [150, 50, 40, 80]
     assert result["items"][3]["name"] == "harry's sandwich bread — Harry's"
     assert result["items"][3]["source"] == "user"
     assert all(
@@ -178,9 +261,9 @@ def test_exact_issue_phrase_with_pinned_brand(user_db, monkeypatch, capsys):
         for item in result["items"]
     )
     assert result["assumptions"] == [
-        "3 small eggs = 135g",
-        "1/2 small tomato = 30g",
-        "1/2 medium onion = 40g",
+        "3 small яиц = 150g",
+        "1/2 small томата = 50g",
+        "1/2 medium луковицы = 40g",
     ]
 
 

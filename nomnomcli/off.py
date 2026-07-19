@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import math
+import re
 
 import requests
 
+from nomnomcli import __version__
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 
 OFF_SEARCH_URL = "https://world.openfoodfacts.org/api/v2/search"
-OFF_FIELDS = "product_name,brands,nutriments,code,serving_size"
+OFF_FIELDS = "product_name,brands,nutriments,code,serving_size,categories,categories_tags"
 
 
 def _number(value) -> float | None:
@@ -19,6 +21,14 @@ def _number(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) and result >= 0 else None
+
+
+def _serving_grams(value) -> float | None:
+    matches = re.findall(r"(\d+(?:[.,]\d+)?)\s*(?:g|gr|grams?|г|гр)(?!\w)", str(value), re.I)
+    if not matches:
+        return None
+    grams = _number(matches[-1].replace(",", "."))
+    return grams if grams is not None and grams > 0 else None
 
 
 def _normalize_product(product: dict) -> Food | None:
@@ -37,27 +47,30 @@ def _normalize_product(product: dict) -> Food | None:
     protein = _number(nutriments.get("proteins_100g"))
     fat = _number(nutriments.get("fat_100g"))
     carbs = _number(nutriments.get("carbohydrates_100g"))
-    if kcal is None and all(value is None for value in (protein, fat, carbs)):
+    nutrients = (kcal, protein, fat, carbs)
+    if any(value is None or value <= 0 for value in nutrients):
         return None
-    protein = protein or 0.0
-    fat = fat or 0.0
-    carbs = carbs or 0.0
-    kcal = kcal if kcal is not None else 4 * protein + 9 * fat + 4 * carbs
 
     display_name = product_name
     if brand and brand.casefold() not in product_name.casefold():
         display_name = f"{product_name} — {brand}"
     barcode = str(product.get("code") or "").strip() or None
+    raw_categories = product.get("categories_tags")
+    categories = [str(product.get("categories") or "").strip()]
+    if isinstance(raw_categories, list):
+        categories.extend(str(value).replace(":", " ") for value in raw_categories)
     return Food(
         name=display_name,
         kcal=kcal,
         protein=protein,
         fat=fat,
         carbs=carbs,
+        piece_grams=_serving_grams(product.get("serving_size")),
         source="openfoodfacts",
         fdc_id=None,
         barcode=barcode,
         brand=brand,
+        categories=tuple(value for value in categories if value),
     )
 
 
@@ -80,7 +93,10 @@ class OpenFoodFactsClient:
                 },
                 timeout=10,
                 headers={
-                    "User-Agent": "nomnomcli/0.2 (+https://github.com/maxjustships/nomnomcli)"
+                    "User-Agent": (
+                        f"nomnomcli/{__version__} "
+                        "(+https://github.com/maxjustships/nomnomcli)"
+                    )
                 },
             )
             response.raise_for_status()

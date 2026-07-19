@@ -1,54 +1,162 @@
 from __future__ import annotations
 
-import json
-import sqlite3
-
 import pytest
 import requests
 
+from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
+from nomnomcli.foods import FoodRepository
 from nomnomcli.models import Food
 
 
-def test_russian_synonym_resolution(repository):
-    food, confidence = repository.resolve("творог")
-    assert food.name == "cottage cheese, 4% milkfat"
-    assert confidence == 0.98
+def test_repository_does_not_read_bundled_food_resources(user_db, monkeypatch):
+    def fail(*args, **kwargs):
+        pytest.fail("runtime repository must not read package food resources")
+
+    monkeypatch.setattr("nomnomcli.foods.files", fail, raising=False)
+
+    with connect(user_db) as connection:
+        FoodRepository(connection)
 
 
-@pytest.mark.parametrize(
-    ("query", "name", "macros", "density"),
-    [
-        ("соевый изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
-        ("изолят соевого белка", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
-        ("изолят", "soy protein isolate", (370.0, 90.0, 1.5, 3.0), None),
-        ("молоко 3%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
-        ("молоко 3.2%", "milk, 3%", (60.0, 2.9, 3.0, 4.7), 1.03),
-    ],
-)
-def test_requested_food_synonyms(repository, query, name, macros, density):
-    food, confidence = repository.resolve(query)
-    assert food.name == name
-    assert (food.kcal, food.protein, food.fat, food.carbs) == macros
-    assert food.density_g_ml == density
-    assert confidence == 0.98
+def test_v02_cached_food_record_still_resolves_exactly(repository, monkeypatch):
+    repository.user_connection.execute(
+        """INSERT INTO food_cache
+        (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("legacy egg", 155, 12.6, 10.6, 1.1, 50, None, "USDA FDC API", 173424),
+    )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("exact cache hit must not use OFF"),
+    )
+
+    food, confidence = repository.resolve("legacy egg")
+
+    assert food.fdc_id == 173424
+    assert food.piece_grams == 50
+    assert confidence == 1.0
 
 
-def test_generic_milk_synonym_still_resolves_to_whole_milk(repository):
-    food, _ = repository.resolve("молоко")
-    assert food.name == "milk, whole"
+def test_cache_search_uses_token_overlap_before_off(repository, monkeypatch):
+    repository.user_connection.execute(
+        """INSERT INTO food_cache
+        (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("cooked red lentils", 116, 9, 0.4, 20, None, None, "usda", 172421),
+    )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("cache search must run before OFF"),
+    )
+
+    food, confidence = repository.resolve("lentils cooked")
+
+    assert food.name == "cooked red lentils"
+    assert confidence >= 0.5
 
 
-def test_yo_normalization(repository):
-    first, _ = repository.resolve("мед")
-    second, _ = repository.resolve("мёд")
-    assert first == second
+def test_off_low_confidence_does_not_cache_candidate(
+    repository, monkeypatch, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"products": [food_fixtures["off"]["cheese"]]}
+
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("кедровые орехи")
+
+    assert caught.value.code == "off_low_confidence"
+    assert caught.value.details["candidate"]["name"] == "Cheese — Wrong Match"
+    assert caught.value.details["alternatives"] == []
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
 
-def test_search_russian_query(repository):
-    results = repository.search("гречка")
-    assert results[0].name == "buckwheat groats, roasted, cooked"
-    assert results[0].kcal == 92
+def test_off_category_sanity_rejects_name_match_from_wrong_food_type(
+    repository, monkeypatch, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            candidate = dict(food_fixtures["off"]["cheese"])
+            candidate["product_name"] = "Кедровые орехи"
+            return {"products": [candidate]}
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("кедровые орехи")
+
+    assert caught.value.code == "off_low_confidence"
+    assert caught.value.details["candidate"]["confidence"] < 0.5
+
+
+def test_off_accepts_inflected_russian_egg_with_serving_weight(
+    repository, monkeypatch, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"products": [food_fixtures["off"]["egg"]]}
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    food, confidence = repository.resolve("яиц")
+
+    assert food.name == "Яйца куриные — Ферма"
+    assert food.piece_grams == 50
+    assert confidence >= 0.5
+
+
+def test_off_category_does_not_replace_name_and_brand_token_overlap(
+    repository, monkeypatch, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            candidate = dict(food_fixtures["off"]["egg"])
+            candidate["product_name"] = "Farm Choice"
+            candidate["brands"] = "Example"
+            return {"products": [candidate]}
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("eggs")
+
+    assert caught.value.code == "off_low_confidence"
+    assert caught.value.details["candidate"]["confidence"] == 0
+
+
+def test_missing_usda_key_has_exact_actionable_setup_error(repository, monkeypatch):
+    setup_url = "https://fdc.nal.usda.gov/api-key-signup.html"
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("chickpeas cooked")
+
+    assert caught.value.code == "usda_key_required"
+    assert caught.value.message == (
+        f"USDA FoodData Central API key required. Get a free key at {setup_url}, "
+        "then set NOMNOM_USDA_KEY."
+    )
+    assert caught.value.details["setup_url"] == setup_url
 
 
 def test_offline_not_found(repository, monkeypatch):
@@ -59,62 +167,74 @@ def test_offline_not_found(repository, monkeypatch):
     assert caught.value.details["offline"] is True
 
 
-def test_usda_fallback_is_cached(repository, monkeypatch):
+def test_usda_fallback_is_cached_with_runtime_source_and_fdc_id(
+    repository, monkeypatch, food_fixtures
+):
     class Response:
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {
-                "foods": [
-                    {
-                        "fdcId": 42,
-                        "description": "Test food",
-                        "foodNutrients": [
-                            {
-                                "nutrientName": "Energy",
-                                "nutrientNumber": "208",
-                                "unitName": "KCAL",
-                                "value": 123,
-                            },
-                            {"nutrientName": "Protein", "value": 4},
-                            {"nutrientName": "Total lipid (fat)", "value": 5},
-                            {"nutrientName": "Carbohydrate, by difference", "value": 6},
-                        ],
-                    }
-                ]
-            }
+            return {"foods": [food_fixtures["usda"]]}
 
     monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
     monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
-    food, confidence = repository.resolve("remote test food")
-    assert (food.kcal, confidence) == (123, 0.72)
+    food, confidence = repository.resolve("chickpeas cooked")
+    assert (food.kcal, confidence) == (164, 0.72)
+    assert food.fdc_id == 175200
+    assert food.piece_grams == 130
     row = repository.user_connection.execute(
-        "SELECT source FROM food_cache WHERE name = 'test food'"
+        "SELECT source, fdc_id FROM food_cache WHERE name = 'chickpeas, cooked'"
     ).fetchone()
-    assert row[0] == "USDA FDC API"
+    assert tuple(row) == ("usda", 175200)
 
 
-def test_bundled_database_has_target_size(repository):
-    with sqlite3.connect(repository.food_db_path) as connection:
-        assert connection.execute("SELECT count(*) FROM foods").fetchone()[0] >= 300
+def test_usda_fallback_replaces_low_confidence_off_candidate(
+    repository, monkeypatch, food_fixtures
+):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if "world.openfoodfacts.org" in self.url:
+                return {"products": [food_fixtures["off"]["cheese"]]}
+            return {"foods": [food_fixtures["usda"]]}
+
+    def get(url, *args, **kwargs):
+        response = Response()
+        response.url = url
+        return response
+
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setattr(requests, "get", get)
+
+    food, confidence = repository.resolve("кедровые орехи")
+
+    assert food.source == "usda"
+    assert food.fdc_id == 175200
+    assert confidence == 0.72
 
 
-def test_synonym_layer_has_target_size(repository):
-    raw = json.loads(
-        repository.food_db_path.with_name("synonyms_ru.json").read_text(encoding="utf-8")
-    )
-    assert len(raw) >= 200
+def test_usda_no_result_is_structured_and_actionable(repository, monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
 
+        def json(self):
+            return {"foods": []}
 
-def test_every_synonym_target_exists(repository):
-    raw = json.loads(
-        repository.food_db_path.with_name("synonyms_ru.json").read_text(encoding="utf-8")
-    )
-    with sqlite3.connect(repository.food_db_path) as connection:
-        names = {row[0].casefold() for row in connection.execute("SELECT name FROM foods")}
-    assert set(raw.values()) <= names
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("unlisted food")
+
+    assert caught.value.code == "food_not_found"
+    assert caught.value.details["food"] == "unlisted food"
+    assert "nomnom add" in caught.value.details["action"]
 
 
 def test_off_result_is_cached_with_alternatives(repository, monkeypatch):
@@ -149,7 +269,7 @@ def test_off_result_is_cached_with_alternatives(repository, monkeypatch):
     monkeypatch.setattr(repository.off_client, "search", search)
     food, confidence = repository.resolve("Acme bread")
     assert food.name == "Whole Grain Bread — Acme"
-    assert confidence == 0.76
+    assert confidence == 1.0
     assert food.alternatives == (
         {"name": "Seeded Bread — Acme", "brand": "Acme", "barcode": "2"},
     )
@@ -199,7 +319,7 @@ def test_tokenwise_manual_brand_match_precedes_off(repository, monkeypatch):
         lambda *args, **kwargs: pytest.fail("manual brand match must not use OFF"),
     )
 
-    food, confidence = repository.resolve("хлеб harry's")
+    food, confidence = repository.resolve("sandwich bread harry's")
 
     assert food == expected
     assert confidence == 0.85
@@ -232,11 +352,3 @@ def test_query_matching_off_brand_beats_generic_top_hit(repository, monkeypatch)
     assert food.name == branded.name
     assert food.barcode == branded.barcode
     assert food.alternatives[0]["barcode"] == "generic"
-
-
-def test_off_no_results_has_actionable_error(repository, monkeypatch):
-    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [])
-    with pytest.raises(NomnomError) as caught:
-        repository.resolve("Missing Brand bar")
-    assert caught.value.code == "food_not_found"
-    assert "nomnom add" in caught.value.details["action"]

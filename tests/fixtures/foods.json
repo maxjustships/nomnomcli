@@ -1,0 +1,107 @@
+{
+  "cache": [
+    {
+      "name": "borscht",
+      "lookup_query": "борщ borscht",
+      "kcal": 55,
+      "protein": 2.5,
+      "fat": 2.1,
+      "carbs": 6.4
+    },
+    {
+      "name": "bread, wheat",
+      "lookup_query": "хлеб bread wheat",
+      "kcal": 252,
+      "protein": 12.45,
+      "fat": 3.5,
+      "carbs": 43.1,
+      "piece_grams": 30
+    },
+    {
+      "name": "buckwheat groats, roasted, cooked",
+      "lookup_query": "гречка buckwheat groats roasted cooked",
+      "kcal": 92,
+      "protein": 3.38,
+      "fat": 0.62,
+      "carbs": 19.94
+    },
+    {
+      "name": "egg, whole, boiled",
+      "lookup_query": "яйцо яйца яиц egg eggs whole boiled",
+      "kcal": 155,
+      "protein": 12.58,
+      "fat": 10.61,
+      "carbs": 1.12,
+      "piece_grams": 50
+    },
+    {
+      "name": "tomato, raw",
+      "lookup_query": "томат томата помидор tomato raw",
+      "kcal": 18,
+      "protein": 0.88,
+      "fat": 0.2,
+      "carbs": 3.89,
+      "piece_grams": 100
+    },
+    {
+      "name": "onion, raw",
+      "lookup_query": "лук луковица луковицы onion raw",
+      "kcal": 40,
+      "protein": 1.1,
+      "fat": 0.1,
+      "carbs": 9.34,
+      "piece_grams": 80
+    },
+    {
+      "name": "milk, whole",
+      "lookup_query": "молоко milk whole",
+      "kcal": 61,
+      "protein": 3.15,
+      "fat": 3.25,
+      "carbs": 4.8,
+      "density_g_ml": 1.03
+    }
+  ],
+  "off": {
+    "egg": {
+      "product_name": "Яйца куриные",
+      "brands": "Ферма",
+      "code": "4600000000001",
+      "serving_size": "50 g",
+      "categories": "Яйца",
+      "categories_tags": ["en:eggs"],
+      "nutriments": {
+        "energy-kcal_100g": 155,
+        "proteins_100g": 12.6,
+        "fat_100g": 10.6,
+        "carbohydrates_100g": 1.1
+      }
+    },
+    "cheese": {
+      "product_name": "Cheese",
+      "brands": "Wrong Match",
+      "code": "4600000000002",
+      "serving_size": "30 g",
+      "categories": "Cheeses",
+      "categories_tags": ["en:cheeses"],
+      "nutriments": {
+        "energy-kcal_100g": 350,
+        "proteins_100g": 24,
+        "fat_100g": 28,
+        "carbohydrates_100g": 2
+      }
+    }
+  },
+  "usda": {
+    "fdcId": 175200,
+    "description": "Chickpeas, cooked",
+    "servingSize": 130,
+    "servingSizeUnit": "g",
+    "foodNutrients": [
+      {"nutrientName": "Energy", "nutrientNumber": "208", "unitName": "KCAL", "value": 164},
+      {"nutrientName": "Protein", "value": 8.86},
+      {"nutrientName": "Total lipid (fat)", "value": 2.59},
+      {"nutrientName": "Carbohydrate, by difference", "value": 27.42}
+    ]
+  }
+}

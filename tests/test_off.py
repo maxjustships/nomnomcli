@@ -52,17 +52,33 @@ def test_off_v2_search_normalizes_product(monkeypatch):
         "url": OFF_SEARCH_URL,
         "params": {
             "search_terms": "Acme bread",
-            "fields": "product_name,brands,nutriments,code,serving_size",
+            "fields": (
+                "product_name,brands,nutriments,code,serving_size,"
+                "categories,categories_tags"
+            ),
             "page_size": 3,
         },
         "timeout": 10,
-        "headers": {"User-Agent": "nomnomcli/0.2 (+https://github.com/maxjustships/nomnomcli)"},
+        "headers": {"User-Agent": "nomnomcli/0.3.0 (+https://github.com/maxjustships/nomnomcli)"},
     }
     assert foods[0].name == "Whole Grain Bread — Acme"
     assert foods[0].source == "openfoodfacts"
     assert foods[0].fdc_id is None
     assert foods[0].barcode == "0123456789012"
+    assert foods[0].piece_grams == 40
     assert (foods[0].kcal, foods[0].protein, foods[0].fat, foods[0].carbs) == (250, 9, 4, 45)
+
+
+def test_off_rejects_candidate_with_nonpositive_core_nutrient(monkeypatch):
+    candidate = product()
+    candidate["nutriments"]["fat_100g"] = 0
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *args, **kwargs: Response({"products": [candidate]}),
+    )
+
+    assert OpenFoodFactsClient().search("Acme bread") == []
 
 
 def test_off_http_503_is_clear(monkeypatch):

@@ -12,10 +12,11 @@ class Food:
     carbs: float
     piece_grams: float | None = None
     density_g_ml: float | None = None
-    source: str = "bundled"
+    source: str = "unknown"
     fdc_id: int | None = None
     barcode: str | None = None
     brand: str | None = None
+    categories: tuple[str, ...] = ()
     alternatives: tuple[dict[str, str], ...] = ()
 
 

@@ -28,21 +28,21 @@ def test_recipe_missing_schema():
     assert caught.value.code == "recipe_schema_missing"
 
 
-def test_build_recipe_math(repository):
+def test_build_recipe_math(seeded_repository):
     schema = extract_recipe_json_ld(FIXTURE.read_text())
-    recipe = build_recipe(schema, repository, "https://example.test/recipe")
+    recipe = build_recipe(schema, seeded_repository, "https://example.test/recipe")
     assert recipe["servings"] == 2
     assert recipe["per_serving"]["kcal"] == 169.5
 
 
-def test_servings_override(repository):
+def test_servings_override(seeded_repository):
     schema = extract_recipe_json_ld(FIXTURE.read_text())
-    recipe = build_recipe(schema, repository, "https://example.test/recipe", 4)
+    recipe = build_recipe(schema, seeded_repository, "https://example.test/recipe", 4)
     assert recipe["per_serving"]["kcal"] == 84.75
 
 
-def test_save_and_log_fractional_portion(user_db):
-    with connect(user_db) as connection:
+def test_save_and_log_fractional_portion(seeded_user_db):
+    with connect(seeded_user_db) as connection:
         repository = FoodRepository(connection)
         recipe = build_recipe(
             extract_recipe_json_ld(FIXTURE.read_text()),
