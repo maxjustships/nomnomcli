@@ -8,26 +8,64 @@ from nomnomcli.foods import FoodRepository
 from nomnomcli.models import ResolvedItem, scale_food
 
 NUMBER = r"(?:\d+(?:[.,]\d+)?|\d+\s+\d+/\d+|\d+/\d+)"
-UNIT = (
-    r"kg|кг|kilograms?|килограмм(?:а|ов)?|g|gr|grams?|гр|г|грамм(?:а|ов)?|"
-    r"ml|мл|milliliters?|миллилитр(?:а|ов)?|"
-    r"pieces?|pcs?|шт(?:ук[аи]?)?|куск(?:а|ов)?|кус(?:ок|ка|ков)|порци(?:я|и|й)"
-)
+
+
+def _alias_pattern(values) -> str:
+    ordered = sorted(values, key=lambda value: (-len(value), value))
+    return "|".join(re.escape(value) for value in ordered)
+
+
+UNIT_ALIASES = {
+    "kilogram": ("kg", "кг", "kilogram", "kilograms", "килограмм", "килограмма", "килограммов"),
+    "gram": ("g", "gr", "gram", "grams", "гр", "г", "грамм", "грамма", "граммов"),
+    "milliliter": (
+        "ml",
+        "milliliter",
+        "milliliters",
+        "мл",
+        "миллилитр",
+        "миллилитра",
+        "миллилитров",
+    ),
+    "piece": (
+        "piece",
+        "pieces",
+        "pc",
+        "pcs",
+        "штука",
+        "штуки",
+        "штук",
+        "кусок",
+        "куска",
+        "кусков",
+        "порция",
+        "порции",
+        "порций",
+    ),
+}
+UNIT_BY_ALIAS = {
+    alias.casefold().replace("ё", "е"): unit
+    for unit, aliases in UNIT_ALIASES.items()
+    for alias in aliases
+}
+UNIT = _alias_pattern(UNIT_BY_ALIAS)
+MASS_UNIT = _alias_pattern(UNIT_ALIASES["gram"])
+PIECE_UNIT = _alias_pattern(UNIT_ALIASES["piece"])
+EACH_MARKERS = ("at", "each", "по")
+LEADING_CONNECTORS = ("of",)
 TRAILING_QUANTITY = re.compile(
     rf"^(?P<food>.+?)\s+(?P<amount>{NUMBER})\s*(?P<unit>{UNIT})$", re.IGNORECASE
 )
-COMPACT_QUANTITY = re.compile(
-    rf"^(?P<food>.+?)\s+(?P<amount>{NUMBER})\s*(?P<unit>кг|kg|g|gr|гр|г|ml|мл)$",
-    re.IGNORECASE,
-)
 LEADING_QUANTITY = re.compile(
-    rf"^(?P<amount>{NUMBER})\s*(?P<unit>{UNIT})\s+(?:of\s+)?(?P<food>.+)$", re.IGNORECASE
+    rf"^(?P<amount>{NUMBER})\s*(?P<unit>{UNIT})\s+"
+    rf"(?:(?:{_alias_pattern(LEADING_CONNECTORS)})\s+)?(?P<food>.+)$",
+    re.IGNORECASE,
 )
 PER_PIECE_QUANTITY = re.compile(
     rf"^(?P<food>.+?)\s+(?P<amount>{NUMBER})\s*"
-    rf"(?P<unit>pieces?|pcs?|шт(?:ук[аи]?)?|куск(?:а|ов)?|кус(?:ок|ка|ков))\s+"
-    rf"(?:по|at|each)\s+(?P<each>{NUMBER})\s*"
-    r"(?P<mass_unit>g|gr|grams?|гр|г|грамм(?:а|ов)?)$",
+    rf"(?P<unit>{PIECE_UNIT})\s+"
+    rf"(?:{_alias_pattern(EACH_MARKERS)})\s+(?P<each>{NUMBER})\s*"
+    rf"(?P<mass_unit>{MASS_UNIT})$",
     re.IGNORECASE,
 )
 
@@ -73,17 +111,20 @@ FRACTION_ALIASES = {
     "четверть": 0.25,
     "quarter": 0.25,
 }
+FRACTION_PATTERN = _alias_pattern(FRACTION_ALIASES)
 DESCRIPTOR_PIECE = re.compile(
-    rf"^(?:(?P<amount>{NUMBER}|половина|половины|half|четверть|quarter)\s+)?"
+    rf"^(?:(?P<amount>{NUMBER}|{FRACTION_PATTERN})\s+)?"
     rf"(?P<size>{'|'.join(sorted(SIZE_BY_ALIAS, key=lambda value: (-len(value), value)))})\s+"
     r"(?P<food>.+)$",
     re.IGNORECASE,
 )
 FRACTION_PIECE = re.compile(
-    r"^(?P<amount>половина|половины|half|1/2|четверть|quarter)\s+(?P<food>.+)$",
+    rf"^(?P<amount>{FRACTION_PATTERN})\s+(?P<food>.+)$",
     re.IGNORECASE,
 )
-DISH_PREFIX = re.compile(r"^(?:яичница из|омлет из|салат из|каша из)\s+", re.IGNORECASE)
+DISH_PREFIX_ALIASES = ("яичница из", "омлет из", "салат из", "каша из")
+DISH_CONJUNCTION_ALIASES = ("and", "и")
+DISH_PREFIX = re.compile(rf"^(?:{_alias_pattern(DISH_PREFIX_ALIASES)})\s+", re.IGNORECASE)
 
 def parse_number(value: str) -> float:
     normalized = value.replace(",", ".").strip()
@@ -99,21 +140,12 @@ def parse_number(value: str) -> float:
 
 
 def _quantity_to_grams(amount: float, unit: str, food) -> float:
-    normalized = unit.casefold()
-    kilogram_units = {
-        "kg",
-        "кг",
-        "kilogram",
-        "kilograms",
-        "килограмм",
-        "килограмма",
-        "килограммов",
-    }
-    if normalized in kilogram_units:
+    unit_kind = UNIT_BY_ALIAS[unit.casefold().replace("ё", "е")]
+    if unit_kind == "kilogram":
         return amount * 1000
-    if normalized.startswith(("ml", "мл", "milliliter", "миллилитр")):
+    if unit_kind == "milliliter":
         return amount * (food.density_g_ml or 1.0)
-    if normalized.startswith(("piece", "pc", "шт", "куск", "кус", "порци")):
+    if unit_kind == "piece":
         if food.piece_grams is None:
             raise NomnomError(
                 "piece_weight_unknown",
@@ -182,7 +214,7 @@ def parse_item_phrase(phrase: str, repository: FoodRepository) -> ResolvedItem:
         if amount <= 0 or each <= 0:
             raise NomnomError("invalid_quantity", "Quantity must be greater than zero")
         return scale_food(food, amount * each, confidence)
-    match = TRAILING_QUANTITY.match(cleaned) or COMPACT_QUANTITY.match(cleaned)
+    match = TRAILING_QUANTITY.match(cleaned)
     if not match:
         raise NomnomError(
             "quantity_required",
@@ -202,7 +234,7 @@ def parse_free_text(text: str, repository: FoodRepository) -> list[ResolvedItem]
     dish = DISH_PREFIX.match(cleaned_text)
     if dish:
         cleaned_text = cleaned_text[dish.end() :]
-        separator = r"[,;\n]+|\s+и\s+"
+        separator = rf"[,;\n]+|\s+(?:{_alias_pattern(DISH_CONJUNCTION_ALIASES)})\s+"
     else:
         separator = r"[,;\n]+"
     phrases = [part.strip() for part in re.split(separator, cleaned_text) if part.strip()]

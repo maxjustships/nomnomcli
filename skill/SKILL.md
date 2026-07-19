@@ -21,10 +21,12 @@ curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.s
 ## Log free text
 
 1. Preserve every food and quantity the user supplied.
-2. Run `nomnom log --parse "FOOD QUANTITY, FOOD QUANTITY" --json`.
-3. Show returned canonical names, grams, confidence, totals, `alternatives`, and
+2. Translate each item to the language-agnostic contract: food name + quantity +
+   unit + optional modifiers. Translate language, not nutrition.
+3. Run `nomnom log --parse "FOOD QUANTITY UNIT, FOOD QUANTITY UNIT" --json`.
+4. Show returned canonical names, grams, confidence, totals, `alternatives`, and
    every `assumptions` entry.
-4. Ask the user to confirm the resolution before relying on it.
+5. Ask the user to confirm the resolution before relying on it.
 
 Successful logs are stored immediately. Do not silently correct or rerun one;
 tell the user before creating a replacement entry.
@@ -43,9 +45,23 @@ nomnom log --food "chickpeas, cooked" --grams 150 --json
 
 Always use the human's weight.
 
+## User aliases
+
+When the user wants a durable phrase for an exact food already in their local
+cache:
+
+```sh
+nomnom alias add "USER PHRASE" "EXACT CACHED FOOD NAME" --json
+```
+
+Aliases are user-database records, never packaged translations. They resolve
+only to exact local cache names and must not invent, approximate, or remotely
+substitute a target.
+
 ## Unknown-food workflow: OFF → USDA → add → error
 
-The CLI automatically checks exact cache, cache search, then Open Food Facts.
+The CLI automatically checks exact user alias, exact cache, cache search, then
+Open Food Facts.
 For an unresolved food:
 
 1. Let OFF run. For `off_low_confidence`, show its `candidate` and

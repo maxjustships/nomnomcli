@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
-from nomnomcli.models import Food
+from nomnomcli.foods import FoodRepository
+from nomnomcli.models import Food, total_items
 from nomnomcli.parser import parse_free_text, parse_item_phrase, parse_number
 
 
@@ -160,3 +162,23 @@ def test_all_dish_prefixes_split_conjunctions(seeded_repository, prefix):
         f"{prefix} small tomato и medium onion", seeded_repository
     )
     assert [item.grams for item in items] == [100, 80]
+
+
+def test_language_agnostic_contract_inputs_have_identical_items_and_totals(user_db):
+    with connect(user_db) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id,
+             lookup_query)
+            VALUES ('egg', 155, 12.58, 10.61, 1.12, 50, NULL, 'fixture', NULL, 'egg')"""
+        )
+        repository = FoodRepository(connection)
+        repository.add_alias("яйцо", "egg")
+
+        canonical = parse_free_text("egg 3 pieces", repository)
+        localized = parse_free_text("яйцо 3 штуки", repository)
+
+    assert [item.to_dict() for item in canonical] == [
+        item.to_dict() for item in localized
+    ]
+    assert total_items(canonical) == total_items(localized)

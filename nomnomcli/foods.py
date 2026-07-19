@@ -145,8 +145,47 @@ class FoodRepository:
         ).fetchone()
         return self._row_to_food(cached) if cached else None
 
+    def _find_name_exact(self, name: str) -> Food | None:
+        cached = self.user_connection.execute(
+            "SELECT * FROM food_cache WHERE name = ? COLLATE NOCASE LIMIT 1",
+            (name,),
+        ).fetchone()
+        if cached is not None:
+            return self._row_to_food(cached)
+        normalized = normalize_name(name)
+        rows = self.user_connection.execute("SELECT * FROM food_cache").fetchall()
+        return next(
+            (self._row_to_food(row) for row in rows if normalize_name(row["name"]) == normalized),
+            None,
+        )
+
+    def _alias_target(self, query: str) -> Food | None:
+        alias = self.user_connection.execute(
+            """SELECT phrase, canonical_name FROM food_aliases
+            WHERE normalized_phrase = ?""",
+            (normalize_name(query),),
+        ).fetchone()
+        if alias is None:
+            return None
+        target = self._find_name_exact(alias["canonical_name"])
+        if target is None:
+            raise NomnomError(
+                "alias_target_not_found",
+                f"Alias target is not in the user cache: {alias['canonical_name']}",
+                details={
+                    "phrase": alias["phrase"],
+                    "canonical_food_name": alias["canonical_name"],
+                    "action": "Remove the alias or add the exact canonical food to the user cache",
+                },
+            )
+        return target
+
     def resolve(self, query: str, *, allow_remote: bool = True) -> tuple[Food, float]:
         normalized = normalize_name(query)
+        alias = self._alias_target(normalized)
+        if alias is not None:
+            return alias, 1.0
+
         exact = self._find_exact(normalized)
         if exact:
             return exact, 1.0
@@ -282,6 +321,77 @@ class FoodRepository:
             food = self._row_to_food(row)
             unique.setdefault(normalize_name(food.name), food)
         return list(unique.values())[:limit]
+
+    def add_alias(self, phrase: str, canonical_food_name: str) -> dict[str, str]:
+        display_phrase = " ".join(phrase.strip().split())
+        canonical_input = " ".join(canonical_food_name.strip().split())
+        normalized_phrase = normalize_name(display_phrase)
+        if not normalized_phrase or not canonical_input:
+            raise NomnomError(
+                "invalid_alias", "Alias phrase and canonical food name must not be empty"
+            )
+        target = self._find_name_exact(canonical_input)
+        if target is None:
+            raise NomnomError(
+                "alias_target_not_found",
+                f"Canonical food is not in the user cache: {canonical_input}",
+                details={
+                    "phrase": display_phrase,
+                    "canonical_food_name": canonical_input,
+                    "action": "Resolve or add the exact canonical food before creating its alias",
+                },
+            )
+        existing = self.user_connection.execute(
+            "SELECT phrase, canonical_name FROM food_aliases WHERE normalized_phrase = ?",
+            (normalized_phrase,),
+        ).fetchone()
+        if existing is not None:
+            raise NomnomError(
+                "alias_exists",
+                f"Alias already exists: {existing['phrase']}",
+                details={
+                    "phrase": existing["phrase"],
+                    "canonical_food_name": existing["canonical_name"],
+                },
+            )
+        self.user_connection.execute(
+            """INSERT INTO food_aliases (phrase, normalized_phrase, canonical_name)
+            VALUES (?, ?, ?)""",
+            (display_phrase, normalized_phrase, target.name),
+        )
+        return {"phrase": display_phrase, "canonical_food_name": target.name}
+
+    def list_aliases(self) -> list[dict[str, str]]:
+        rows = self.user_connection.execute(
+            """SELECT phrase, canonical_name FROM food_aliases
+            ORDER BY normalized_phrase"""
+        ).fetchall()
+        return [
+            {"phrase": str(row["phrase"]), "canonical_food_name": str(row["canonical_name"])}
+            for row in rows
+        ]
+
+    def remove_alias(self, phrase: str) -> dict[str, str]:
+        normalized_phrase = normalize_name(phrase)
+        if not normalized_phrase:
+            raise NomnomError("invalid_alias", "Alias phrase must not be empty")
+        existing = self.user_connection.execute(
+            "SELECT phrase, canonical_name FROM food_aliases WHERE normalized_phrase = ?",
+            (normalized_phrase,),
+        ).fetchone()
+        if existing is None:
+            raise NomnomError(
+                "alias_not_found",
+                f"Alias not found: {' '.join(phrase.strip().split())}",
+                details={"phrase": " ".join(phrase.strip().split())},
+            )
+        self.user_connection.execute(
+            "DELETE FROM food_aliases WHERE normalized_phrase = ?", (normalized_phrase,)
+        )
+        return {
+            "phrase": str(existing["phrase"]),
+            "canonical_food_name": str(existing["canonical_name"]),
+        }
 
     def _ranked_user_cache_matches(self, query: str, limit: int) -> list[sqlite3.Row]:
         query_tokens = _name_tokens(query)

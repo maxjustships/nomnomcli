@@ -13,6 +13,7 @@ in SQLite. There is no LLM in the program and no invented nutrition fallback.
 ```mermaid
 flowchart LR
     A[Human or agent] -->|food and quantity| N[nomnom CLI]
+    N --> L[(user food aliases)]
     N --> C[(user food cache)]
     N -->|free-text search| O[Open Food Facts API]
     N -->|when key is configured| U[USDA FoodData Central API]
@@ -43,11 +44,12 @@ nomnom log --food "chickpeas, cooked" --grams 120 --json
 
 Resolution is deterministic and ordered:
 
-1. exact match in the user's `food_cache`;
-2. token-overlap search in that cache;
-3. Open Food Facts free-text search;
-4. USDA FoodData Central, only when `NOMNOM_USDA_KEY` is set;
-5. actionable JSON error—never a guessed food.
+1. exact phrase in the user's alias table, pointing to an exact local cache name;
+2. exact match in the user's `food_cache`;
+3. token-overlap search in that cache;
+4. Open Food Facts free-text search;
+5. USDA FoodData Central, only when `NOMNOM_USDA_KEY` is set;
+6. actionable JSON error—never a guessed food.
 
 Open Food Facts candidates need at least 0.5 normalized token overlap between the query and
 product name plus brands. A category/type conflict is rejected. All kcal, protein, fat, and carbs
@@ -86,6 +88,33 @@ nomnom add \
 The optional `--piece-grams` is the only manual piece-weight input. It makes later piece counts
 work from the cached record.
 
+### User food aliases
+
+Aliases are explicit user-owned mappings stored only in the same user SQLite database as the food
+cache. Their targets must be exact canonical names already present in that cache; creating or using
+an alias never performs a remote target lookup. Alias matching is exact after case and whitespace
+normalization, so an alias does not match unrelated longer food names.
+
+```sh
+nomnom alias add "хлеб harry's" "harry's american sandwich — Harry's" --json
+nomnom alias list --json
+nomnom alias remove "хлеб harry's" --json
+```
+
+Add or resolve the canonical food first. A missing target returns `alias_target_not_found`; adding
+an existing phrase returns `alias_exists`; removing a missing phrase returns `alias_not_found`.
+
+## Canonical agent input contract
+
+The canonical shape supplied to nomnom is **food name + quantity + unit + optional modifiers**.
+For example: `egg 3 pieces`, `rice 150 g`, or `bread 2 pieces at 40 g`. Quantity and unit are
+required; modifiers may express a fraction, size, or explicit per-piece mass.
+
+An agent translates the user's language into this contract before invoking nomnom. Translation may
+choose a canonical food name already known to the user cache or an explicit user alias. Nutrition
+resolution is a separate deterministic step: alias → local cache → Open Food Facts → USDA → error.
+The agent must not translate by inventing nutrition values or silently substituting another food.
+
 ## Quantities, sizes, and dishes
 
 The parser accepts kilograms, grams, millilitres, pieces, fractions, and explicit per-piece grams.
@@ -102,6 +131,18 @@ Supported dish prefixes split only the ingredients the user stated. nomnom never
 or another ingredient. Millilitres use a resolved density when available and otherwise retain the
 documented 1 g/ml conversion.
 
+### Adding a new language
+
+Provide an agent-side translator that emits the canonical contract and, when desired, create
+user-specific food-name mappings with `nomnom alias add`. Food translations are user data, not
+package data.
+
+Parser syntax aliases for ordinary units, fractions, sizes, per-piece markers, dish prefixes, and
+conjunctions are declarative tables in `nomnomcli/parser.py`. Add reviewed forms to those tables and
+their tests; parser code changes are not required for ordinary unit aliases. A new language must
+still provide quantity/unit forms unambiguously, and its agent translator remains responsible for
+food names.
+
 ## Errors and output
 
 Add `--json` for stable machine-readable output. User-correctable failures are written to stderr as
@@ -111,6 +152,7 @@ an `error` object and exit with status 2. Important codes include:
   verified label.
 - `usda_key_required`: configure the free FDC key or pin verified values.
 - `piece_weight_unknown`: ask for grams or add a verified `--piece-grams` value.
+- `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
 
 Successful logs are stored immediately. Agents should show the returned names, grams, confidence,
@@ -129,7 +171,8 @@ Recipe ingredients use the same runtime resolver. An unresolved ingredient fails
 instead of storing partial nutrition.
 
 User data defaults to `~/.local/share/nomnomcli/nomnom.sqlite3`. Override it with
-`NOMNOM_DB_PATH`. Schema upgrades preserve cached foods, logs, and recipes in place.
+`NOMNOM_DB_PATH`. Schema v3 upgrades preserve cached foods, logs, and recipes in place and add the
+user-only alias table.
 
 ## Agent skill and development
 
