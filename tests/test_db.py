@@ -74,6 +74,7 @@ def test_connect_migrates_v1_database_without_losing_data(tmp_path):
             row[1] for row in connection.execute("PRAGMA table_info(food_cache)").fetchall()
         }
         assert "barcode" in columns
+        assert {"brand", "lookup_query", "alternatives_json"} <= columns
         assert tuple(connection.execute("SELECT * FROM food_cache").fetchone()) == (
             "legacy oats",
             71.0,
@@ -84,6 +85,9 @@ def test_connect_migrates_v1_database_without_losing_data(tmp_path):
             None,
             "legacy cache",
             173904,
+            None,
+            None,
+            None,
             None,
         )
         assert tuple(connection.execute("SELECT * FROM log_entries").fetchone()) == (

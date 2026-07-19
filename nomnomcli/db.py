@@ -99,7 +99,7 @@ def _initialize_database(connection: sqlite3.Connection) -> None:
                 f"version {LATEST_SCHEMA_VERSION}"
             )
 
-        if version == 0 and _table_names(connection) >= V1_TABLES:
+        if version == 0 and _table_names(connection) & V1_TABLES:
             version = 1
             _set_user_version(connection, version)
 
@@ -112,6 +112,13 @@ def _initialize_database(connection: sqlite3.Connection) -> None:
                 MIGRATIONS[version](connection)
                 version += 1
                 _set_user_version(connection, version)
+            missing = V1_TABLES - _table_names(connection)
+            for statement in LATEST_SCHEMA:
+                if "TABLE " not in statement:
+                    continue
+                table = statement.split("TABLE ", 1)[1].split(" ", 1)[0].strip().strip("(")
+                if table in missing:
+                    connection.execute(statement)
         connection.commit()
     except Exception:
         connection.rollback()
