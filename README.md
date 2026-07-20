@@ -5,7 +5,7 @@
 
 **nomnom stores nothing about food; it computes what you feed it.**
 
-`nomnomcli` is an agent-first nutrition ledger. Version 0.3 ships zero food records: no food
+`nomnomcli` is an agent-first nutrition ledger. Version 0.4 ships zero food records: no food
 database, synonym corpus, or piece-weight table is hidden in the package. It resolves food at
 runtime, performs nutrition arithmetic in code, and stores successful logs plus a user-owned cache
 in SQLite. There is no LLM in the program and no invented nutrition fallback.
@@ -17,6 +17,7 @@ flowchart LR
     N --> C[(user food cache)]
     N -->|free-text search| O[Open Food Facts API]
     N -->|when key is configured| U[USDA FoodData Central API]
+    A -->|barcode or extracted label facts| N
     N -->|resolved JSON or structured error| A
 ```
 
@@ -63,7 +64,8 @@ Resolution is deterministic and ordered:
 2. exact match in the user's `food_cache`;
 3. token-overlap search in that cache;
 4. Open Food Facts free-text search;
-5. USDA FoodData Central, when a setup key or `NOMNOM_USDA_KEY` is configured;
+5. a safe USDA FoodData Central generic proxy, when a setup key or
+   `NOMNOM_USDA_KEY` is configured;
 6. actionable JSON error—never a guessed food.
 
 Open Food Facts candidates need at least 0.5 normalized token overlap between the query and
@@ -72,7 +74,8 @@ values must be present, finite, and greater than zero. A rejected result returns
 `off_low_confidence` with the candidate and alternatives, and is neither cached nor logged.
 
 Successful API results are cached in the user's database, so the same food can resolve locally
-later. Existing v0.2 cache records, logs, and recipes are preserved when v0.3 opens the database.
+later. Existing cache records, logs, recipes, and aliases are preserved when v0.4 opens the
+database.
 `nomnom search QUERY` searches this user cache; it is not a packaged food catalog.
 
 Open Food Facts free-text search goes directly through the official legacy v1 endpoint,
@@ -109,15 +112,61 @@ Without a key, a food that OFF cannot resolve returns `usda_key_required`, the s
 the same signup URL. USDA search requires complete positive kcal/protein/fat/carbs, scores query
 token overlap together with data type and category, prefers Foundation and SR Legacy, and enforces
 a confidence floor. Weak matches return `usda_low_confidence` with candidate alternatives and are
-never cached. Accepted matches cache `source=usda`, `fdc_id`, and any returned serving-field
-provenance.
+never cached.
+
+The default generic policy is `allow_for_unbranded`. A USDA result becomes a generic proxy only
+when it is an unbranded Foundation, SR Legacy, or Survey (FNDDS) record with an FDC id and every
+normalized query token is covered by its name. Brand/SKU-like or unmatched input and branded USDA
+records return `exact_resolution_required` without cache or log writes. Accepted proxies expose
+`resolution_mode=generic_proxy`, `source=usda`, the FDC `source_id`, `provenance=usda`, confidence,
+and an explicit assumption in log JSON.
+
+Choose a stricter policy in the user config:
+
+```toml
+[resolution]
+generic_proxy_policy = "ask" # or "exact_only"
+```
+
+`NOMNOM_GENERIC_PROXY_POLICY` overrides the file. `ask` returns
+`generic_proxy_confirmation_required` with the candidate but writes nothing; `exact_only` requires
+barcode or package-label capture. Supported values are `allow_for_unbranded`, `ask`, and
+`exact_only`.
 
 Set `NOMNOM_OFFLINE=1` to prevent all remote food lookup. Set `NOMNOM_DISABLE_OFF=1` to skip OFF
 while retaining USDA when its key is configured.
 
-### Pin a label manually
+## Capture an exact packaged product
 
-`nomnom add` remains a manual operation. Use only verified per-100 g label values:
+When an exact packaged product is needed, use its barcode or ask the user for a package photo. A
+barcode capture calls only the Open Food Facts v2 product endpoint; it never sends free text:
+
+```sh
+nomnom capture barcode "0123456789012" --json
+```
+
+If the barcode is absent or OFF lacks complete core nutrition, the agent reads the supplied label
+photo and passes the extracted per-100 g facts to the CLI:
+
+```sh
+nomnom capture label \
+  --name "chicken pastrami" --brand "Example" \
+  --kcal 110 --protein 20 --fat 2 --carbs 3 \
+  --serving-grams 75 \
+  --source-note "image:sha256:LOCAL_REFERENCE" --json
+```
+
+`--source-note` is required. Use a nonempty local or opaque image/barcode reference that lets the
+user trace the facts without putting the image itself in SQLite. The CLI has no OCR or vision
+dependency, never receives or stores the photo, never estimates missing macros, and rejects
+non-finite/negative values or a non-positive serving weight without writing. Both capture paths
+persist `resolution_mode=exact_product`, source identity, provenance, and the normalized nutrition
+facts; the canonical name can then be used in an alias and logged offline.
+
+### Legacy manual pin
+
+`nomnom add` remains available for existing manual workflows. For a new packaged product, prefer
+the source-backed capture commands above. Use only verified per-100 g label values:
 
 ```sh
 nomnom add \
@@ -197,6 +246,13 @@ an `error` object and exit with status 2. Important codes include:
   no near match was cached.
 - `usda_invalid_nutrition`: every USDA candidate lacked one or more complete positive core values.
 - `usda_key_required`: configure the free FDC key or pin verified values.
+- `generic_proxy_confirmation_required`: show the named USDA candidate and ask before changing the
+  configured policy; nothing was cached or logged.
+- `exact_resolution_required`: request the barcode or a package photo for source-backed capture.
+- `invalid_barcode` / `barcode_not_found` / `barcode_nutrition_incomplete`: correct the barcode or
+  request a package photo; failed captures write nothing.
+- `invalid_source_note` / `invalid_nutrition`: correct the extracted label facts; failed captures
+  write nothing.
 - `piece_weight_unknown`: ask for grams or add a verified `--piece-grams` value.
 - `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
@@ -227,14 +283,15 @@ Recipe ingredients use the same runtime resolver. An unresolved ingredient fails
 instead of storing partial nutrition.
 
 User data defaults to `~/.local/share/nomnomcli/nomnom.sqlite3`. Override it with
-`NOMNOM_DB_PATH`. Schema v3 upgrades preserve cached foods, logs, and recipes in place and add the
-user-only alias table.
+`NOMNOM_DB_PATH`. Schema v4 upgrades preserve cached foods, logs, recipes, and aliases in place and
+add resolution mode, source identity/note, provenance, and assumption fields to the food cache.
 
 ## Agent skill and development
 
 The repository agent workflow is [`skill/SKILL.md`](skill/SKILL.md). It teaches agents to use
-nomnom's JSON, follow OFF → USDA → manual add → structured error, and never estimate nutrition in
-their own context.
+nomnom's JSON, accept only safe generic proxies, request a barcode/package photo for exact products,
+capture extracted label facts with a source note, and never estimate nutrition in their own
+context.
 
 ```sh
 python -m pip install -e '.[dev]'

@@ -14,6 +14,7 @@ from nomnomcli.providers import RetryPolicy, request_with_retry
 
 OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 OFF_PRODUCT_PROBE_URL = "https://api.openfoodfacts.org/api/v2/product/0"
+OFF_PRODUCT_URL = "https://api.openfoodfacts.org/api/v2/product/{barcode}"
 OFF_FIELDS = "product_name,brands,nutriments,code,serving_size,categories,categories_tags"
 
 
@@ -79,6 +80,9 @@ def _normalize_product(product: dict) -> Food | None:
         barcode=barcode,
         brand=brand,
         categories=tuple(value for value in categories if value),
+        resolution_mode="exact_product",
+        source_id=barcode,
+        provenance="openfoodfacts",
     )
 
 
@@ -180,6 +184,79 @@ class OpenFoodFactsClient:
             sleep=self.sleep,
         )
         return True
+
+    def product_by_barcode(self, barcode: str) -> Food:
+        code = barcode.strip()
+        if not code.isdigit() or len(code) not in {8, 12, 13, 14}:
+            raise NomnomError(
+                "invalid_barcode",
+                "Barcode must contain 8, 12, 13, or 14 digits",
+                details={"barcode": code},
+            )
+        details = {
+            "barcode": code,
+            "action": "Check the barcode or send a package photo for exact label capture",
+        }
+        response = request_with_retry(
+            provider="openfoodfacts",
+            code="openfoodfacts_unavailable",
+            message="Open Food Facts barcode lookup is unavailable",
+            request_get=self._request_get or requests.get,
+            url=OFF_PRODUCT_URL.format(barcode=code),
+            request_kwargs={
+                "params": {"fields": OFF_FIELDS},
+                "timeout": 10,
+                "headers": self._headers(),
+            },
+            details=details,
+            retry_policy=self.retry_policy,
+            sleep=self.sleep,
+        )
+        try:
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ProviderUnavailableError(
+                "openfoodfacts",
+                "openfoodfacts_unavailable",
+                "Open Food Facts barcode lookup is unavailable",
+                retryable=False,
+                details={**details, "status": getattr(response, "status_code", None)},
+            ) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise NomnomError(
+                "openfoodfacts_invalid_response",
+                "Open Food Facts returned malformed JSON",
+                details=details,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise NomnomError(
+                "openfoodfacts_invalid_response",
+                "Open Food Facts returned an invalid product payload",
+                details=details,
+            )
+        product = payload.get("product")
+        if payload.get("status") != 1 or not isinstance(product, dict):
+            raise NomnomError(
+                "barcode_not_found",
+                f"Open Food Facts has no product for barcode: {code}",
+                details=details,
+            )
+        food = _normalize_product(product)
+        if food is None:
+            raise NomnomError(
+                "barcode_nutrition_incomplete",
+                "Barcode product lacks complete positive core nutrition per 100 g",
+                details=details,
+            )
+        if food.barcode != code:
+            raise NomnomError(
+                "barcode_product_mismatch",
+                "Open Food Facts product code does not match the requested barcode",
+                details={**details, "returned_barcode": food.barcode},
+            )
+        return food
 
     def search(self, query: str, page_size: int = 5) -> list[Food]:
         payload = self._get_payload(query, page_size)

@@ -46,10 +46,10 @@ def test_food_fixture_corpus_is_limited_to_ten_records():
     assert record_count <= 10
 
 
-def test_package_version_is_030():
+def test_package_version_is_040():
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert __version__ == "0.3.0"
-    assert 'version = "0.3.0"' in metadata
+    assert __version__ == "0.4.0"
+    assert 'version = "0.4.0"' in metadata
 
 
 def test_readme_documents_language_agnostic_agent_contract():
@@ -58,3 +58,17 @@ def test_readme_documents_language_agnostic_agent_contract():
     assert "food name + quantity + unit + optional modifiers" in readme
     assert "### Adding a new language" in readme
     assert "parser code changes are not required for ordinary unit aliases" in readme
+
+
+def test_v04_docs_define_safe_proxy_and_private_exact_capture_flow():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skill" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "The default generic policy is `allow_for_unbranded`" in readme
+    assert "nomnom capture barcode" in readme
+    assert "nomnom capture label" in readme
+    assert "`--source-note` is required" in readme
+    assert "never receives or stores the photo" in readme
+    assert "request a clear package photo" in skill
+    assert "Vision/OCR remains agent-side" in skill
+    assert len(skill.splitlines()) <= 200

@@ -1,5 +1,46 @@
 # Test Plan
 
+## Issue #19 Source
+- Task: Validate the v0.4 zero-friction source-backed capture slice.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-21
+
+## Issue #19 Validation Scope
+- In scope: default/config/env proxy policy, generic USDA eligibility and visible assumptions, branded/SKU denial, OFF v2 barcode lookup, package-label capture, aliases/log replay, v3-to-v4 preservation, docs/skill, and isolated fresh-DB CLI smoke.
+- Out of scope: LLM/OCR/cloud-vision dependencies, live API traffic, real/personal photos, repository nutrition records, and macro estimation.
+
+## Issue #19 Fixtures and Network Rules
+- Provider responses are mocked synthetic OFF/USDA payloads only; barcode assertions inspect the exact v2 product URL and absence of free-text parameters.
+- Package-label tests pass synthetic agent-extracted numbers and opaque image/barcode reference tokens; no image is stored or committed.
+
+## Issue #19 Test Levels
+
+### Unit
+- Policy precedence/default/invalid values; barcode syntax and complete nutrients; generic data type/brand/query-token safety; finite non-negative label values and positive serving grams.
+
+### Integration
+- Automatic unbranded USDA proxy caches and logs `generic_proxy`, canonical name, `source=usda`, FDC `source_id`, confidence, and explicit assumption.
+- `ask`, `exact_only`, and branded inputs return structured actions without cache/log writes.
+- Exact OFF and package-label captures preserve source, source id/note, provenance, mode, and later alias/log behavior.
+- Explicit v3-to-v4 migration preserves cache, logs, recipes, and aliases while legacy rows remain readable.
+
+### End-to-End / Smoke
+- A clean temp database runs help/version, capture label, alias creation, offline log, and invalid structured capture input.
+
+## Issue #19 Negative / Edge Cases
+- Invalid barcode and OFF missing/zero core nutrition are never cached.
+- Blank/missing source note, negative/non-finite nutrition, and non-positive serving grams are structured failures without writes.
+- Returned branded USDA records, generic records with unmatched query tokens, and any explicit SKU never become generic proxies.
+
+## Issue #19 Acceptance Gates
+- [x] Focused tests witnessed RED before implementation.
+- [x] `pytest -q` — 155 passed.
+- [x] `ruff check .` — clean.
+- [x] Literal isolated temp-DB smoke passes.
+- [x] `git diff --check` and scoped diff audit pass.
+- [x] One local conventional commit; no push or PR.
+
 ## Issue #17 Source
 - Task: Validate the OFF full-text provider contract from GitHub issue #17.
 - Plan file: `docs/plans.md`

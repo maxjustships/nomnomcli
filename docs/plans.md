@@ -1,5 +1,76 @@
 # Plans
 
+## Issue #19 Source
+- Task: Implement the v0.4 zero-friction source-backed capture slice.
+- Canonical input: GitHub issue #19 plus the user's explicit default-policy override.
+- Repo context: provider policy, runtime resolver, capture CLI, user SQLite schema, tests, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #19 Assumptions
+- `allow_for_unbranded` is the default despite the issue body's older `ask` default.
+- A USDA proxy is eligible only when the returned record passes existing nutrition/confidence checks, is a generic data type with no brand, has an FDC id, and covers every normalized query token; unmatched brand/SKU-like input therefore stays exact-only.
+- Package-photo OCR/vision remains agent-side. The CLI accepts only extracted facts and a mandatory local source reference and never stores the image.
+- Schema version 4 is the additive migration boundary already started on this branch; issue #19 completes that explicit v3-to-v4 migration rather than introducing a second version number.
+
+## Issue #19 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M13 | Add failing policy, proxy, capture, migration, and smoke contracts | M12 | [x] |
+| M14 | Implement v4 provenance and deterministic capture/resolution | M13 | [x] |
+| M15 | Document v0.4 agent flow and privacy contract | M14 | [x] |
+| M16 | Run full validation, smoke, audit, and local commit | M15 | [x] |
+
+## M13. Add failing issue #19 acceptance contracts `[x]`
+### Goal
+- Freeze the user-visible policy, JSON, endpoint, persistence, migration, and clean-install behavior before runtime implementation.
+
+### Validation
+```sh
+pytest -q tests/test_config.py tests/test_foods.py tests/test_off.py tests/test_cli.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Record expected RED failures before production changes; no live provider traffic or personal-image fixture may enter tests.
+
+## M14. Implement v4 provenance and deterministic capture/resolution `[x]`
+### Goal
+- Source-backed unbranded USDA proxies and exact OFF/package captures persist and replay with explicit mode and provenance.
+
+### Validation
+```sh
+pytest -q tests/test_config.py tests/test_foods.py tests/test_off.py tests/test_cli.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Reject incomplete nutrition, unsafe/branded generic substitution, blank provenance, and failed capture without cache or log writes.
+
+## M15. Document v0.4 agent flow and privacy contract `[x]`
+### Goal
+- README and agent skill give exact commands and direct agents to request a photo—not manual label lookup—when exact package facts are needed.
+
+### Validation
+```sh
+pytest -q tests/test_install.py tests/test_cli.py
+ruff check .
+```
+
+### Stop-and-Fix Rule
+- Keep docs aligned with executable syntax and stable JSON fields before release validation.
+
+## M16. Run full validation, smoke, audit, and local commit `[x]`
+### Goal
+- Produce one coherent, validated local conventional commit with no push or PR.
+
+### Validation
+```sh
+pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until full tests, Ruff, literal isolated-DB smoke, and diff audit all pass.
+
 ## Issue #17 Source
 - Task: Fix the Open Food Facts full-text provider contract without live-test traffic.
 - Canonical input: GitHub issue #17 and the user's required behavior.

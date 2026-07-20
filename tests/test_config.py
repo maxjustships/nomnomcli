@@ -27,6 +27,51 @@ class HealthyUSDA:
         return True
 
 
+def test_generic_proxy_policy_defaults_to_allow_for_unbranded(tmp_path):
+    config = ProviderConfig(environ={}, config_path=tmp_path / "missing.toml")
+
+    assert config.generic_proxy_policy() == "allow_for_unbranded"
+
+
+def test_generic_proxy_policy_environment_overrides_user_config(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[resolution]\ngeneric_proxy_policy = "ask"\n', encoding="utf-8"
+    )
+    config = ProviderConfig(
+        environ={"NOMNOM_GENERIC_PROXY_POLICY": "exact_only"}, config_path=path
+    )
+
+    assert config.generic_proxy_policy() == "exact_only"
+
+
+@pytest.mark.parametrize("policy", ["allow_for_unbranded", "ask", "exact_only"])
+def test_generic_proxy_policy_accepts_every_documented_config_value(tmp_path, policy):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f'[resolution]\ngeneric_proxy_policy = "{policy}"\n', encoding="utf-8"
+    )
+
+    assert ProviderConfig(environ={}, config_path=path).generic_proxy_policy() == policy
+
+
+def test_invalid_generic_proxy_policy_is_structured(tmp_path):
+    config = ProviderConfig(
+        environ={"NOMNOM_GENERIC_PROXY_POLICY": "sometimes"},
+        config_path=tmp_path / "config.toml",
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        config.generic_proxy_policy()
+
+    assert caught.value.code == "generic_proxy_policy_invalid"
+    assert caught.value.details["allowed"] == [
+        "allow_for_unbranded",
+        "ask",
+        "exact_only",
+    ]
+
+
 def test_environment_usda_key_overrides_user_config(tmp_path):
     path = tmp_path / "config.toml"
     stored = ProviderConfig(environ={}, config_path=path)
@@ -49,6 +94,19 @@ def test_stored_config_is_xdg_and_owner_only(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert config.usda_credential().source == "user_config"
+
+
+def test_storing_usda_key_preserves_generic_proxy_policy(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[resolution]\ngeneric_proxy_policy = "exact_only"\n', encoding="utf-8"
+    )
+    config = ProviderConfig(environ={}, config_path=path)
+
+    config.store_usda_key("stored-placeholder")
+
+    assert config.usda_credential().value == "stored-placeholder"
+    assert config.generic_proxy_policy() == "exact_only"
 
 
 def test_invalid_config_is_actionable(tmp_path):

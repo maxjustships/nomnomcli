@@ -27,7 +27,12 @@ LATEST_SCHEMA = (
     lookup_query TEXT,
     alternatives_json TEXT,
     piece_grams_source TEXT,
-    piece_grams_source_value TEXT
+    piece_grams_source_value TEXT,
+    resolution_mode TEXT NOT NULL DEFAULT 'legacy',
+    source_id TEXT,
+    source_note TEXT,
+    provenance TEXT,
+    assumption TEXT
 )""",
     """CREATE TABLE log_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,17 +108,37 @@ def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+def _ensure_v4_food_cache(connection: sqlite3.Connection) -> None:
     columns = _column_names(connection, "food_cache")
     additions = {
         "piece_grams_source": "ALTER TABLE food_cache ADD COLUMN piece_grams_source TEXT",
         "piece_grams_source_value": (
             "ALTER TABLE food_cache ADD COLUMN piece_grams_source_value TEXT"
         ),
+        "resolution_mode": (
+            "ALTER TABLE food_cache ADD COLUMN resolution_mode "
+            "TEXT NOT NULL DEFAULT 'legacy'"
+        ),
+        "source_id": "ALTER TABLE food_cache ADD COLUMN source_id TEXT",
+        "source_note": "ALTER TABLE food_cache ADD COLUMN source_note TEXT",
+        "provenance": "ALTER TABLE food_cache ADD COLUMN provenance TEXT",
+        "assumption": "ALTER TABLE food_cache ADD COLUMN assumption TEXT",
     }
     for column, statement in additions.items():
         if column not in columns:
             connection.execute(statement)
+    connection.execute(
+        """UPDATE food_cache
+        SET source_id = COALESCE(barcode, CAST(fdc_id AS TEXT))
+        WHERE source_id IS NULL"""
+    )
+    connection.execute(
+        "UPDATE food_cache SET provenance = source WHERE provenance IS NULL"
+    )
+
+
+def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    _ensure_v4_food_cache(connection)
 
 
 MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4}
@@ -149,6 +174,8 @@ def _initialize_database(connection: sqlite3.Connection) -> None:
                 table = statement.split("TABLE ", 1)[1].split(" ", 1)[0].strip().strip("(")
                 if table in missing:
                     connection.execute(statement)
+        if "food_cache" in _table_names(connection):
+            _ensure_v4_food_cache(connection)
         connection.commit()
     except Exception:
         connection.rollback()
