@@ -119,7 +119,11 @@ fail() {
 }
 
 target_login_path() {
-    _login_base="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/local/bin"
+    # The invoking PATH is the only reliable statement of which system paths
+    # belong to this target user.  Never add a global tool directory here: an
+    # agent or CI image may have installed uv/pipx there for itself.
+    _login_base=$(sanitize_target_login_path "${PATH:-}")
+    [ -n "$_login_base" ] || _login_base="/usr/bin:/bin"
     _login_shell=${SHELL:-/bin/sh}
     if [ ! -x "$_login_shell" ]; then
         printf '%s' "$_login_base"
@@ -136,6 +140,7 @@ target_login_path() {
         /^PATH=/ { sub(/^PATH=/, ""); path = $0 }
         END { printf "%s", path }
     ')
+    _login_path=$(restrict_target_login_path "$_login_path" "$_login_base")
     if [ -n "$_login_path" ]; then
         printf '%s' "$_login_path"
     else
@@ -178,6 +183,32 @@ sanitize_target_login_path() {
     printf '%s' "$_sanitize_result"
 }
 
+restrict_target_login_path() {
+    _restrict_login_path=$(sanitize_target_login_path "$1")
+    _restrict_base_path=$2
+    _restrict_result=""
+    _restrict_old_ifs=$IFS
+    IFS=:
+    for _restrict_dir in $_restrict_login_path; do
+        [ -n "$_restrict_dir" ] || continue
+        case ":$_restrict_base_path:" in
+            *":$_restrict_dir:"*)
+                _restrict_result=$(append_path "$_restrict_result" "$_restrict_dir")
+                continue
+                ;;
+        esac
+        # A target login shell may add these conventional per-user tool
+        # locations.  Do not accept system-wide additions injected by /etc/profile.
+        case "$_restrict_dir" in
+            "$HOME/.local/bin"|"$HOME/bin")
+                _restrict_result=$(append_path "$_restrict_result" "$_restrict_dir")
+                ;;
+        esac
+    done
+    IFS=$_restrict_old_ifs
+    printf '%s' "$_restrict_result"
+}
+
 # All installer tool selection, invocation, and discovery use this target-user
 # environment. Do not read UV/PIPX/XDG locations from the invoking agent.
 TARGET_BIN_DIR="$HOME/.local/bin"
@@ -185,7 +216,7 @@ TARGET_UV_TOOL_DIR="$HOME/.local/share/uv/tools"
 TARGET_PIPX_HOME="$HOME/.local/share/pipx"
 TARGET_LOGIN_PATH=$(target_login_path)
 TARGET_COMMAND_PATH=$(append_path "$TARGET_BIN_DIR" "$(sanitize_target_login_path "$TARGET_LOGIN_PATH")")
-[ -n "$TARGET_COMMAND_PATH" ] || TARGET_COMMAND_PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+[ -n "$TARGET_COMMAND_PATH" ] || TARGET_COMMAND_PATH="$TARGET_BIN_DIR:/usr/bin:/bin"
 
 run_target_environment() {
     /usr/bin/env -i \

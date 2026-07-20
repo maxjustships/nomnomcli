@@ -96,6 +96,41 @@ def _run_installer(environment: dict[str, str], *arguments: str) -> subprocess.C
     )
 
 
+def _run_installer_with_poisoned_global_bin(
+    environment: dict[str, str], poisoned_global_bin: Path, *arguments: str
+) -> subprocess.CompletedProcess:
+    """Run the installer in a mount namespace with a controlled /usr/local/bin.
+
+    This lets the test exercise the CI failure mode without writing to the
+    host's real global bin directory.
+    """
+    return subprocess.run(
+        [
+            "unshare",
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "--fork",
+            "--",
+            "/bin/sh",
+            "-ceu",
+            'mount --make-rprivate /; mount --bind "$1" /usr/local/bin; shift; exec "$@"',
+            "installer-global-bin-sandbox",
+            str(poisoned_global_bin),
+            "/usr/bin/env",
+            "-i",
+            *(f"{name}={value}" for name, value in environment.items()),
+            "/bin/sh",
+            "install.sh",
+            *arguments,
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.mark.parametrize(
     ("usda_ready", "expected_status"),
     [
@@ -401,6 +436,64 @@ exit 2
     assert "One-time PATH repair:" in human_result.stdout
     assert "Generic/raw coverage: base" in human_result.stdout
     assert "Optional USDA enhancement: run 'nomnom setup'" in human_result.stdout
+
+
+def test_installer_ignores_poisoned_global_installers_outside_target_path(tmp_path):
+    agent_bin = tmp_path / "agent-venv" / "bin"
+    target_bin = tmp_path / "home" / ".local" / "bin"
+    poisoned_global_bin = tmp_path / "poisoned-global-bin"
+    fixture = _nomnom_fixture(tmp_path, usda_ready=True)
+    environment = _base_environment(tmp_path, agent_bin, fixture)
+    environment["PATH"] = f"{agent_bin}:/usr/bin:/bin"
+    environment["VIRTUAL_ENV"] = str(agent_bin.parent)
+    trace_path = shlex.quote(str(Path(environment["TRACE"])))
+    for installer in ("uv", "pipx"):
+        _executable(
+            poisoned_global_bin / installer,
+            f"""#!/bin/sh
+printf 'poisoned-{installer} %s\\n' "$*" >> {trace_path}
+exit 86
+""",
+        )
+    _executable(
+        agent_bin / "python3",
+        f"""#!/bin/sh
+printf 'agent-python %s\\n' "$*" >> {trace_path}
+exit 0
+""",
+    )
+    _executable(
+        target_bin / "python3.11",
+        f"""#!/bin/sh
+printf 'system-python %s\\n' "$*" >> {trace_path}
+if [ "$1" = "-c" ]; then
+  case "$2" in
+    *sysconfig*) printf '%s\\n' "$HOME/.local/bin" ;;
+    *sys.executable*) printf '%s\\n' "$0" ;;
+  esac
+  exit 0
+fi
+if [ "$1 $2" = "-m pip" ]; then
+  mkdir -p "$HOME/.local/bin"
+  cp {shlex.quote(str(fixture))} "$HOME/.local/bin/nomnom"
+  exit 0
+fi
+exit 2
+""",
+    )
+
+    result = _run_installer_with_poisoned_global_bin(
+        environment, poisoned_global_bin, "--status-json"
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["executable"] == str(target_bin / "nomnom")
+    trace = Path(environment["TRACE"]).read_text(encoding="utf-8")
+    assert "poisoned-uv" not in trace
+    assert "poisoned-pipx" not in trace
+    assert "agent-python -m pip" not in trace
+    assert f"system-python -m pip install --user --upgrade {REPO_URL}" in trace
 
 
 def test_installer_user_site_fallback_skips_agent_venv_python(tmp_path):
