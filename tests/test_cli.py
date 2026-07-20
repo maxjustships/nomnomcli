@@ -359,9 +359,48 @@ def test_cli_setup_explains_independent_off_statuses(monkeypatch, capsys):
 
     assert main(["setup"]) == 0
     output = capsys.readouterr().out
+    assert "One-time connection" in output
+    assert "no-label generic-food lookup" in output
+    assert "https://fdc.nal.usda.gov/api-key-signup.html" in output
+    assert "Validating" in output
+    assert "Connected" in output
     assert "product/barcode lookup (no key): reachable" in output
     assert "full-text resolution: unavailable" in output
     assert "Product reachability does not imply full-text readiness." in output
+
+
+def test_cli_setup_status_json_is_prompt_free_and_actionable(monkeypatch, capsys):
+    expected = {
+        "status": "setup_required",
+        "providers": {
+            "openfoodfacts": {
+                "configured": True,
+                "product_lookup_reachable": True,
+                "full_text_search_ready": True,
+            },
+            "usda": {
+                "configured": False,
+                "reachable": False,
+                "key_source": None,
+                "purpose": "no-label generic-food lookup",
+                "signup_url": "https://fdc.nal.usda.gov/api-key-signup.html",
+                "next_action": {
+                    "command": "nomnom setup",
+                    "message": "Run the one-time connection in your terminal.",
+                },
+            },
+        },
+    }
+    monkeypatch.setattr("nomnomcli.cli.setup_status_report", lambda: expected)
+    monkeypatch.setattr(
+        "nomnomcli.cli.setup_providers",
+        lambda **_: pytest.fail("status mode must not enter interactive setup"),
+    )
+
+    assert main(["setup", "--status", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == expected
 
 
 def test_cli_off_alternatives_are_additive_json(user_db, monkeypatch, capsys):

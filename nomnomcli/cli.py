@@ -11,7 +11,7 @@ from nomnomcli.db import connect, get_stats, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
-from nomnomcli.onboarding import doctor_report, setup_providers
+from nomnomcli.onboarding import doctor_report, setup_providers, setup_status_report
 from nomnomcli.parser import parse_free_text
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
 
@@ -79,7 +79,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    commands.add_parser("setup", help="configure and validate nutrition providers")
+    setup = commands.add_parser(
+        "setup", help="make the optional one-time generic-food provider connection"
+    )
+    setup.add_argument(
+        "--status", action="store_true", help="report connection state without prompting"
+    )
+    setup.add_argument("--json", action="store_true", help="machine-readable status JSON")
 
     doctor = commands.add_parser("doctor", help="probe provider readiness")
     doctor.add_argument("--json", action="store_true", help="machine-readable JSON output")
@@ -163,9 +169,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace) -> int:
     if args.command == "setup":
+        if args.status:
+            result = setup_status_report()
+            if args.json:
+                print(_json_output(result))
+            else:
+                usda = result["providers"]["usda"]
+                print(f"USDA connection: {result['status']}")
+                print(f"Purpose: {usda['purpose']}")
+                print(f"Official free signup: {usda['signup_url']}")
+                if usda["next_action"]:
+                    print(
+                        f"Next: {usda['next_action']['message']} "
+                        f"({usda['next_action']['command']})"
+                    )
+            return 0
+        if args.json:
+            raise NomnomError(
+                "invalid_arguments",
+                "--json is available with prompt-free setup status",
+                details={"action": "Run nomnom setup --status --json"},
+            )
+        print("One-time connection (optional)")
+        print(
+            "Base product/barcode capture works; to enable no-label generic-food lookup, "
+            "one free USDA setup remains."
+        )
         print("Open Food Facts: free, no account or key; branded packaged foods.")
         print("USDA FoodData Central: free API key; generic/raw foods and fallback.")
-        print("USDA signup: https://fdc.nal.usda.gov/api-key-signup.html")
+        print("Official free USDA signup: https://fdc.nal.usda.gov/api-key-signup.html")
+        print("Enter the key privately below; it is hidden and never printed by nomnom.")
+        print("Validating the USDA connection before saving...")
         result = setup_providers(interactive=sys.stdin.isatty())
         off_product_status = (
             "reachable"
@@ -184,6 +218,7 @@ def _run(args: argparse.Namespace) -> int:
             "USDA: reachable; key source "
             f"{result['providers']['usda']['key_source']}"
         )
+        print("Connected: USDA no-label generic-food lookup is ready.")
         if result.get("config_path"):
             print(f"Saved secure provider config: {result['config_path']} (0600)")
         return 0

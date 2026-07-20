@@ -54,6 +54,43 @@ def doctor_report(
     }
 
 
+def setup_status_report(
+    *,
+    config: ProviderConfig | None = None,
+    off_client: OpenFoodFactsClient | None = None,
+    usda_client: USDAClient | None = None,
+) -> dict:
+    """Return prompt-free provider setup state without credential material."""
+    report = doctor_report(
+        config=config,
+        off_client=off_client,
+        usda_client=usda_client,
+    )
+    usda = report["providers"]["usda"]
+    usda.update(
+        {
+            "purpose": "no-label generic-food lookup",
+            "signup_url": USDA_SETUP_URL,
+        }
+    )
+    if usda["configured"] and usda["reachable"]:
+        report["status"] = "connected"
+        usda["next_action"] = None
+    elif usda["configured"]:
+        report["status"] = "connection_unreachable"
+        usda["next_action"] = {
+            "command": "nomnom setup",
+            "message": "Run the one-time connection again to validate or replace the key.",
+        }
+    else:
+        report["status"] = "setup_required"
+        usda["next_action"] = {
+            "command": "nomnom setup",
+            "message": "Run the one-time connection in your terminal.",
+        }
+    return {"status": report.pop("status"), **report}
+
+
 def setup_providers(
     *,
     interactive: bool,
