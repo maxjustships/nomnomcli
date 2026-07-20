@@ -44,8 +44,9 @@ def _nomnom_fixture(
         f"""#!/usr/bin/python3
 import os
 import sys
+from pathlib import Path
 
-with open(os.environ["TRACE"], "a", encoding="utf-8") as trace:
+with open(Path(os.environ["HOME"]).parent / "trace.log", "a", encoding="utf-8") as trace:
     print(f"nomnom {{' '.join(sys.argv[1:])}}", file=trace)
 if any(os.environ.get(name) for name in ("VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME")):
     print("private Python environment leaked into verification", file=sys.stderr)
@@ -331,6 +332,105 @@ def test_installer_venv_only_fallback_is_actionable_structured_error(tmp_path):
     assert "pipx" in payload["error"]["action"]
 
 
+def test_installer_verification_ignores_agent_xdg_and_nomnom_environment(tmp_path):
+    harness_bin = tmp_path / "harness-bin"
+    tool_bin = tmp_path / "home" / ".local" / "bin"
+    fixture = _executable(
+        tmp_path / "nomnom-fixture",
+        """#!/usr/bin/python3
+import json
+import os
+import sys
+from pathlib import Path
+
+tracked = (
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "NOMNOM_USDA_KEY",
+    "NOMNOM_GENERIC_PROXY_POLICY",
+    "NOMNOM_DB_PATH",
+    "NOMNOM_DISABLE_OFF",
+    "NOMNOM_OFFLINE",
+)
+with open(Path(os.environ["HOME"]).parent / "trace.log", "a", encoding="utf-8") as trace:
+    print(json.dumps({name: os.environ.get(name) for name in tracked}, sort_keys=True), file=trace)
+
+if sys.argv[1:] == ["--version"]:
+    print("nomnom 0.4.0")
+elif sys.argv[1:] == ["doctor", "--json"]:
+    config_home = Path(os.environ["XDG_CONFIG_HOME"])
+    configured = bool(os.environ.get("NOMNOM_USDA_KEY")) or (
+        config_home / "nomnomcli" / "config.toml"
+    ).exists()
+    print(json.dumps({"providers": {"usda": {"configured": configured, "reachable": configured}}}))
+else:
+    raise SystemExit(2)
+""",
+    )
+    environment = _base_environment(tmp_path, harness_bin, fixture)
+    environment.update(
+        {
+            "UV_TOOL_BIN_DIR": str(tool_bin),
+            "XDG_CONFIG_HOME": str(tmp_path / "agent-config"),
+            "XDG_CACHE_HOME": str(tmp_path / "agent-cache"),
+            "XDG_DATA_HOME": str(tmp_path / "agent-data"),
+            "XDG_STATE_HOME": str(tmp_path / "agent-state"),
+            "NOMNOM_USDA_KEY": "agent-usda-key",
+            "NOMNOM_GENERIC_PROXY_POLICY": "exact_only",
+            "NOMNOM_DISABLE_OFF": "1",
+            "NOMNOM_OFFLINE": "1",
+        }
+    )
+    agent_config = Path(environment["XDG_CONFIG_HOME"]) / "nomnomcli"
+    agent_config.mkdir(parents=True)
+    (agent_config / "config.toml").write_text(
+        "[providers.usda]\napi_key = 'agent-config-key'\n", encoding="utf-8"
+    )
+    Path(environment["HOME"], ".profile").write_text(
+        'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
+    )
+    _executable(
+        harness_bin / "uv",
+        """#!/bin/sh
+if [ "$1 $2 $3" = "tool install --force" ]; then
+  mkdir -p "$UV_TOOL_BIN_DIR"
+  cp "$FAKE_NOMNOM" "$UV_TOOL_BIN_DIR/nomnom"
+  exit 0
+fi
+if [ "$1 $2 $3" = "tool dir --bin" ]; then
+  printf '%s\n' "$UV_TOOL_BIN_DIR"
+  exit 0
+fi
+exit 2
+""",
+    )
+
+    result = _run_installer(environment, "--status-json")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "installed_needs_provider_setup"
+    invocation_environments = [
+        json.loads(line)
+        for line in Path(environment["TRACE"]).read_text().splitlines()
+        if line.startswith("{")
+    ]
+    assert len(invocation_environments) == 2
+    for invocation_environment in invocation_environments:
+        assert invocation_environment == {
+            "NOMNOM_DB_PATH": None,
+            "NOMNOM_DISABLE_OFF": None,
+            "NOMNOM_GENERIC_PROXY_POLICY": None,
+            "NOMNOM_OFFLINE": None,
+            "NOMNOM_USDA_KEY": None,
+            "XDG_CACHE_HOME": None,
+            "XDG_CONFIG_HOME": str(Path(environment["HOME"]) / ".config"),
+            "XDG_DATA_HOME": None,
+            "XDG_STATE_HOME": None,
+        }
+
+
 def test_installer_dry_run_surfaces_one_voluntary_setup_action():
     result = subprocess.run(
         ["/bin/sh", "install.sh", "--dry-run"],
@@ -356,7 +456,9 @@ def test_agent_skill_contains_the_mandatory_issue_21_protocol():
 
     assert "Mandatory install protocol" in skill
     assert "--status-json" in skill
-    assert "sanitized user/system-only PATH" in skill
+    assert "sanitized user/system-only environment" in skill
+    assert "XDG_CONFIG_HOME=$HOME/.config" in skill
+    assert "clear every `NOMNOM_*` override" in skill
     assert "nomnom --version" in skill
     assert "nomnom doctor --json" in skill
     assert "nomnom setup --status --json" in skill

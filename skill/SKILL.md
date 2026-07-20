@@ -31,11 +31,13 @@ Follow this exact sequence:
    `installed_path_repair_needed`, give the returned one-time repair command and do not claim the
    install is complete. For `error`, explain its returned action.
 2. Derive the executable directory from the returned path. Verify `nomnom --version` and run
-   `nomnom doctor --json` with a sanitized user/system-only PATH containing that user executable
-   directory plus only ordinary locations such as `~/.local/bin`, `~/bin`, `/usr/local/bin`,
-   `/usr/bin`, `/bin`, `/opt/homebrew/bin`, and `/opt/local/bin`. Exclude Hermes, Codex, the current
-   project, temporary directories, and every virtualenv path. Parse the doctor JSON; do not infer
-   readiness from exit status or human text.
+   `nomnom doctor --json` with a sanitized user/system-only environment containing that user
+   executable directory plus only ordinary locations such as `~/.local/bin`, `~/bin`,
+   `/usr/local/bin`, `/usr/bin`, `/bin`, `/opt/homebrew/bin`, and `/opt/local/bin`. For bootstrap
+   verification, set `XDG_CONFIG_HOME=$HOME/.config` and clear every `NOMNOM_*` override: never
+   inherit agent XDG roots, credentials, database paths, or status settings. Exclude Hermes, Codex,
+   the current project, temporary directories, and every virtualenv path. Parse the doctor JSON; do
+   not infer readiness from exit status or human text.
 3. Run `nomnom setup --status --json` and parse its prompt-free result. If USDA is not configured
    and reachable, say exactly once: "Base product/barcode capture works; to enable no-label generic-food lookup, one free USDA setup remains." Offer exactly one voluntary action:
    `nomnom setup` in the user's own interactive terminal. Do not open a browser or run interactive

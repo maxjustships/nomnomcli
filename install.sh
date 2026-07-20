@@ -346,6 +346,19 @@ LOGIN_PATH=$(normal_login_path)
 SANITIZED_LOGIN_PATH=$(sanitize_normal_path "$LOGIN_PATH")
 VERIFY_PATH=$(append_path "$INSTALL_BIN_DIR" "$SANITIZED_LOGIN_PATH")
 
+# Bootstrap verification observes only the target user's default configuration.
+# Do not inherit an invoking agent's XDG roots or NOMNOM_* overrides/secrets.
+run_verification() {
+    /usr/bin/env -i \
+        HOME="$HOME" \
+        USER="${USER:-}" \
+        LOGNAME="${LOGNAME:-${USER:-}}" \
+        SHELL="${SHELL:-/bin/sh}" \
+        PATH="$VERIFY_PATH" \
+        XDG_CONFIG_HOME="$HOME/.config" \
+        "$@"
+}
+
 VERIFIED_EXECUTABLE=$(PATH="$VERIFY_PATH" command -v nomnom 2>/dev/null || true)
 if [ -z "$VERIFIED_EXECUTABLE" ]; then
     fail \
@@ -354,16 +367,14 @@ if [ -z "$VERIFIED_EXECUTABLE" ]; then
         "Ensure $INSTALL_BIN_DIR is executable and rerun the installer."
 fi
 
-if ! VERSION=$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
-    PATH="$VERIFY_PATH" nomnom --version 2>&1); then
+if ! VERSION=$(run_verification nomnom --version 2>&1); then
     fail \
         "version_verification_failed" \
         "The installed nomnom executable failed --version verification." \
         "Run $EXECUTABLE --version and review the reported error."
 fi
 
-if ! DOCTOR_OUTPUT=$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
-    PATH="$VERIFY_PATH" nomnom doctor --json 2>&1); then
+if ! DOCTOR_OUTPUT=$(run_verification nomnom doctor --json 2>&1); then
     fail \
         "doctor_verification_failed" \
         "The installed nomnom executable failed doctor JSON verification." \

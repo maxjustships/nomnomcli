@@ -29,8 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install
 
 This creates or updates a user-level `nomnom` command. The installer tries `uv tool install` first,
 then pipx, then a non-virtualenv Python 3.11+ user-site install. It verifies the actual executable,
-`nomnom --version`, and `nomnom doctor --json` using a user/system-only PATH. It never opens the
-meal database, cache, or aliases.
+`nomnom --version`, and `nomnom doctor --json` in a sanitized user/system-only environment. For
+bootstrap verification, it deliberately uses `$HOME/.config`: inherited agent XDG roots and every
+`NOMNOM_*` override are ignored. It never opens the meal database, cache, or aliases.
 
 For machine-readable agent output:
 
