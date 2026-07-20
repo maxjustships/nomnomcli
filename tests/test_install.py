@@ -18,39 +18,44 @@ def _executable(path: Path, content: str) -> Path:
     return path
 
 
-def _nomnom_fixture(tmp_path: Path, *, usda_ready: bool = False) -> Path:
-    doctor_payload = json.dumps(
-        {
-            "providers": {
-                "openfoodfacts": {
-                    "configured": True,
-                    "product_lookup_reachable": True,
-                    "full_text_search_ready": True,
-                },
-                "usda": {
-                    "configured": usda_ready,
-                    "reachable": usda_ready,
-                    "key_source": None,
-                },
-            }
-        },
-        separators=(",", ":"),
-    )
+def _nomnom_fixture(
+    tmp_path: Path, *, usda_ready: bool = False, doctor_payload: str | None = None
+) -> Path:
+    if doctor_payload is None:
+        doctor_payload = json.dumps(
+            {
+                "providers": {
+                    "openfoodfacts": {
+                        "configured": True,
+                        "product_lookup_reachable": True,
+                        "full_text_search_ready": True,
+                    },
+                    "usda": {
+                        "configured": usda_ready,
+                        "reachable": usda_ready,
+                        "key_source": None,
+                    },
+                }
+            },
+            separators=(",", ":"),
+        )
     return _executable(
         tmp_path / "nomnom-fixture",
-        f"""#!/bin/sh
-printf 'nomnom %s\\n' "$*" >> "$TRACE"
-if [ -n "${{VIRTUAL_ENV:-}}" ] || [ -n "${{PYTHONPATH:-}}" ] || [ -n "${{PYTHONHOME:-}}" ]; then
-  printf '%s\\n' 'private Python environment leaked into verification' >&2
-  exit 90
-fi
-case "$*" in
-  "--version") printf '%s\\n' 'nomnom 0.4.0' ;;
-  "doctor --json")
-    printf '%s\\n' {json.dumps(doctor_payload)}
-    ;;
-  *) exit 2 ;;
-esac
+        f"""#!/usr/bin/python3
+import os
+import sys
+
+with open(os.environ["TRACE"], "a", encoding="utf-8") as trace:
+    print(f"nomnom {{' '.join(sys.argv[1:])}}", file=trace)
+if any(os.environ.get(name) for name in ("VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME")):
+    print("private Python environment leaked into verification", file=sys.stderr)
+    raise SystemExit(90)
+if sys.argv[1:] == ["--version"]:
+    print("nomnom 0.4.0")
+elif sys.argv[1:] == ["doctor", "--json"]:
+    print({doctor_payload!r})
+else:
+    raise SystemExit(2)
 """,
     )
 
@@ -146,10 +151,77 @@ exit 99
     assert before == after
 
 
+@pytest.mark.parametrize(
+    "doctor_payload",
+    [
+        pytest.param(
+            (
+                "{\n"
+                '  "providers": {\n'
+                '    "openfoodfacts": {"configured": true, "full_text_search_ready": false, '
+                '"product_lookup_reachable": true},\n'
+                '    "usda": {"configured": false, "key_source": null, "reachable": false}\n'
+                "  }\n"
+                "}"
+            ),
+            id="multiline-doctor-output-from-smoke",
+        ),
+        pytest.param(
+            (
+                "{\n"
+                '  "providers": {\n'
+                '    "openfoodfacts": {"configured": true, "full_text_search_ready": true, '
+                '"product_lookup_reachable": true},\n'
+                '    "usda": {\n'
+                '      "diagnostic": {"configured": true, "reachable": true},\n'
+                '      "reachable": false,\n'
+                '      "key_source": null,\n'
+                '      "configured": false\n'
+                "    }\n"
+                "  }\n"
+                "}"
+            ),
+            id="usda-fields-reordered-with-nested-true-values",
+        ),
+    ],
+)
+def test_installer_reads_only_top_level_usda_provider_booleans(tmp_path, doctor_payload):
+    harness_bin = tmp_path / "harness-bin"
+    tool_bin = tmp_path / "home" / ".local" / "bin"
+    fixture = _nomnom_fixture(tmp_path, doctor_payload=doctor_payload)
+    environment = _base_environment(tmp_path, harness_bin, fixture)
+    environment["UV_TOOL_BIN_DIR"] = str(tool_bin)
+    Path(environment["HOME"], ".profile").write_text(
+        'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
+    )
+    _executable(
+        harness_bin / "uv",
+        """#!/bin/sh
+if [ "$1 $2 $3" = "tool install --force" ]; then
+  mkdir -p "$UV_TOOL_BIN_DIR"
+  cp "$FAKE_NOMNOM" "$UV_TOOL_BIN_DIR/nomnom"
+  exit 0
+fi
+if [ "$1 $2 $3" = "tool dir --bin" ]; then
+  printf '%s\n' "$UV_TOOL_BIN_DIR"
+  exit 0
+fi
+exit 2
+""",
+    )
+
+    result = _run_installer(environment, "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "installed_needs_provider_setup"
+    assert payload["path_repair"] is None
+
+
 def test_installer_uses_pipx_when_uv_is_unavailable(tmp_path):
     harness_bin = tmp_path / "harness-bin"
     tool_bin = tmp_path / "pipx-bin"
-    fixture = _nomnom_fixture(tmp_path, usda_ready=True)
+    fixture = _nomnom_fixture(tmp_path, usda_ready=False)
     environment = _base_environment(tmp_path, harness_bin, fixture)
     environment["PIPX_BIN_DIR"] = str(tool_bin)
     _executable(
@@ -179,6 +251,14 @@ exit 2
     assert f'export PATH="{tool_bin}:$PATH"' in payload["path_repair"]
     assert payload["error"] is None
     assert f"pipx install --force {REPO_URL}" in Path(environment["TRACE"]).read_text()
+
+    human_result = _run_installer(environment)
+
+    assert human_result.returncode == 0, human_result.stderr
+    assert "Status: installed_path_repair_needed" in human_result.stdout
+    assert "One-time PATH repair:" in human_result.stdout
+    assert "Base product/barcode capture works" in human_result.stdout
+    assert "One action: run 'nomnom setup' in your own terminal." in human_result.stdout
 
 
 def test_installer_user_site_fallback_skips_agent_venv_python(tmp_path):

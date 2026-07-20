@@ -371,22 +371,24 @@ if ! DOCTOR_OUTPUT=$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
 fi
 
 doctor_usda_bool() {
-    printf '%s\n' "$DOCTOR_OUTPUT" | awk -v key="$1" '
-        {
-            if (!in_usda) {
-                marker = index($0, "\"usda\"")
-                if (!marker) next
-                in_usda = 1
-                text = substr($0, marker)
-            } else {
-                text = $0
-            }
-            true_pattern = "\"" key "\"[[:space:]]*:[[:space:]]*true"
-            false_pattern = "\"" key "\"[[:space:]]*:[[:space:]]*false"
-            if (text ~ true_pattern) { print "true"; exit }
-            if (text ~ false_pattern) { print "false"; exit }
-        }
-    '
+    _doctor_key=$1
+    _doctor_python=$(awk '
+        NR == 1 && /^#!/ { print substr($0, 3); exit }
+    ' "$EXECUTABLE")
+    [ -n "$_doctor_python" ] && [ -x "$_doctor_python" ] || return 1
+    printf '%s' "$DOCTOR_OUTPUT" | /usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
+        "$_doctor_python" -c '
+import json
+import sys
+
+try:
+    value = json.load(sys.stdin)["providers"]["usda"][sys.argv[1]]
+except (json.JSONDecodeError, KeyError, TypeError):
+    raise SystemExit(1)
+if type(value) is not bool:
+    raise SystemExit(1)
+print(str(value).lower())
+' "$_doctor_key"
 }
 
 USDA_CONFIGURED=$(doctor_usda_bool configured)
