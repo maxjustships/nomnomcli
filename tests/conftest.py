@@ -11,6 +11,11 @@ from nomnomcli.foods import FoodRepository
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "foods.json"
 
 
+@pytest.fixture(autouse=True)
+def isolate_user_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
 @pytest.fixture
 def user_db(tmp_path: Path) -> Path:
     return tmp_path / "user.sqlite3"

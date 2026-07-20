@@ -109,7 +109,7 @@ def test_unknown_food_error_has_item_context(seeded_repository, monkeypatch):
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     with pytest.raises(NomnomError) as caught:
         parse_free_text("несуществующая еда 100 г", seeded_repository)
-    assert caught.value.code == "food_not_found"
+    assert caught.value.code == "food_needs_source"
     assert caught.value.details["item_index"] == 0
 
 

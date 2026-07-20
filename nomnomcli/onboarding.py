@@ -75,18 +75,27 @@ def setup_status_report(
     )
     if usda["configured"] and usda["reachable"]:
         report["status"] = "connected"
+        report["generic_coverage"] = "enhanced"
         usda["next_action"] = None
     elif usda["configured"]:
-        report["status"] = "connection_unreachable"
+        report["status"] = "base_ready"
+        report["generic_coverage"] = "base"
         usda["next_action"] = {
             "command": "nomnom setup",
-            "message": "Run the one-time connection again to validate or replace the key.",
+            "optional": True,
+            "message": (
+                "Optional: reconnect USDA to restore broader no-photo raw/generic food coverage."
+            ),
         }
     else:
-        report["status"] = "setup_required"
+        report["status"] = "base_ready"
+        report["generic_coverage"] = "base"
         usda["next_action"] = {
             "command": "nomnom setup",
-            "message": "Run the one-time connection in your terminal.",
+            "optional": True,
+            "message": (
+                "Optional: connect USDA for broader no-photo raw/generic food coverage."
+            ),
         }
     return {"status": report.pop("status"), **report}
 

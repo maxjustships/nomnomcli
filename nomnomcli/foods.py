@@ -14,11 +14,6 @@ from nomnomcli.off import OpenFoodFactsClient
 from nomnomcli.usda import USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
-USDA_KEY_REQUIRED_MESSAGE = (
-    f"USDA FoodData Central API key required. Get a free key at {USDA_SETUP_URL}, "
-    "then run nomnom setup or set NOMNOM_USDA_KEY."
-)
-USDA_KEY_SETUP = f"Run nomnom setup; signup: {USDA_SETUP_URL}"
 GENERIC_USDA_DATA_TYPES = frozenset({"foundation", "sr legacy", "survey (fndds)"})
 EXACT_CAPTURE_ACTION = (
     "Provide the package barcode or photo so the agent can run nomnom capture "
@@ -93,14 +88,77 @@ def _generic_proxy_query_is_safe(query: str, food: Food) -> bool:
     )
 
 
+def _off_candidate_query_is_safe(query: str, food: Food) -> bool:
+    if food.brand is None:
+        return _generic_proxy_query_is_safe(query, food)
+    query_tokens = _name_tokens(query)
+    candidate_tokens = _name_tokens(" ".join((food.name, food.brand)))
+    return bool(query_tokens) and query_tokens <= candidate_tokens
+
+
 def _generic_proxy_candidate(food: Food, confidence: float) -> dict:
     return {
         "name": food.name,
-        "source": "usda",
-        "source_id": str(food.fdc_id),
+        "source": food.source,
+        "source_id": food.source_id or (str(food.fdc_id) if food.fdc_id is not None else None),
         "resolution_mode": "generic_proxy",
         "confidence": round(confidence, 2),
     }
+
+
+def _food_needs_source_error(
+    query: str,
+    *,
+    provider_error: NomnomError | None = None,
+    offline: bool = False,
+) -> NomnomError:
+    technical = None
+    if provider_error is not None:
+        technical = {
+            "code": provider_error.code,
+            "message": provider_error.message,
+            "details": provider_error.details,
+        }
+    details = {
+        "food": query,
+        "offline": offline,
+        "source_options": {
+            "photo": {
+                "message": "Send a clear package photo so the agent can extract label facts."
+            },
+            "barcode": {"command": "nomnom capture barcode BARCODE --json"},
+            "capture_label": {
+                "command": (
+                    "nomnom capture label --name NAME --kcal KCAL --protein P "
+                    "--fat F --carbs C --source-note SOURCE --json"
+                )
+            },
+            "local_cache": {
+                "command": "nomnom search QUERY --json",
+                "aliases": "nomnom alias list --json",
+            },
+        },
+        "optional_usda_enhancement": {
+            "optional": True,
+            "command": "nomnom setup",
+            "purpose": "broader no-photo raw/generic food coverage",
+            "signup_url": USDA_SETUP_URL,
+        },
+        "provider_error": technical,
+        "action": (
+            "Use a package photo, barcode, verified label capture, or exact local cache entry; "
+            "USDA setup is optional for broader generic/raw coverage"
+        ),
+    }
+    if provider_error is not None:
+        for key in ("candidate", "alternatives"):
+            if key in provider_error.details:
+                details[key] = provider_error.details[key]
+    return NomnomError(
+        "food_needs_source",
+        f"Food needs a trusted source: {query}",
+        details=details,
+    )
 
 
 class FoodRepository:
@@ -319,13 +377,12 @@ class FoodRepository:
         remote_enabled = allow_remote and not os.getenv("NOMNOM_OFFLINE")
         off_enabled = remote_enabled and not os.getenv("NOMNOM_DISABLE_OFF")
         credential = self.provider_config.usda_credential()
-        low_confidence_error: NomnomError | None = None
+        off_error: NomnomError | None = None
         if off_enabled:
             try:
                 off_matches = self.off_client.search(query, page_size=5)
-            except NomnomError:
-                if credential is None:
-                    raise
+            except NomnomError as exc:
+                off_error = exc
                 off_matches = []
             if off_matches:
                 matching_brand = next(
@@ -337,12 +394,33 @@ class FoodRepository:
                         *(food for food in off_matches if food is not matching_brand),
                     ]
                 scored = [(food, _off_confidence(query, food)) for food in off_matches]
-                accepted = [match for match in scored if match[1] >= 0.5]
+                accepted = [
+                    match
+                    for match in scored
+                    if match[1] >= 0.5
+                    and (match[0].source_id or match[0].barcode)
+                    and _off_candidate_query_is_safe(query, match[0])
+                ]
                 if not accepted:
                     candidate, confidence = scored[0]
-                    low_confidence_error = NomnomError(
-                        "off_low_confidence",
-                        f"Open Food Facts candidate is too weak for: {query}",
+                    source_identity_missing = (
+                        confidence >= 0.5
+                        and _off_candidate_query_is_safe(query, candidate)
+                        and not (candidate.source_id or candidate.barcode)
+                    )
+                    code = (
+                        "off_source_identity_missing"
+                        if source_identity_missing
+                        else "off_low_confidence"
+                    )
+                    message = (
+                        f"Open Food Facts candidate has no source identity for: {query}"
+                        if source_identity_missing
+                        else f"Open Food Facts candidate is too weak for: {query}"
+                    )
+                    off_error = NomnomError(
+                        code,
+                        message,
                         details={
                             "food": query,
                             "threshold": 0.5,
@@ -350,10 +428,7 @@ class FoodRepository:
                             "alternatives": [
                                 _candidate_details(food, score) for food, score in scored[1:]
                             ],
-                            "action": (
-                                "Try a more specific name, run nomnom setup, or pin verified "
-                                "label values with nomnom add"
-                            ),
+                            "action": EXACT_CAPTURE_ACTION,
                         },
                     )
                 else:
@@ -375,13 +450,28 @@ class FoodRepository:
                         }
                         for alternative in off_matches[1:]
                     )
-                    food = replace(
-                        off_matches[0],
-                        alternatives=alternatives,
-                        resolution_mode="exact_product",
-                        source_id=off_matches[0].source_id or off_matches[0].barcode,
-                        provenance=off_matches[0].provenance or "openfoodfacts",
-                    )
+                    selected = off_matches[0]
+                    if selected.brand is None:
+                        food = replace(
+                            selected,
+                            alternatives=alternatives,
+                            resolution_mode="generic_proxy",
+                            source_id=selected.source_id or selected.barcode,
+                            provenance=selected.provenance or "openfoodfacts",
+                            assumption=(
+                                "Brand not specified; used Open Food Facts generic proxy: "
+                                f"{selected.name}."
+                            ),
+                        )
+                        food, confidence = self._apply_generic_proxy_policy(food, confidence)
+                    else:
+                        food = replace(
+                            selected,
+                            alternatives=alternatives,
+                            resolution_mode="exact_product",
+                            source_id=selected.source_id or selected.barcode,
+                            provenance=selected.provenance or "openfoodfacts",
+                        )
                     self._cache_food(food, lookup_query=query)
                     return food, confidence
 
@@ -390,37 +480,10 @@ class FoodRepository:
             food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
             self._cache_food(food, lookup_query=query)
             return food, confidence
-        if low_confidence_error is not None:
-            raise low_confidence_error
-        suggestions = [food.name for food in matches[:3]]
-        if remote_enabled:
-            raise NomnomError(
-                "usda_key_required",
-                USDA_KEY_REQUIRED_MESSAGE,
-                details={
-                    "food": query,
-                    "setup_url": USDA_SETUP_URL,
-                    "setup": USDA_KEY_SETUP,
-                    "environment_variable": "NOMNOM_USDA_KEY",
-                    "action": (
-                        "Run nomnom setup (or set NOMNOM_USDA_KEY in CI), or pin verified "
-                        "nutrition with nomnom add --name NAME --brand BRAND --kcal KCAL "
-                        "--protein P --fat F --carbs C"
-                    ),
-                },
-            )
-        raise NomnomError(
-            "food_not_found",
-            f"Could not resolve food: {query}",
-            details={
-                "food": query,
-                "suggestions": suggestions,
-                "offline": not off_enabled and credential is None,
-                "action": (
-                    "Search a more specific product name or pin label values with nomnom add "
-                    "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
-                ),
-            },
+        raise _food_needs_source_error(
+            query,
+            provider_error=off_error,
+            offline=not remote_enabled,
         )
 
     def search(self, query: str, limit: int = 10) -> list[Food]:

@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO_URL = "git+https://github.com/maxjustships/nomnomcli"
 
 
+def test_tests_import_checkout_under_review():
+    import nomnomcli
+
+    assert Path(nomnomcli.__file__).resolve().is_relative_to(ROOT)
+
+
 def _executable(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -92,7 +98,7 @@ def _run_installer(environment: dict[str, str], *arguments: str) -> subprocess.C
 @pytest.mark.parametrize(
     ("usda_ready", "expected_status"),
     [
-        (False, "installed_needs_provider_setup"),
+        (False, "installed_base_ready"),
         (True, "installed_and_ready"),
     ],
 )
@@ -143,6 +149,15 @@ exit 99
         "version": "nomnom 0.4.0",
         "error": None,
         "path_repair": None,
+        "generic_coverage": "enhanced" if usda_ready else "base",
+        "optional_usda_setup": (
+            None
+            if usda_ready
+            else {
+                "command": "nomnom setup",
+                "purpose": "broader no-photo raw/generic food coverage",
+            }
+        ),
     }
     trace = Path(environment["TRACE"]).read_text(encoding="utf-8")
     assert f"uv tool install --force {REPO_URL}" in trace
@@ -215,7 +230,9 @@ exit 2
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["status"] == "installed_needs_provider_setup"
+    assert payload["status"] == "installed_base_ready"
+    assert payload["generic_coverage"] == "base"
+    assert payload["optional_usda_setup"]["command"] == "nomnom setup"
     assert payload["path_repair"] is None
 
 
@@ -251,6 +268,11 @@ exit 2
     assert payload["version"] == "nomnom 0.4.0"
     assert f'export PATH="{tool_bin}:$PATH"' in payload["path_repair"]
     assert payload["error"] is None
+    assert payload["generic_coverage"] == "base"
+    assert payload["optional_usda_setup"] == {
+        "command": "nomnom setup",
+        "purpose": "broader no-photo raw/generic food coverage",
+    }
     assert f"pipx install --force {REPO_URL}" in Path(environment["TRACE"]).read_text()
 
     human_result = _run_installer(environment)
@@ -258,8 +280,8 @@ exit 2
     assert human_result.returncode == 0, human_result.stderr
     assert "Status: installed_path_repair_needed" in human_result.stdout
     assert "One-time PATH repair:" in human_result.stdout
-    assert "Base product/barcode capture works" in human_result.stdout
-    assert "One action: run 'nomnom setup' in your own terminal." in human_result.stdout
+    assert "Generic/raw coverage: base" in human_result.stdout
+    assert "Optional USDA enhancement: run 'nomnom setup'" in human_result.stdout
 
 
 def test_installer_user_site_fallback_skips_agent_venv_python(tmp_path):
@@ -410,7 +432,9 @@ exit 2
     result = _run_installer(environment, "--status-json")
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["status"] == "installed_needs_provider_setup"
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "installed_base_ready"
+    assert payload["generic_coverage"] == "base"
     invocation_environments = [
         json.loads(line)
         for line in Path(environment["TRACE"]).read_text().splitlines()
@@ -442,17 +466,13 @@ def test_installer_dry_run_surfaces_one_voluntary_setup_action():
 
     assert "uv tool install --force" in result.stdout
     assert result.stdout.count("nomnom setup") == 1
-    assert "one free USDA setup remains" in result.stdout
+    assert "Optional USDA enhancement" in result.stdout
     assert "nomnom doctor --json" in result.stdout
     assert "before the first food log" in result.stdout
 
 
-def test_agent_skill_contains_the_mandatory_issue_21_protocol():
+def test_agent_skill_treats_no_token_install_as_successful_base_mode():
     skill = (ROOT / "skill" / "SKILL.md").read_text(encoding="utf-8")
-    required_sentence = (
-        "Base product/barcode capture works; to enable no-label generic-food lookup, "
-        "one free USDA setup remains."
-    )
 
     assert "Mandatory install protocol" in skill
     assert "--status-json" in skill
@@ -461,10 +481,23 @@ def test_agent_skill_contains_the_mandatory_issue_21_protocol():
     assert "clear every `NOMNOM_*` override" in skill
     assert "nomnom --version" in skill
     assert "nomnom doctor --json" in skill
-    assert "nomnom setup --status --json" in skill
-    assert required_sentence in skill
-    assert "exactly one voluntary action" in skill
+    assert "installed_base_ready" in skill
+    assert "Base tracking is ready without a USDA key." in skill
+    assert "Do not ask for setup after a successful base install." in skill
+    assert "broader no-photo generic/raw-food coverage" in skill
+    assert "food_needs_source" in skill
     assert "must never type, receive, echo, or persist" in skill
-    assert "Before every first meal" in skill
     assert "local-cache" in skill
     assert "Never run `pip install -e`" in skill
+
+
+def test_readme_documents_base_ready_install_and_optional_usda_contract():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "installed_base_ready" in readme
+    assert "generic_coverage" in readme
+    assert "status: base_ready" in readme
+    assert "food_needs_source" in readme
+    assert "optional broader no-photo generic/raw-food coverage" in readme
+    assert "installed_needs_provider_setup" not in readme
+    assert "returns `usda_key_required`" not in readme

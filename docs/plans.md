@@ -1,5 +1,119 @@
 # Plans
 
+## Issue #23 Source
+- Task: Make no-key base mode a successful safe product and USDA an optional coverage enhancement.
+- Canonical input: GitHub issue #23 and the user's strict TDD, smoke, commit, and no-push requirements.
+- Repo context: onboarding/status, installer, resolver errors and OFF provenance, tests, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #23 Assumptions
+- OFF barcode lookup, source-backed label capture, user cache, and aliases define useful base coverage even when OFF full-text or USDA is unavailable.
+- `installed_and_ready` requires both a configured and reachable USDA provider; every other verified install is `installed_base_ready` unless login PATH repair takes priority.
+- Unbranded high-confidence OFF results may retain `exact_product` when source identity is a real named product, or become `generic_proxy` when the source product identity is generic; brand/SKU queries never receive a generic proxy.
+- Tests and installer smoke use only checkout-local artifacts and local network stubs; no public install or live provider request is allowed.
+
+## Issue #23 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M17 | Freeze base/enhanced setup and doctor contracts | M16 | [x] |
+| M18 | Make fresh installer completion base-ready | M17 | [x] |
+| M19 | Implement safe no-key OFF resolution and actionable source errors | M18 | [x] |
+| M20 | Update installation/agent UX and run release verification | M19 | [x] |
+
+## M17. Freeze base/enhanced setup and doctor contracts `[x]`
+### Goal
+- No-key status is `base_ready` with base generic coverage and explicitly optional USDA enhancement; reachable configured USDA is connected/enhanced.
+
+### Tasks
+- [x] Add and witness RED setup/status capability tests.
+- [x] Implement the minimal additive capability model and interactive optional-enhancement copy.
+- [x] Preserve credential redaction and independent OFF capability reporting.
+
+### Definition of Done
+- Setup JSON and text treat the no-key product as ready and disclose enhanced coverage without portraying base as failed.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_config.py tests/test_cli.py
+```
+
+### Known Risks
+- Doctor JSON is consumed by the shell installer, so fields must remain additive and parseable.
+
+### Stop-and-Fix Rule
+- Record RED before onboarding implementation; repair focused regressions before M18.
+
+## M18. Make fresh installer completion base-ready `[x]`
+### Goal
+- A verified no-token install succeeds as `installed_base_ready`, while reachable USDA is `installed_and_ready` and PATH repair remains highest priority.
+
+### Tasks
+- [x] Add and witness RED installer JSON/human and agent-isolation contracts.
+- [x] Add base/enhanced coverage and optional setup information without weakening sanitized verification.
+- [x] Keep genuine installation/verification failures as `error`.
+
+### Definition of Done
+- Installer tests cover no-key, enhanced, PATH repair, malformed doctor JSON, and inherited-agent isolation.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_install.py
+```
+
+### Known Risks
+- POSIX shell JSON construction must remain valid for multiline doctor output and constrained utility PATHs.
+
+### Stop-and-Fix Rule
+- Do not change installer behavior until its new status contract is observed RED.
+
+## M19. Implement safe no-key OFF resolution and actionable source errors `[x]`
+### Goal
+- Strict high-confidence OFF results resolve with truthful provenance; unsafe or unavailable results return one no-key-first `food_needs_source` action contract.
+
+### Tasks
+- [x] Add and witness RED tests for exact/generic OFF identity, weak/wrong-type, unavailable OFF, and brand/SKU denial.
+- [x] Preserve category/token/core-nutrient thresholds and prevent rejected candidates from cache/log writes.
+- [x] Replace first-screen raw USDA-key failures with photo, barcode, label capture, cache, and optional-USDA guidance.
+
+### Definition of Done
+- No-key users either receive a safe source-backed food or a structured actionable source request; no generic brand substitution occurs.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_off.py tests/test_foods.py tests/test_cli.py tests/test_capture.py
+```
+
+### Known Risks
+- Existing tests intentionally preserve the pine-nuts/cheese incident and may not be weakened.
+
+### Stop-and-Fix Rule
+- Any unsafe candidate acceptance, failed-write side effect, or provenance ambiguity blocks M20.
+
+## M20. Update installation/agent UX and run release verification `[x]`
+### Goal
+- Documentation makes no-token installation a successful completion and the checkout passes every requested gate and disposable installer smoke.
+
+### Tasks
+- [x] Update README and `skill/SKILL.md` installation/limitation language.
+- [x] Run full pytest, Ruff, diff audit, and checkout-import verification.
+- [x] Run a disposable user-level installer against this PR source with temp HOME/tool bins and local provider stubs, then create one scoped conventional commit.
+
+### Definition of Done
+- Exact outputs are recorded in status/final notes; one local commit exists; nothing is pushed and no PR is opened.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Known Risks
+- Installer source selection must be overridden locally without changing the production public source contract.
+
+### Stop-and-Fix Rule
+- Do not commit until all gates and the literal fresh no-key smoke pass.
+
 ## Issue #19 Source
 - Task: Implement the v0.4 zero-friction source-backed capture slice.
 - Canonical input: GitHub issue #19 plus the user's explicit default-policy override.

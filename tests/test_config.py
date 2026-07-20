@@ -266,6 +266,7 @@ def test_setup_status_is_actionable_and_never_contains_key(tmp_path):
     )
 
     assert report["status"] == "connected"
+    assert report["generic_coverage"] == "enhanced"
     assert report["providers"]["usda"] == {
         "configured": True,
         "reachable": True,
@@ -277,17 +278,45 @@ def test_setup_status_is_actionable_and_never_contains_key(tmp_path):
     assert "never-emit-this-placeholder" not in json.dumps(report)
 
 
-def test_setup_status_unconfigured_has_one_safe_next_action(tmp_path):
+def test_setup_status_unconfigured_is_base_ready_with_optional_enhancement(tmp_path):
     report = setup_status_report(
         config=ProviderConfig(environ={}, config_path=tmp_path / "missing.toml"),
         off_client=HealthyOFF(),
         usda_client=HealthyUSDA(),
     )
 
-    assert report["status"] == "setup_required"
+    assert report["status"] == "base_ready"
+    assert report["generic_coverage"] == "base"
     assert report["providers"]["usda"]["configured"] is False
     assert report["providers"]["usda"]["reachable"] is False
     assert report["providers"]["usda"]["next_action"] == {
         "command": "nomnom setup",
-        "message": "Run the one-time connection in your terminal.",
+        "optional": True,
+        "message": (
+            "Optional: connect USDA for broader no-photo raw/generic food coverage."
+        ),
+    }
+
+
+def test_setup_status_unreachable_usda_preserves_base_ready_coverage(tmp_path):
+    class UnreachableUSDA:
+        def probe(self, api_key):
+            raise NomnomError("usda_unavailable", "USDA is unavailable")
+
+    path = tmp_path / "config.toml"
+    config = ProviderConfig(environ={}, config_path=path)
+    config.store_usda_key("unreachable-placeholder")
+
+    report = setup_status_report(
+        config=config, off_client=HealthyOFF(), usda_client=UnreachableUSDA()
+    )
+
+    assert report["status"] == "base_ready"
+    assert report["generic_coverage"] == "base"
+    assert report["providers"]["usda"]["next_action"] == {
+        "command": "nomnom setup",
+        "optional": True,
+        "message": (
+            "Optional: reconnect USDA to restore broader no-photo raw/generic food coverage."
+        ),
     }

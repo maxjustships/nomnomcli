@@ -191,10 +191,7 @@ def _run(args: argparse.Namespace) -> int:
                 details={"action": "Run nomnom setup --status --json"},
             )
         print("One-time connection (optional)")
-        print(
-            "Base product/barcode capture works; to enable no-label generic-food lookup, "
-            "one free USDA setup remains."
-        )
+        print("Optional: connect USDA for broader no-photo generic/raw-food coverage.")
         print("Open Food Facts: free, no account or key; branded packaged foods.")
         print("USDA FoodData Central: free API key; generic/raw foods and fallback.")
         print("Official free USDA signup: https://fdc.nal.usda.gov/api-key-signup.html")
