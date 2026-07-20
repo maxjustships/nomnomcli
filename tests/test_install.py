@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,13 @@ def test_tests_import_checkout_under_review():
     import nomnomcli
 
     assert Path(nomnomcli.__file__).resolve().is_relative_to(ROOT)
+
+
+def test_installer_does_not_seed_target_login_path_with_global_tool_directories():
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert '_login_base=$(sanitize_target_login_path "${PATH:-}")' in installer
+    assert '_login_base="/usr/local/bin:' not in installer
 
 
 def _executable(path: Path, content: str) -> Path:
@@ -109,17 +117,16 @@ def test_installer_prefers_uv_and_reports_provider_state_without_network(
     tool_bin = tmp_path / "home" / ".local" / "bin"
     fixture = _nomnom_fixture(tmp_path, usda_ready=usda_ready)
     environment = _base_environment(tmp_path, harness_bin, fixture)
-    environment["UV_TOOL_BIN_DIR"] = str(tool_bin)
     Path(environment["HOME"], ".profile").write_text(
         'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
     )
     _executable(
-        harness_bin / "uv",
-        """#!/bin/sh
-printf 'uv %s\n' "$*" >> "$TRACE"
+        tool_bin / "uv",
+        f"""#!/bin/sh
+printf 'uv %s\\n' "$*" >> {shlex.quote(str(Path(environment["TRACE"])))}
 if [ "$1 $2 $3" = "tool install --force" ]; then
   mkdir -p "$UV_TOOL_BIN_DIR"
-  cp "$FAKE_NOMNOM" "$UV_TOOL_BIN_DIR/nomnom"
+  cp {shlex.quote(str(fixture))} "$UV_TOOL_BIN_DIR/nomnom"
   exit 0
 fi
 if [ "$1 $2 $3" = "tool dir --bin" ]; then
@@ -127,13 +134,6 @@ if [ "$1 $2 $3" = "tool dir --bin" ]; then
   exit 0
 fi
 exit 2
-""",
-    )
-    _executable(
-        harness_bin / "pipx",
-        """#!/bin/sh
-printf 'pipx %s\n' "$*" >> "$TRACE"
-exit 99
 """,
     )
 
@@ -165,6 +165,107 @@ exit 99
     assert "nomnom --version" in trace
     assert "nomnom doctor --json" in trace
     assert before == after
+
+
+def test_installer_isolates_all_tool_locations_from_poisoned_agent_environment(tmp_path):
+    """Tool installation and discovery must use only the target user's defaults."""
+    harness_bin = tmp_path / "harness-bin"
+    home = tmp_path / "home"
+    target_bin = home / ".local" / "bin"
+    trace = tmp_path / "tool-environment.log"
+    fixture = _nomnom_fixture(tmp_path, usda_ready=False)
+    environment = _base_environment(tmp_path, harness_bin, fixture)
+    poison_root = tmp_path / "agent-tool-state"
+    poisoned = {
+        "UV_TOOL_DIR": poison_root / "uv-tools",
+        "UV_TOOL_BIN_DIR": poison_root / "uv-bin",
+        "PIPX_HOME": poison_root / "pipx-home",
+        "PIPX_BIN_DIR": poison_root / "pipx-bin",
+        "XDG_BIN_HOME": poison_root / "xdg-bin",
+        "XDG_DATA_HOME": poison_root / "xdg-data",
+        "XDG_CACHE_HOME": poison_root / "xdg-cache",
+        "XDG_STATE_HOME": poison_root / "xdg-state",
+    }
+    environment.update({name: str(path) for name, path in poisoned.items()})
+    environment.update(
+        {
+            "XDG_CONFIG_HOME": str(poison_root / "xdg-config"),
+            "NOMNOM_DB_PATH": str(poison_root / "existing.sqlite3"),
+            "VIRTUAL_ENV": str(poison_root / "venv"),
+        }
+    )
+    target_bin.mkdir(parents=True)
+    Path(environment["HOME"], ".profile").write_text(
+        'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
+    )
+    _executable(
+        target_bin / "uv",
+        f"""#!/bin/sh
+{{
+  printf 'uv %s\\n' "$*"
+  for name in \
+    UV_TOOL_DIR UV_TOOL_BIN_DIR PIPX_HOME PIPX_BIN_DIR XDG_BIN_HOME XDG_DATA_HOME \
+    XDG_CACHE_HOME XDG_STATE_HOME XDG_CONFIG_HOME VIRTUAL_ENV NOMNOM_DB_PATH
+  do
+    value=$(printenv "$name" || printf '__UNSET__')
+    printf '%s=%s\\n' "$name" "$value"
+  done
+}} >> {shlex.quote(str(trace))}
+if [ "$1 $2 $3" = "tool install --force" ]; then
+  mkdir -p "$UV_TOOL_BIN_DIR"
+  cp {shlex.quote(str(fixture))} "$UV_TOOL_BIN_DIR/nomnom"
+  exit 0
+fi
+if [ "$1 $2 $3" = "tool dir --bin" ]; then
+  printf '%s\\n' "$UV_TOOL_BIN_DIR"
+  exit 0
+fi
+exit 2
+""",
+    )
+
+    result = _run_installer(environment, "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "installed_base_ready"
+    assert payload["executable"] == str(target_bin / "nomnom")
+    assert (target_bin / "nomnom").is_file()
+    assert not poison_root.exists()
+
+    tool_trace = trace.read_text(encoding="utf-8")
+    assert tool_trace.count(f"uv tool install --force {REPO_URL}") == 1
+    assert tool_trace.count("uv tool dir --bin") == 1
+    expected = {
+        "UV_TOOL_DIR": str(home / ".local" / "share" / "uv" / "tools"),
+        "UV_TOOL_BIN_DIR": str(target_bin),
+        "PIPX_HOME": str(home / ".local" / "share" / "pipx"),
+        "PIPX_BIN_DIR": str(target_bin),
+        "XDG_BIN_HOME": "__UNSET__",
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+        "XDG_STATE_HOME": str(home / ".local" / "state"),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "VIRTUAL_ENV": "__UNSET__",
+        "NOMNOM_DB_PATH": "__UNSET__",
+    }
+    for name, value in expected.items():
+        assert tool_trace.count(f"{name}={value}") == 2
+    assert str(poison_root) not in tool_trace
+
+    normal_shell = subprocess.run(
+        ["/bin/sh", "-lc", "command -v nomnom && nomnom --version"],
+        env={
+            "HOME": str(home),
+            "SHELL": "/bin/sh",
+            "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert normal_shell.returncode == 0, normal_shell.stderr
+    assert normal_shell.stdout.splitlines() == [str(target_bin / "nomnom"), "nomnom 0.4.0"]
 
 
 @pytest.mark.parametrize(
@@ -206,16 +307,15 @@ def test_installer_reads_only_top_level_usda_provider_booleans(tmp_path, doctor_
     tool_bin = tmp_path / "home" / ".local" / "bin"
     fixture = _nomnom_fixture(tmp_path, doctor_payload=doctor_payload)
     environment = _base_environment(tmp_path, harness_bin, fixture)
-    environment["UV_TOOL_BIN_DIR"] = str(tool_bin)
     Path(environment["HOME"], ".profile").write_text(
         'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
     )
     _executable(
-        harness_bin / "uv",
-        """#!/bin/sh
+        tool_bin / "uv",
+        f"""#!/bin/sh
 if [ "$1 $2 $3" = "tool install --force" ]; then
   mkdir -p "$UV_TOOL_BIN_DIR"
-  cp "$FAKE_NOMNOM" "$UV_TOOL_BIN_DIR/nomnom"
+  cp {shlex.quote(str(fixture))} "$UV_TOOL_BIN_DIR/nomnom"
   exit 0
 fi
 if [ "$1 $2 $3" = "tool dir --bin" ]; then
@@ -238,17 +338,37 @@ exit 2
 
 def test_installer_uses_pipx_when_uv_is_unavailable(tmp_path):
     harness_bin = tmp_path / "harness-bin"
-    tool_bin = tmp_path / "pipx-bin"
+    tool_bin = tmp_path / "home" / ".local" / "bin"
     fixture = _nomnom_fixture(tmp_path, usda_ready=False)
     environment = _base_environment(tmp_path, harness_bin, fixture)
-    environment["PIPX_BIN_DIR"] = str(tool_bin)
+    poison_root = tmp_path / "agent-tool-state"
+    environment.update(
+        {
+            "UV_TOOL_DIR": str(poison_root / "uv-tools"),
+            "UV_TOOL_BIN_DIR": str(poison_root / "uv-bin"),
+            "PIPX_HOME": str(poison_root / "pipx-home"),
+            "PIPX_BIN_DIR": str(poison_root / "pipx-bin"),
+            "XDG_BIN_HOME": str(poison_root / "xdg-bin"),
+            "XDG_DATA_HOME": str(poison_root / "xdg-data"),
+            "XDG_CACHE_HOME": str(poison_root / "xdg-cache"),
+            "XDG_STATE_HOME": str(poison_root / "xdg-state"),
+        }
+    )
+    trace_path = shlex.quote(str(Path(environment["TRACE"])))
     _executable(
-        harness_bin / "pipx",
-        """#!/bin/sh
-printf 'pipx %s\n' "$*" >> "$TRACE"
+        tool_bin / "pipx",
+        f"""#!/bin/sh
+printf 'pipx %s\\n' "$*" >> {trace_path}
+for name in \
+  UV_TOOL_DIR UV_TOOL_BIN_DIR PIPX_HOME PIPX_BIN_DIR XDG_BIN_HOME XDG_DATA_HOME \
+  XDG_CACHE_HOME XDG_STATE_HOME
+do
+  value=$(printenv "$name" || printf '__UNSET__')
+  printf '%s=%s\\n' "$name" "$value" >> {trace_path}
+done
 if [ "$1 $2 $3" = "install --force git+https://github.com/maxjustships/nomnomcli" ]; then
   mkdir -p "$PIPX_BIN_DIR"
-  cp "$FAKE_NOMNOM" "$PIPX_BIN_DIR/nomnom"
+  cp {shlex.quote(str(fixture))} "$PIPX_BIN_DIR/nomnom"
   exit 0
 fi
 if [ "$1 $2 $3" = "environment --value PIPX_BIN_DIR" ]; then
@@ -274,6 +394,12 @@ exit 2
         "purpose": "broader no-photo raw/generic food coverage",
     }
     assert f"pipx install --force {REPO_URL}" in Path(environment["TRACE"]).read_text()
+    pipx_trace = Path(environment["TRACE"]).read_text(encoding="utf-8")
+    assert str(poison_root) not in pipx_trace
+    assert pipx_trace.count(f"PIPX_HOME={tool_bin.parent / 'share' / 'pipx'}") == 2
+    assert pipx_trace.count(f"PIPX_BIN_DIR={tool_bin}") == 2
+    assert pipx_trace.count("XDG_BIN_HOME=__UNSET__") == 2
+    assert not poison_root.exists()
 
     human_result = _run_installer(environment)
 
@@ -284,13 +410,14 @@ exit 2
     assert "Optional USDA enhancement: run 'nomnom setup'" in human_result.stdout
 
 
-def test_installer_user_site_fallback_skips_agent_venv_python(tmp_path):
+def test_installer_user_site_fallback_ignores_outside_path_installers_and_agent_venv_python(
+    tmp_path,
+):
     agent_bin = tmp_path / "agent-venv" / "bin"
-    system_bin = tmp_path / "system-bin"
     tool_bin = tmp_path / "home" / ".local" / "bin"
     fixture = _nomnom_fixture(tmp_path, usda_ready=True)
-    environment = _base_environment(tmp_path, system_bin, fixture)
-    environment["PATH"] = f"{agent_bin}:{system_bin}:/usr/bin:/bin"
+    environment = _base_environment(tmp_path, agent_bin, fixture)
+    environment["PATH"] = f"{agent_bin}:/usr/bin:/bin"
     environment["VIRTUAL_ENV"] = str(agent_bin.parent)
     _executable(
         agent_bin / "python3",
@@ -300,9 +427,9 @@ exit 0
 """,
     )
     _executable(
-        system_bin / "python3.11",
-        """#!/bin/sh
-printf 'system-python %s\n' "$*" >> "$TRACE"
+        tool_bin / "python3.11",
+        f"""#!/bin/sh
+printf 'system-python %s\\n' "$*" >> {shlex.quote(str(Path(environment["TRACE"])))}
 if [ "$1" = "-c" ]; then
   case "$2" in
     *sysconfig*) printf '%s\n' "$HOME/.local/bin" ;;
@@ -312,7 +439,7 @@ if [ "$1" = "-c" ]; then
 fi
 if [ "$1 $2" = "-m pip" ]; then
   mkdir -p "$HOME/.local/bin"
-  cp "$FAKE_NOMNOM" "$HOME/.local/bin/nomnom"
+  cp {shlex.quote(str(fixture))} "$HOME/.local/bin/nomnom"
   exit 0
 fi
 exit 2
@@ -326,6 +453,8 @@ exit 2
     assert payload["executable"] == str(tool_bin / "nomnom")
     trace = Path(environment["TRACE"]).read_text(encoding="utf-8")
     assert "agent-python -m pip" not in trace
+    assert "uv " not in trace
+    assert "pipx " not in trace
     assert f"system-python -m pip install --user --upgrade {REPO_URL}" in trace
 
 
@@ -394,7 +523,6 @@ else:
     environment = _base_environment(tmp_path, harness_bin, fixture)
     environment.update(
         {
-            "UV_TOOL_BIN_DIR": str(tool_bin),
             "XDG_CONFIG_HOME": str(tmp_path / "agent-config"),
             "XDG_CACHE_HOME": str(tmp_path / "agent-cache"),
             "XDG_DATA_HOME": str(tmp_path / "agent-data"),
@@ -414,11 +542,11 @@ else:
         'PATH="$HOME/.local/bin:$PATH"\nexport PATH\n', encoding="utf-8"
     )
     _executable(
-        harness_bin / "uv",
-        """#!/bin/sh
+        tool_bin / "uv",
+        f"""#!/bin/sh
 if [ "$1 $2 $3" = "tool install --force" ]; then
   mkdir -p "$UV_TOOL_BIN_DIR"
-  cp "$FAKE_NOMNOM" "$UV_TOOL_BIN_DIR/nomnom"
+  cp {shlex.quote(str(fixture))} "$UV_TOOL_BIN_DIR/nomnom"
   exit 0
 fi
 if [ "$1 $2 $3" = "tool dir --bin" ]; then
