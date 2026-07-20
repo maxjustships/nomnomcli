@@ -27,11 +27,14 @@ flowchart LR
 curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
 ```
 
-This creates or updates a user-level `nomnom` command. The installer tries `uv tool install` first,
-then pipx, then a non-virtualenv Python 3.11+ user-site install. It verifies the actual executable,
-`nomnom --version`, and `nomnom doctor --json` in a sanitized user/system-only environment. For
-bootstrap verification, it deliberately uses `$HOME/.config`: inherited agent XDG roots and every
-`NOMNOM_*` override are ignored. It never opens the meal database, cache, or aliases.
+This creates or updates a user-level `nomnom` command in `$HOME/.local/bin`. The installer tries
+`uv tool install` first, then pipx, then a non-virtualenv Python 3.11+ user-site install. Every
+installer selection, invocation, and executable lookup runs in a target-user sanitized environment:
+inherited agent `UV_TOOL_*`, `PIPX_*`, and XDG tool-location overrides are ignored, and uv/pipx are
+explicitly directed to target-home defaults. It verifies the actual executable, `nomnom --version`,
+and `nomnom doctor --json` in that sanitized user/system-only environment. Bootstrap verification
+uses `$HOME/.config`; every `NOMNOM_*` override is ignored. It never opens the meal database, cache,
+or aliases.
 
 For machine-readable agent output:
 
