@@ -26,8 +26,9 @@ user's command. The bootstrap must select uv tool, pipx, or a non-venv Python 3.
 
 Follow this exact sequence:
 
-1. Parse the installer `status`, `executable`, `version`, `error`, and `path_repair` fields. Accept
-   only `installed_and_ready` or `installed_needs_provider_setup` as a completed shell install. For
+1. Parse the installer `status`, `executable`, `version`, `generic_coverage`,
+   `optional_usda_setup`, `error`, and `path_repair` fields. Accept `installed_base_ready` and
+   `installed_and_ready` as completed shell installs. Base tracking is ready without a USDA key. For
    `installed_path_repair_needed`, give the returned one-time repair command and do not claim the
    install is complete. For `error`, explain its returned action.
 2. Derive the executable directory from the returned path. Verify `nomnom --version` and run
@@ -38,18 +39,18 @@ Follow this exact sequence:
    inherit agent XDG roots, credentials, database paths, or status settings. Exclude Hermes, Codex,
    the current project, temporary directories, and every virtualenv path. Parse the doctor JSON; do
    not infer readiness from exit status or human text.
-3. Run `nomnom setup --status --json` and parse its prompt-free result. If USDA is not configured
-   and reachable, say exactly once: "Base product/barcode capture works; to enable no-label generic-food lookup, one free USDA setup remains." Offer exactly one voluntary action:
-   `nomnom setup` in the user's own interactive terminal. Do not open a browser or run interactive
+3. Treat `installed_base_ready` as installation success and continue with the user's tracking task.
+   Say: "Base tracking is ready without a USDA key." Do not ask for setup after a successful base install.
+   Offer `nomnom setup` only when the user wants broader no-photo generic/raw-food coverage
+   or after a specific item returns `food_needs_source`. Never open a browser or run interactive
    setup automatically.
 4. Agents must never type, receive, echo, or persist a USDA key or any other user secret. Do not ask
    for it in chat. Secret entry belongs only in the user's terminal through `nomnom setup`, which
    links to <https://fdc.nal.usda.gov/api-key-signup.html>, validates the key, and stores it in the
    owner-only XDG config (`0600`).
-5. Before every first meal after install (and before retrying after deferred setup), run and parse
-   `nomnom doctor --json` plus `nomnom setup --status --json`. If USDA setup remains deferred, use a
-   friendly barcode, package-photo, or exact local-cache flow. Never let a raw
-   `usda_key_required` error become the user's onboarding experience.
+5. For base mode, use aliases/cache, strict OFF full text, exact OFF barcode, and package-photo label
+   capture. `nomnom setup --status --json` is available when capability status is actually needed:
+   `base_ready` means base mode works, and `connected` means USDA-enhanced coverage works.
 
 ## Log free text
 
@@ -118,25 +119,26 @@ Aliases are user-database records, never packaged translations. They resolve
 only to exact local cache names and must not invent, approximate, or remotely
 substitute a target.
 
-## Unknown-food workflow: OFF → safe USDA proxy → capture → error
+## Unknown-food workflow: cache/OFF → source request → optional USDA
 
 The CLI automatically checks exact user alias, exact cache, cache search, then
 Open Food Facts.
 For an unresolved food:
 
-1. Let OFF run. For `off_low_confidence`, show its `candidate` and
-   `alternatives`; do not accept one without the user's explicit choice.
+1. Let strict OFF resolution run. A high-confidence unbranded source may be returned truthfully as
+   `generic_proxy`; an identified branded product remains `exact_product`. Always show source id,
+   provenance, assumptions, and alternatives. Never use a generic proxy for brand/SKU input.
 2. Let USDA run only when setup or `NOMNOM_USDA_KEY` has configured it. The default
    `allow_for_unbranded` policy accepts only unbranded generic records with an FDC id, complete
    validated nutrition, sufficient confidence, and full query-token coverage. Always show returned
-   `assumptions`. Never treat a branded or SKU-like query as a generic proxy. For
-   `usda_key_required`, offer `nomnom setup` and the free-key URL returned in
-   `details`. Use the environment only for non-interactive/CI operation.
+   `assumptions`. Never treat a branded or SKU-like query as a generic proxy. Use the environment
+   only for non-interactive/CI operation.
 3. On `generic_proxy_confirmation_required`, show the candidate and ask; do not change policy or
    write anything without the user's choice. On `exact_resolution_required`, ask for the package
    barcode or photo and use the exact capture flow above.
-4. If OFF, USDA, and source-backed capture cannot resolve the food, report the
-   structured error. Never substitute a similar food or invent values.
+4. On `food_needs_source`, preserve nested provider diagnostics and offer the returned package-photo,
+   barcode, `capture label`, and exact local-cache paths first. Offer the returned USDA action only
+   as an optional broader-coverage enhancement. Never substitute a similar food or invent values.
 
 Other error handling:
 
@@ -144,8 +146,8 @@ Other error handling:
 - `piece_weight_unknown`: ask for grams, then retry with `--food --grams`.
 - `usda_low_confidence` / `usda_invalid_nutrition`: show the structured details,
   ask for a more specific name or verified label, and never accept/cache the weak result.
-- `openfoodfacts_unavailable` / `usda_unavailable`: say that nothing was
-  estimated; offer retry or a verified manual pin.
+- Nested `openfoodfacts_unavailable` or direct `usda_unavailable`: say that nothing was estimated;
+  use the returned safe source actions or offer retry.
 
 Size assumptions must show the returned provider serving field and value. Exact
 human grams always override provider serving data, including per-piece input.

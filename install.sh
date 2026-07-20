@@ -12,6 +12,8 @@ ERROR_CODE=""
 ERROR_MESSAGE=""
 ERROR_ACTION=""
 PATH_REPAIR=""
+GENERIC_COVERAGE=""
+OPTIONAL_USDA_SETUP=0
 
 usage() {
     printf '%s\n' "Usage: sh install.sh [--dry-run] [--json|--status-json]"
@@ -90,6 +92,16 @@ emit_status() {
         fi
         printf ',"path_repair":'
         json_value_or_null "$PATH_REPAIR"
+        printf ',"generic_coverage":'
+        json_value_or_null "$GENERIC_COVERAGE"
+        printf ',"optional_usda_setup":'
+        if [ "$OPTIONAL_USDA_SETUP" -eq 1 ]; then
+            printf '{"command":"nomnom setup","purpose":'
+            json_quote "broader no-photo raw/generic food coverage"
+            printf '}'
+        else
+            printf 'null'
+        fi
         printf '}\n'
     fi
 }
@@ -121,10 +133,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
     say "[dry-run] discover the user tool executable directory and normal login-shell PATH"
     say "[dry-run] verify nomnom --version with a sanitized user/system PATH"
     say "[dry-run] verify and parse nomnom doctor --json before the first food log"
-    say "Base product/barcode capture works; to enable no-label generic-food lookup, one free USDA setup remains."
-    say "Voluntary one-time action: run 'nomnom setup' in your own terminal."
+    say "Base product/barcode/cache/label capture is ready without a key."
+    say "Optional USDA enhancement: run 'nomnom setup' for broader no-photo raw/generic food coverage."
     if [ "$JSON_OUTPUT" -eq 1 ]; then
         STATUS="dry_run"
+        GENERIC_COVERAGE="base"
+        OPTIONAL_USDA_SETUP=1
         emit_status
     fi
     exit 0
@@ -412,13 +426,20 @@ if [ -z "$USDA_CONFIGURED" ] || [ -z "$USDA_REACHABLE" ]; then
 fi
 
 LOGIN_EXECUTABLE=$(PATH="$SANITIZED_LOGIN_PATH" command -v nomnom 2>/dev/null || true)
+if [ "$USDA_CONFIGURED" = "true" ] && [ "$USDA_REACHABLE" = "true" ]; then
+    GENERIC_COVERAGE="enhanced"
+    OPTIONAL_USDA_SETUP=0
+else
+    GENERIC_COVERAGE="base"
+    OPTIONAL_USDA_SETUP=1
+fi
 if [ "$LOGIN_EXECUTABLE" != "$EXECUTABLE" ]; then
     STATUS="installed_path_repair_needed"
     PATH_REPAIR="export PATH=\"$INSTALL_BIN_DIR:\$PATH\""
 elif [ "$USDA_CONFIGURED" = "true" ] && [ "$USDA_REACHABLE" = "true" ]; then
     STATUS="installed_and_ready"
 else
-    STATUS="installed_needs_provider_setup"
+    STATUS="installed_base_ready"
 fi
 
 if [ -d "$HOME/.hermes" ]; then
@@ -440,15 +461,16 @@ if [ "$JSON_OUTPUT" -eq 0 ]; then
     say "Installed: $EXECUTABLE"
     say "Version: $VERSION"
     say "Status: $STATUS"
+    say "Generic/raw coverage: $GENERIC_COVERAGE"
     if [ -n "$PATH_REPAIR" ]; then
         say "One-time PATH repair: $PATH_REPAIR"
     fi
     if [ "$USDA_CONFIGURED" != "true" ] || [ "$USDA_REACHABLE" != "true" ]; then
-        say "Base product/barcode capture works; to enable no-label generic-food lookup, one free USDA setup remains."
+        say "Base product/barcode/cache/label capture is ready without a key."
         if [ -t 1 ]; then
             say "That connection is voluntary; do it when you are ready."
         fi
-        say "One action: run 'nomnom setup' in your own terminal."
+        say "Optional USDA enhancement: run 'nomnom setup' for broader no-photo raw/generic food coverage."
     fi
 fi
 

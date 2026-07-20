@@ -1,5 +1,48 @@
 # Test Plan
 
+## Issue #23 Source
+- Task: Validate safe no-key base mode and optional USDA enhancement UX.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-21
+
+## Issue #23 Validation Scope
+- In scope: setup/doctor capability JSON and text, installer status/human output, issue #22 agent isolation, strict OFF exact/generic identity and provenance, no-key source-needed errors, README, and agent skill.
+- Out of scope: live provider traffic, public installs, bundled food data, model-derived nutrition, paid proxies, telemetry, or secret collection.
+
+## Issue #23 Fixtures and Network Rules
+- OFF and USDA behavior is injected or monkeypatched with synthetic local responses only.
+- The fresh installer smoke uses a temporary HOME, temporary tool bins, the checkout under review, and local provider stubs; it must not fetch a public package.
+
+## Issue #23 Test Levels
+
+### Unit
+- Setup capability state transitions and optional next action.
+- OFF identity classification plus existing nutrient, token, type/category, and confidence guardrails.
+
+### Integration
+- No-key high-confidence OFF resolution caches truthful mode/source identity/provenance.
+- Weak/wrong/unavailable OFF without USDA returns actionable `food_needs_source` without cache/log writes.
+- Installer preserves sanitized environment isolation while reporting base/enhanced capability.
+
+### End-to-End / Smoke
+- Fresh temp user install resolves checkout code and reports `installed_base_ready`, setup `base_ready`, and one safe no-key unresolved-food flow.
+- Configured/reachable local USDA stub reports connected/enhanced and installer `installed_and_ready`.
+
+## Issue #23 Negative / Edge Cases
+- Brand/SKU input never accepts a generic proxy.
+- Pine nuts never resolve to an unrelated cheese result.
+- OFF unavailability never surfaces raw `usda_key_required` as the first-screen user error.
+- Login PATH repair remains the installer status even when base or enhanced capabilities are otherwise healthy.
+
+## Issue #23 Acceptance Gates
+- [x] Every relevant production behavior has a focused test witnessed RED before implementation.
+- [x] `pytest -q` imports the checkout and passes.
+- [x] `ruff check .`
+- [x] Fresh disposable checkout-local installer smoke passes without public network/install.
+- [x] `git diff --check` and scoped diff audit pass.
+- [x] One local conventional commit; no push or PR.
+
 ## Issue #19 Source
 - Task: Validate the v0.4 zero-friction source-backed capture slice.
 - Plan file: `docs/plans.md`

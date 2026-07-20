@@ -52,9 +52,10 @@ def test_cli_mocked_cheese_for_pine_nuts_is_low_confidence_without_writes(
 
     assert code == 2
     assert captured.out == ""
-    assert error["error"]["code"] == "off_low_confidence"
+    assert error["error"]["code"] == "food_needs_source"
     assert error["error"]["candidate"]["name"] == "Cheese — Wrong Match"
     assert error["error"]["alternatives"] == []
+    assert error["error"]["details"]["provider_error"]["code"] == "off_low_confidence"
     assert error["error"]["details"]["candidate"]["name"] == "Cheese — Wrong Match"
     assert "alternatives" in error["error"]["details"]
     with connect(user_db) as connection:
@@ -80,13 +81,12 @@ def test_cli_no_usda_key_is_actionable_json_error(user_db, monkeypatch, capsys):
 
     assert code == 2
     assert captured.out == ""
-    assert error["error"]["code"] == "usda_key_required"
-    assert error["error"]["setup"] == (
-        "Run nomnom setup; signup: https://fdc.nal.usda.gov/api-key-signup.html"
-    )
-    assert error["error"]["details"]["setup_url"] == (
-        "https://fdc.nal.usda.gov/api-key-signup.html"
-    )
+    assert error["error"]["code"] == "food_needs_source"
+    details = error["error"]["details"]
+    assert "photo" in details["source_options"]
+    assert "barcode" in details["source_options"]
+    assert "capture_label" in details["source_options"]
+    assert details["optional_usda_enhancement"]["optional"] is True
 
 
 def test_cli_log_and_stats_json(seeded_user_db, monkeypatch, capsys):
@@ -111,7 +111,7 @@ def test_cli_unknown_food_json_error(user_db, monkeypatch, capsys):
     error = json.loads(captured.err)
     assert code == 2
     assert captured.out == ""
-    assert error["error"]["code"] == "food_not_found"
+    assert error["error"]["code"] == "food_needs_source"
 
 
 def test_cli_direct_requires_grams(user_db, monkeypatch, capsys):
@@ -329,6 +329,7 @@ def test_cli_setup_passes_noninteractive_state_and_is_actionable(
 
     assert main(["setup"]) == 2
     captured = capsys.readouterr()
+    assert "Optional: connect USDA for broader no-photo generic/raw-food coverage." in captured.out
     assert "Open Food Facts: free, no account or key" in captured.out
     assert json.loads(captured.err)["error"]["code"] == "setup_requires_interactive"
 
@@ -371,7 +372,8 @@ def test_cli_setup_explains_independent_off_statuses(monkeypatch, capsys):
 
 def test_cli_setup_status_json_is_prompt_free_and_actionable(monkeypatch, capsys):
     expected = {
-        "status": "setup_required",
+        "status": "base_ready",
+        "generic_coverage": "base",
         "providers": {
             "openfoodfacts": {
                 "configured": True,
@@ -386,7 +388,10 @@ def test_cli_setup_status_json_is_prompt_free_and_actionable(monkeypatch, capsys
                 "signup_url": "https://fdc.nal.usda.gov/api-key-signup.html",
                 "next_action": {
                     "command": "nomnom setup",
-                    "message": "Run the one-time connection in your terminal.",
+                    "optional": True,
+                    "message": (
+                        "Optional: connect USDA for broader no-photo raw/generic food coverage."
+                    ),
                 },
             },
         },
@@ -450,9 +455,11 @@ def test_cli_off_failure_is_clear_error_json(user_db, monkeypatch, capsys):
     monkeypatch.setattr(OpenFoodFactsClient, "search", unavailable)
     assert main(["log", "--parse", "Acme missing 100 г", "--json"]) == 2
     error = json.loads(capsys.readouterr().err)
-    assert error["error"]["code"] == "openfoodfacts_unavailable"
-    assert error["error"]["details"]["status"] == 503
-    assert "nomnom add" in error["error"]["details"]["offline_escape"]
+    assert error["error"]["code"] == "food_needs_source"
+    provider_error = error["error"]["details"]["provider_error"]
+    assert provider_error["code"] == "openfoodfacts_unavailable"
+    assert provider_error["details"]["status"] == 503
+    assert "nomnom add" in provider_error["details"]["offline_escape"]
 
 
 def test_cli_alias_crud_json(user_db, monkeypatch, capsys):

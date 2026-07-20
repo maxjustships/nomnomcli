@@ -253,9 +253,22 @@ def test_off_low_confidence_does_not_cache_candidate(
     with pytest.raises(NomnomError) as caught:
         repository.resolve("кедровые орехи")
 
-    assert caught.value.code == "off_low_confidence"
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_low_confidence"
     assert caught.value.details["candidate"]["name"] == "Cheese — Wrong Match"
     assert caught.value.details["alternatives"] == []
+    assert set(caught.value.details["source_options"]) == {
+        "photo",
+        "barcode",
+        "capture_label",
+        "local_cache",
+    }
+    assert caught.value.details["optional_usda_enhancement"] == {
+        "optional": True,
+        "command": "nomnom setup",
+        "purpose": "broader no-photo raw/generic food coverage",
+        "signup_url": "https://fdc.nal.usda.gov/api-key-signup.html",
+    }
     assert urls == ["https://world.openfoodfacts.org/cgi/search.pl"]
     assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
@@ -277,7 +290,8 @@ def test_off_category_sanity_rejects_name_match_from_wrong_food_type(
     with pytest.raises(NomnomError) as caught:
         repository.resolve("кедровые орехи")
 
-    assert caught.value.code == "off_low_confidence"
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_low_confidence"
     assert caught.value.details["candidate"]["confidence"] < 0.5
 
 
@@ -300,6 +314,152 @@ def test_off_accepts_inflected_russian_egg_with_serving_weight(
     assert confidence >= 0.5
 
 
+def test_unbranded_high_confidence_off_type_is_cached_as_truthful_generic_proxy(
+    repository, monkeypatch
+):
+    candidate = Food(
+        "Chickpeas, cooked",
+        164,
+        8.9,
+        2.6,
+        27.4,
+        source="openfoodfacts",
+        barcode="12345678",
+        categories=("en:chickpeas",),
+        source_id="12345678",
+        provenance="openfoodfacts",
+    )
+    monkeypatch.setenv("NOMNOM_GENERIC_PROXY_POLICY", "allow_for_unbranded")
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    food, confidence = repository.resolve("chickpeas cooked")
+
+    assert confidence == 1.0
+    assert food.name == "Chickpeas, cooked"
+    assert food.brand is None
+    assert food.resolution_mode == "generic_proxy"
+    assert food.source_id == "12345678"
+    assert food.provenance == "openfoodfacts"
+    assert food.assumption == (
+        "Brand not specified; used Open Food Facts generic proxy: Chickpeas, cooked."
+    )
+    row = repository.user_connection.execute(
+        """SELECT resolution_mode, source_id, provenance, assumption
+        FROM food_cache WHERE name = ?""",
+        (food.name,),
+    ).fetchone()
+    assert tuple(row) == (
+        "generic_proxy",
+        "12345678",
+        "openfoodfacts",
+        "Brand not specified; used Open Food Facts generic proxy: Chickpeas, cooked.",
+    )
+
+
+def test_high_confidence_off_without_source_identity_is_not_cached(repository, monkeypatch):
+    candidate = Food(
+        "Chickpeas, cooked",
+        164,
+        8.9,
+        2.6,
+        27.4,
+        source="openfoodfacts",
+        categories=("en:chickpeas",),
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("chickpeas cooked")
+
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_source_identity_missing"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("query", ["Acme chickpeas", "chickpeas 12345"])
+def test_brand_or_sku_query_never_uses_unbranded_off_proxy(repository, monkeypatch, query):
+    candidate = Food(
+        "Chickpeas",
+        164,
+        8.9,
+        2.6,
+        27.4,
+        source="openfoodfacts",
+        barcode="12345678",
+        categories=("en:chickpeas",),
+        source_id="12345678",
+        provenance="openfoodfacts",
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(query)
+
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_low_confidence"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_named_sku_can_resolve_only_to_matching_exact_off_product(repository, monkeypatch):
+    candidate = Food(
+        "Acme Chickpeas 12345",
+        164,
+        8.9,
+        2.6,
+        27.4,
+        source="openfoodfacts",
+        barcode="12345678",
+        brand="Acme",
+        categories=("en:chickpeas",),
+        source_id="12345678",
+        provenance="openfoodfacts",
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    food, confidence = repository.resolve("Acme chickpeas 12345")
+
+    assert confidence == 1.0
+    assert food.name == "Acme Chickpeas 12345"
+    assert food.resolution_mode == "exact_product"
+    assert food.source_id == "12345678"
+
+
+@pytest.mark.parametrize(
+    ("policy", "error_code"),
+    [("ask", "generic_proxy_confirmation_required"), ("exact_only", "exact_resolution_required")],
+)
+def test_unbranded_off_proxy_honors_policy_with_off_provenance(
+    repository, monkeypatch, policy, error_code
+):
+    candidate = Food(
+        "Chickpeas, cooked",
+        164,
+        8.9,
+        2.6,
+        27.4,
+        source="openfoodfacts",
+        barcode="12345678",
+        categories=("en:chickpeas",),
+        source_id="12345678",
+        provenance="openfoodfacts",
+    )
+    monkeypatch.setenv("NOMNOM_GENERIC_PROXY_POLICY", policy)
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("chickpeas cooked")
+
+    assert caught.value.code == error_code
+    assert caught.value.details["candidate"] == {
+        "name": "Chickpeas, cooked",
+        "source": "openfoodfacts",
+        "source_id": "12345678",
+        "resolution_mode": "generic_proxy",
+        "confidence": 1.0,
+    }
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
 def test_off_category_does_not_replace_name_and_brand_token_overlap(
     repository, monkeypatch, food_fixtures
 ):
@@ -318,12 +478,14 @@ def test_off_category_does_not_replace_name_and_brand_token_overlap(
     with pytest.raises(NomnomError) as caught:
         repository.resolve("eggs")
 
-    assert caught.value.code == "off_low_confidence"
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_low_confidence"
     assert caught.value.details["candidate"]["confidence"] == 0
 
 
-def test_missing_usda_key_has_exact_actionable_setup_error(repository, monkeypatch):
-    setup_url = "https://fdc.nal.usda.gov/api-key-signup.html"
+def test_missing_usda_key_returns_safe_source_options_with_optional_enhancement(
+    repository, monkeypatch
+):
     monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
     monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
     monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [])
@@ -331,12 +493,13 @@ def test_missing_usda_key_has_exact_actionable_setup_error(repository, monkeypat
     with pytest.raises(NomnomError) as caught:
         repository.resolve("chickpeas cooked")
 
-    assert caught.value.code == "usda_key_required"
-    assert caught.value.message == (
-        f"USDA FoodData Central API key required. Get a free key at {setup_url}, "
-        "then run nomnom setup or set NOMNOM_USDA_KEY."
-    )
-    assert caught.value.details["setup_url"] == setup_url
+    assert caught.value.code == "food_needs_source"
+    assert "USDA" not in caught.value.message
+    assert caught.value.details["provider_error"] is None
+    assert "photo" in caught.value.details["source_options"]
+    assert "barcode" in caught.value.details["source_options"]
+    assert "capture_label" in caught.value.details["source_options"]
+    assert caught.value.details["optional_usda_enhancement"]["optional"] is True
 
 
 def test_offline_not_found(repository, monkeypatch):
@@ -344,6 +507,7 @@ def test_offline_not_found(repository, monkeypatch):
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     with pytest.raises(NomnomError) as caught:
         repository.resolve("definitely not a food")
+    assert caught.value.code == "food_needs_source"
     assert caught.value.details["offline"] is True
 
 

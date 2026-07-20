@@ -40,9 +40,12 @@ curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install
   | sh -s -- --status-json
 ```
 
-The structured `status` is `installed_and_ready`, `installed_needs_provider_setup`,
-`installed_path_repair_needed`, or `error`, with the executable, version, and a concrete repair or
-error action when needed. No credential value is emitted. `--dry-run` remains available.
+The structured `status` is `installed_base_ready`, `installed_and_ready`,
+`installed_path_repair_needed`, or `error`. A healthy no-token install is
+`installed_base_ready`; `installed_and_ready` is reserved for configured, reachable USDA enhanced
+coverage. JSON also reports `generic_coverage` as `base` or `enhanced` and an
+`optional_usda_setup` action when relevant. PATH repair remains the top-level status while retaining
+those capability fields. No credential value is emitted. `--dry-run` remains available.
 
 Check the optional generic-food connection without a prompt:
 
@@ -50,10 +53,11 @@ Check the optional generic-food connection without a prompt:
 nomnom setup --status --json
 ```
 
-If it reports `setup_required`, run `nomnom setup` once in your own interactive terminal. Base
-product/barcode and existing local-cache capture still work when this is deferred. Setup explains
-why no-label generic-food lookup needs USDA, links to the official free signup page, validates the
-key before saving, and prints a final `Connected` receipt. It never opens a browser by itself.
+Without a key it reports `status: base_ready` and `generic_coverage: base`; base cache, aliases,
+OFF barcode/full-text, and source-backed label capture are ready. USDA provides optional broader no-photo generic/raw-food coverage. A configured and reachable key reports `status: connected` and
+`generic_coverage: enhanced`. Run `nomnom setup` only when that broader coverage is wanted or a
+specific food cannot be safely resolved. Setup validates the key before saving and never opens a
+browser by itself.
 
 USDA credentials are local user configuration, never repository or database content. The default
 path is `$XDG_CONFIG_HOME/nomnomcli/config.toml` or `~/.config/nomnomcli/config.toml`, written with
@@ -73,15 +77,16 @@ Resolution is deterministic and ordered:
 1. exact phrase in the user's alias table, pointing to an exact local cache name;
 2. exact match in the user's `food_cache`;
 3. token-overlap search in that cache;
-4. Open Food Facts free-text search;
+4. strict Open Food Facts free-text search;
 5. a safe USDA FoodData Central generic proxy, when a setup key or
    `NOMNOM_USDA_KEY` is configured;
 6. actionable JSON error—never a guessed food.
 
-Open Food Facts candidates need at least 0.5 normalized token overlap between the query and
-product name plus brands. A category/type conflict is rejected. All kcal, protein, fat, and carbs
-values must be present, finite, and greater than zero. A rejected result returns
-`off_low_confidence` with the candidate and alternatives, and is neither cached nor logged.
+Open Food Facts candidates need complete normalized query-token coverage from the returned product
+name/brand, a matching food type/category, a source identity/barcode, and complete positive finite
+kcal, protein, fat, and carbs. A branded source identity is cached as `exact_product`; an unbranded
+source identity is truthfully cached as `generic_proxy` and remains subject to the configured proxy
+policy. Rejected results are neither cached nor logged.
 
 Successful API results are cached in the user's database, so the same food can resolve locally
 later. Existing cache records, logs, recipes, and aliases are preserved when v0.4 opens the
@@ -96,12 +101,13 @@ nomnomcli User-Agent. API v2 search is structured/filter-only: nomnom never send
 intentional because this small provider contract remains explicit and replay-testable.
 
 Both OFF capabilities use bounded backoff for HTTP 429 and 5xx responses and safely honor a
-numeric, bounded `Retry-After`. If v1 remains unavailable after retries, free-text resolution raises
-the typed retryable error `openfoodfacts_unavailable`; it does not silently change endpoint or
-return unrelated products. Product normalization and the token/category confidence checks still
-apply to every v1 candidate.
+numeric, bounded `Retry-After`. If v1 remains unavailable after retries, the OFF client raises the
+typed retryable error `openfoodfacts_unavailable`; the no-key resolver preserves it inside
+`food_needs_source.provider_error`. It never silently changes endpoint or returns unrelated
+products. Product normalization and the token/category confidence checks still apply to every v1
+candidate.
 
-### Enable USDA fallback
+### Optional USDA enhancement
 
 Check first, then run the one-time guided connection only if needed:
 
@@ -119,10 +125,15 @@ environment:
 export NOMNOM_USDA_KEY="your-key"
 ```
 
-Without a key, a food that OFF cannot resolve returns `usda_key_required`, the setup command, and
-the same signup URL. USDA search requires complete positive kcal/protein/fat/carbs, scores query
-token overlap together with data type and category, prefers Foundation and SR Legacy, and enforces
-a confidence floor. Weak matches return `usda_low_confidence` with candidate alternatives and are
+Without a key, a food that OFF cannot safely resolve returns `food_needs_source`, not a provider-key
+failure. Its first-screen actions offer a package photo, barcode, source-backed `capture label`, and
+the user's local cache/aliases. USDA appears separately as an optional enhancement for broader
+no-photo generic/raw-food coverage. The nested `provider_error` preserves OFF candidate,
+alternatives, retryability, and other technical diagnostics. Nothing unsafe is cached or logged.
+
+When enabled, USDA search requires complete positive kcal/protein/fat/carbs, scores query token
+overlap together with data type and category, prefers Foundation and SR Legacy, and enforces a
+confidence floor. Weak matches return `usda_low_confidence` with candidate alternatives and are
 never cached.
 
 The default generic policy is `allow_for_unbranded`. A USDA result becomes a generic proxy only
@@ -251,12 +262,13 @@ food names.
 Add `--json` for stable machine-readable output. User-correctable failures are written to stderr as
 an `error` object and exit with status 2. Important codes include:
 
-- `off_low_confidence`: inspect `candidate` and `alternatives`; retry more specifically or pin a
-  verified label.
+- `food_needs_source`: use the returned photo, barcode, label-capture, or local-cache path; inspect
+  nested `provider_error` for OFF diagnostics. USDA is an explicitly optional enhancement.
+- `off_low_confidence`: retained as nested technical detail when OFF candidates fail strict safety
+  checks.
 - `usda_low_confidence`: inspect the FDC candidate/data type/category and retry more specifically;
   no near match was cached.
 - `usda_invalid_nutrition`: every USDA candidate lacked one or more complete positive core values.
-- `usda_key_required`: configure the free FDC key or pin verified values.
 - `generic_proxy_confirmation_required`: show the named USDA candidate and ask before changing the
   configured policy; nothing was cached or logged.
 - `exact_resolution_required`: request the barcode or a package photo for source-backed capture.

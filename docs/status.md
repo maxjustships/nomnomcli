@@ -1,7 +1,7 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #19 complete
+- Current phase: issue #23 complete
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
@@ -17,14 +17,18 @@
 - Passed 72 tests, Ruff, version 0.2.0, and the exact isolated v0.2 smoke; removed the `/tmp` smoke database.
 - Completed v0.4 source-backed capture: safe default USDA generic proxies, exact OFF v2 barcode capture, agent-extracted label capture, durable provenance, and additive schema-v4 migration.
 - Passed 155 tests, Ruff, diff audit, and the literal isolated schema-v4 capture/alias/offline-log/error smoke.
+- Completed issue #23 no-key base mode: base/enhanced capability states, successful no-token installer status, strict truthful OFF exact/generic provenance, and actionable `food_needs_source` fallbacks.
+- Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
 - None.
 
 ## Next
-- None; issue #19 is complete and committed locally with no push or PR.
+- None; issue #23 is complete and ready for the requested local commit.
 
 ## Decisions Made
+- Issue #23: a healthy no-key install is complete base coverage; USDA is only an optional enhancement for broader no-photo generic/raw-food resolution.
+- Issue #23: PATH repair outranks base/enhanced installer completion status, but output must still describe the available coverage.
 - Default generic policy is `allow_for_unbranded`; this explicit user decision supersedes issue #19's older `ask` default.
 - Generic proxy safety requires a generic USDA type, no returned brand, an FDC id, complete validated core nutrition, accepted confidence, and full query-token coverage.
 - Package photo extraction stays outside the dependency-free CLI; only extracted facts and a mandatory source note enter the user database.
@@ -67,6 +71,10 @@ ruff check .
 | 2026-07-21 | issue #19 preflight | issue, providers, resolver, schema, CLI, tests, docs, skill | `pytest -q`; repository inspection | 126 pass; clean baseline | M13 |
 | 2026-07-21 | M13 | policy, proxy, capture, and migration acceptance tests | focused pytest; full local pytest | RED contracts and 4 partial-worktree failures recorded | M14 |
 | 2026-07-21 | M14–M16 | config, resolver, OFF, schema, CLI, docs, skill, tests | `pytest -q`; `ruff check .`; `git diff --check`; literal temp-DB smoke | 155 pass; clean; smoke pass | local commit |
+| 2026-07-21 | M17 | setup/status tests and onboarding/CLI | focused RED/GREEN pytest | RED captured; 9 setup tests pass | M18 |
+| 2026-07-21 | M18 | installer statuses, capability JSON/human output, issue #22 isolation | focused RED/GREEN pytest | 10 installer tests pass before docs additions | M19 |
+| 2026-07-21 | M19 | OFF identity/provenance and no-key source error | focused RED/GREEN pytest | 79 resolver/OFF/CLI/capture tests pass | M20 |
+| 2026-07-21 | M20 | docs, import isolation, full suite, lint, disposable install | `pytest -q`; `ruff check .`; local offline installer smoke | 177 pass; clean; smoke pass | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -82,3 +90,6 @@ ruff check .
 - [x] OFF free text uses v1 with no unfiltered v2 fallback.
 - [x] Doctor and setup distinguish product/barcode reachability from full-text readiness.
 - [x] Version and documentation report v0.4 generic-proxy and source-backed capture behavior.
+- [x] Fresh no-token checkout install reports `installed_base_ready` with base coverage.
+- [x] Setup reports `base_ready/base` without USDA and `connected/enhanced` with the local USDA stub.
+- [x] Safe no-key miss returns `food_needs_source` with photo/barcode/label/cache options and optional USDA.
