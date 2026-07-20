@@ -7,7 +7,7 @@ import pytest
 
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
-from nomnomcli.onboarding import doctor_report, setup_providers
+from nomnomcli.onboarding import doctor_report, setup_providers, setup_status_report
 
 
 class HealthyOFF:
@@ -253,4 +253,41 @@ def test_doctor_distinguishes_off_product_reachability_from_full_text_readiness(
         "configured": True,
         "product_lookup_reachable": True,
         "full_text_search_ready": False,
+    }
+
+
+def test_setup_status_is_actionable_and_never_contains_key(tmp_path):
+    path = tmp_path / "config.toml"
+    config = ProviderConfig(environ={}, config_path=path)
+    config.store_usda_key("never-emit-this-placeholder")
+
+    report = setup_status_report(
+        config=config, off_client=HealthyOFF(), usda_client=HealthyUSDA()
+    )
+
+    assert report["status"] == "connected"
+    assert report["providers"]["usda"] == {
+        "configured": True,
+        "reachable": True,
+        "key_source": "user_config",
+        "purpose": "no-label generic-food lookup",
+        "signup_url": "https://fdc.nal.usda.gov/api-key-signup.html",
+        "next_action": None,
+    }
+    assert "never-emit-this-placeholder" not in json.dumps(report)
+
+
+def test_setup_status_unconfigured_has_one_safe_next_action(tmp_path):
+    report = setup_status_report(
+        config=ProviderConfig(environ={}, config_path=tmp_path / "missing.toml"),
+        off_client=HealthyOFF(),
+        usda_client=HealthyUSDA(),
+    )
+
+    assert report["status"] == "setup_required"
+    assert report["providers"]["usda"]["configured"] is False
+    assert report["providers"]["usda"]["reachable"] is False
+    assert report["providers"]["usda"]["next_action"] == {
+        "command": "nomnom setup",
+        "message": "Run the one-time connection in your terminal.",
     }

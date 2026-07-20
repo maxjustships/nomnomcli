@@ -10,26 +10,44 @@ description: >-
 Use `nomnom` as the only source of nutrition numbers. Never estimate calories,
 macros, weights, or serving conversions in the agent context.
 
-## Install
+## Mandatory install protocol
 
-If `nomnom --help` is unavailable, ask permission and run:
-
-```sh
-curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
-```
-
-Before the first food log, run setup in the user's interactive terminal, then verify readiness:
+This protocol is required whenever `nomnom` is unavailable. Ask permission, then run the single
+user-level bootstrap and parse its JSON:
 
 ```sh
-nomnom setup
-nomnom doctor --json
+curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh \
+  | sh -s -- --status-json
 ```
 
-Explain only actionable results. Open Food Facts is keyless. USDA signup is at
-<https://fdc.nal.usda.gov/api-key-signup.html>; setup validates before writing the key to the
-owner-only XDG user config (`0600`). Credentials stay local and must never enter the repository,
-database, shell history, agent transcript, or logs. `NOMNOM_USDA_KEY` is the non-interactive option
-and overrides stored config.
+Never run `pip install -e` (or any editable install) inside a Hermes/agent virtualenv, never run a
+package installer from a Hermes/agent virtualenv, and never make an agent-private executable the
+user's command. The bootstrap must select uv tool, pipx, or a non-venv Python 3.11+ user site itself.
+
+Follow this exact sequence:
+
+1. Parse the installer `status`, `executable`, `version`, `error`, and `path_repair` fields. Accept
+   only `installed_and_ready` or `installed_needs_provider_setup` as a completed shell install. For
+   `installed_path_repair_needed`, give the returned one-time repair command and do not claim the
+   install is complete. For `error`, explain its returned action.
+2. Derive the executable directory from the returned path. Verify `nomnom --version` and run
+   `nomnom doctor --json` with a sanitized user/system-only PATH containing that user executable
+   directory plus only ordinary locations such as `~/.local/bin`, `~/bin`, `/usr/local/bin`,
+   `/usr/bin`, `/bin`, `/opt/homebrew/bin`, and `/opt/local/bin`. Exclude Hermes, Codex, the current
+   project, temporary directories, and every virtualenv path. Parse the doctor JSON; do not infer
+   readiness from exit status or human text.
+3. Run `nomnom setup --status --json` and parse its prompt-free result. If USDA is not configured
+   and reachable, say exactly once: "Base product/barcode capture works; to enable no-label generic-food lookup, one free USDA setup remains." Offer exactly one voluntary action:
+   `nomnom setup` in the user's own interactive terminal. Do not open a browser or run interactive
+   setup automatically.
+4. Agents must never type, receive, echo, or persist a USDA key or any other user secret. Do not ask
+   for it in chat. Secret entry belongs only in the user's terminal through `nomnom setup`, which
+   links to <https://fdc.nal.usda.gov/api-key-signup.html>, validates the key, and stores it in the
+   owner-only XDG config (`0600`).
+5. Before every first meal after install (and before retrying after deferred setup), run and parse
+   `nomnom doctor --json` plus `nomnom setup --status --json`. If USDA setup remains deferred, use a
+   friendly barcode, package-photo, or exact local-cache flow. Never let a raw
+   `usda_key_required` error become the user's onboarding experience.
 
 ## Log free text
 

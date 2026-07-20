@@ -24,26 +24,35 @@ flowchart LR
 ## Install
 
 ```sh
-curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
 ```
 
-The installer requires Python 3.11+, prefers `pipx`, and falls back to user-site `pip`. From source:
+This creates or updates a user-level `nomnom` command. The installer tries `uv tool install` first,
+then pipx, then a non-virtualenv Python 3.11+ user-site install. It verifies the actual executable,
+`nomnom --version`, and `nomnom doctor --json` using a user/system-only PATH. It never opens the
+meal database, cache, or aliases.
+
+For machine-readable agent output:
 
 ```sh
-git clone https://github.com/maxjustships/nomnomcli
-cd nomnomcli
-python3 -m pip install -e .
-nomnom --version
-nomnom setup
-nomnom doctor --json
+curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh \
+  | sh -s -- --status-json
 ```
 
-Run `nomnom setup` in an interactive terminal before the first food log. It independently probes
-Open Food Facts product/barcode lookup and full-text resolution, explains that OFF needs no key,
-shows the official USDA signup URL, validates the USDA key with a minimal FoodData Central request,
-and only then stores it locally. Follow with `nomnom doctor --json` to verify current provider
-readiness instead of assuming setup worked. OFF product reachability does not imply that full-text
-resolution is ready.
+The structured `status` is `installed_and_ready`, `installed_needs_provider_setup`,
+`installed_path_repair_needed`, or `error`, with the executable, version, and a concrete repair or
+error action when needed. No credential value is emitted. `--dry-run` remains available.
+
+Check the optional generic-food connection without a prompt:
+
+```sh
+nomnom setup --status --json
+```
+
+If it reports `setup_required`, run `nomnom setup` once in your own interactive terminal. Base
+product/barcode and existing local-cache capture still work when this is deferred. Setup explains
+why no-label generic-food lookup needs USDA, links to the official free signup page, validates the
+key before saving, and prints a final `Connected` receipt. It never opens a browser by itself.
 
 USDA credentials are local user configuration, never repository or database content. The default
 path is `$XDG_CONFIG_HOME/nomnomcli/config.toml` or `~/.config/nomnomcli/config.toml`, written with
@@ -93,9 +102,10 @@ apply to every v1 candidate.
 
 ### Enable USDA fallback
 
-Run the guided flow (recommended):
+Check first, then run the one-time guided connection only if needed:
 
 ```sh
+nomnom setup --status --json
 nomnom setup
 nomnom doctor --json
 ```
