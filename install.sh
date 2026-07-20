@@ -123,7 +123,6 @@ target_login_path() {
     # belong to this target user.  Never add a global tool directory here: an
     # agent or CI image may have installed uv/pipx there for itself.
     _login_base=$(sanitize_target_login_path "${PATH:-}")
-    [ -n "$_login_base" ] || _login_base="/usr/bin:/bin"
     _login_shell=${SHELL:-/bin/sh}
     if [ ! -x "$_login_shell" ]; then
         printf '%s' "$_login_base"
