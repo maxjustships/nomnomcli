@@ -154,7 +154,7 @@ def test_missing_usda_key_has_exact_actionable_setup_error(repository, monkeypat
     assert caught.value.code == "usda_key_required"
     assert caught.value.message == (
         f"USDA FoodData Central API key required. Get a free key at {setup_url}, "
-        "then set NOMNOM_USDA_KEY."
+        "then run nomnom setup or set NOMNOM_USDA_KEY."
     )
     assert caught.value.details["setup_url"] == setup_url
 
@@ -171,6 +171,9 @@ def test_usda_fallback_is_cached_with_runtime_source_and_fdc_id(
     repository, monkeypatch, food_fixtures
 ):
     class Response:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             return None
 
@@ -181,24 +184,29 @@ def test_usda_fallback_is_cached_with_runtime_source_and_fdc_id(
     monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
     food, confidence = repository.resolve("chickpeas cooked")
-    assert (food.kcal, confidence) == (164, 0.72)
+    assert food.kcal == 164
+    assert round(confidence, 2) == 0.98
     assert food.fdc_id == 175200
     assert food.piece_grams == 130
     row = repository.user_connection.execute(
-        "SELECT source, fdc_id FROM food_cache WHERE name = 'chickpeas, cooked'"
+        """SELECT source, fdc_id, piece_grams_source, piece_grams_source_value
+        FROM food_cache WHERE name = 'chickpeas, cooked'"""
     ).fetchone()
-    assert tuple(row) == ("usda", 175200)
+    assert tuple(row) == ("usda", 175200, "servingSize", "130 g")
 
 
 def test_usda_fallback_replaces_low_confidence_off_candidate(
     repository, monkeypatch, food_fixtures
 ):
     class Response:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             return None
 
         def json(self):
-            if "world.openfoodfacts.org" in self.url:
+            if "openfoodfacts.org" in self.url:
                 return {"products": [food_fixtures["off"]["cheese"]]}
             return {"foods": [food_fixtures["usda"]]}
 
@@ -210,15 +218,18 @@ def test_usda_fallback_replaces_low_confidence_off_candidate(
     monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
     monkeypatch.setattr(requests, "get", get)
 
-    food, confidence = repository.resolve("кедровые орехи")
+    food, confidence = repository.resolve("chickpeas cooked")
 
     assert food.source == "usda"
     assert food.fdc_id == 175200
-    assert confidence == 0.72
+    assert round(confidence, 2) == 0.98
 
 
 def test_usda_no_result_is_structured_and_actionable(repository, monkeypatch):
     class Response:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             return None
 

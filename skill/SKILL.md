@@ -18,6 +18,19 @@ If `nomnom --help` is unavailable, ask permission and run:
 curl -sL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh | sh
 ```
 
+Before the first food log, run setup in the user's interactive terminal, then verify readiness:
+
+```sh
+nomnom setup
+nomnom doctor --json
+```
+
+Explain only actionable results. Open Food Facts is keyless. USDA signup is at
+<https://fdc.nal.usda.gov/api-key-signup.html>; setup validates before writing the key to the
+owner-only XDG user config (`0600`). Credentials stay local and must never enter the repository,
+database, shell history, agent transcript, or logs. `NOMNOM_USDA_KEY` is the non-interactive option
+and overrides stored config.
+
 ## Log free text
 
 1. Preserve every food and quantity the user supplied.
@@ -66,9 +79,9 @@ For an unresolved food:
 
 1. Let OFF run. For `off_low_confidence`, show its `candidate` and
    `alternatives`; do not accept one without the user's explicit choice.
-2. Let USDA run only when `NOMNOM_USDA_KEY` is configured. For
-   `usda_key_required`, offer the free-key setup URL returned in `details` and
-   ask the user to set the environment variable.
+2. Let USDA run only when setup or `NOMNOM_USDA_KEY` has configured it. For
+   `usda_key_required`, offer `nomnom setup` and the free-key URL returned in
+   `details`. Use the environment only for non-interactive/CI operation.
 3. If the user has verified label values, manually pin them:
 
    ```sh
@@ -84,8 +97,23 @@ Other error handling:
 
 - `quantity_required`: ask for grams, millilitres, or a supported piece count.
 - `piece_weight_unknown`: ask for grams, then retry with `--food --grams`.
+- `usda_low_confidence` / `usda_invalid_nutrition`: show the structured details,
+  ask for a more specific name or verified label, and never accept/cache the weak result.
 - `openfoodfacts_unavailable` / `usda_unavailable`: say that nothing was
   estimated; offer retry or a verified manual pin.
+
+Size assumptions must show the returned provider serving field and value. Exact
+human grams always override provider serving data, including per-piece input.
+
+## Provider contract
+
+OFF search intentionally uses direct `requests` calls to the official REST endpoint
+`https://api.openfoodfacts.org/api/v2/search` with a descriptive User-Agent. No
+third-party OFF SDK or alternate `world` search host is used. Retryable 429/5xx
+failures use bounded backoff; never implement a silent provider/cache fallback.
+
+Use `nomnom doctor --json` when diagnosing resolution. Report only
+`configured`, `reachable`, and USDA `key_source`; never expose a credential value.
 
 ## Stats
 

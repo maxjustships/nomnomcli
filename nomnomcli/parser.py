@@ -68,6 +68,12 @@ PER_PIECE_QUANTITY = re.compile(
     rf"(?P<mass_unit>{MASS_UNIT})$",
     re.IGNORECASE,
 )
+LEADING_PER_PIECE_QUANTITY = re.compile(
+    rf"^(?P<amount>{NUMBER})\s*(?P<unit>{PIECE_UNIT})\s+"
+    rf"(?P<food>.+?)\s+(?:{_alias_pattern(EACH_MARKERS)})\s+"
+    rf"(?P<each>{NUMBER})\s*(?P<mass_unit>{MASS_UNIT})$",
+    re.IGNORECASE,
+)
 
 SIZE_ALIASES = {
     "small": {
@@ -150,7 +156,13 @@ def _quantity_to_grams(amount: float, unit: str, food) -> float:
             raise NomnomError(
                 "piece_weight_unknown",
                 f"No deterministic piece weight for {food.name}; provide grams",
-                details={"food": food.name, "pieces": amount},
+                details={
+                    "food": food.name,
+                    "pieces": amount,
+                    "provider": food.source,
+                    "source_fields_checked": ["serving_size", "servingSize", "foodMeasures"],
+                    "action": "Provide exact grams",
+                },
             )
         return amount * food.piece_grams
     return amount
@@ -188,9 +200,25 @@ def _parse_descriptor_piece(cleaned: str, repository: FoodRepository) -> Resolve
 
     food_query = " ".join(match.group("food").split())
     food, confidence = repository.resolve(food_query)
+    if food.piece_grams is not None and (
+        not food.piece_grams_source or not food.piece_grams_source_value
+    ):
+        raise NomnomError(
+            "piece_weight_unknown",
+            f"Serving-weight provenance is missing for {food.name}; provide grams",
+            details={
+                "food": food.name,
+                "pieces": amount,
+                "provider": food.source,
+                "reason": "serving_weight_provenance_missing",
+                "action": "Provide exact grams",
+            },
+        )
     grams = _quantity_to_grams(amount, "pieces", food)
     assumption = (
-        f"{_format_amount(amount)} {size} {food_query} = {_format_grams(grams)}g"
+        f"{_format_amount(amount)} {size} {food_query} = {_format_grams(grams)}g "
+        f"(source: {food.source}.{food.piece_grams_source}="
+        f"{food.piece_grams_source_value})"
     )
     return scale_food(
         food,
@@ -206,7 +234,9 @@ def parse_item_phrase(phrase: str, repository: FoodRepository) -> ResolvedItem:
     descriptor_item = _parse_descriptor_piece(cleaned, repository)
     if descriptor_item:
         return descriptor_item
-    per_piece = PER_PIECE_QUANTITY.match(cleaned)
+    per_piece = PER_PIECE_QUANTITY.match(cleaned) or LEADING_PER_PIECE_QUANTITY.match(
+        cleaned
+    )
     if per_piece:
         food, confidence = repository.resolve(per_piece.group("food").strip(" -"))
         amount = parse_number(per_piece.group("amount"))

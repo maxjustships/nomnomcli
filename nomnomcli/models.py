@@ -11,6 +11,8 @@ class Food:
     fat: float
     carbs: float
     piece_grams: float | None = None
+    piece_grams_source: str | None = None
+    piece_grams_source_value: str | None = None
     density_g_ml: float | None = None
     source: str = "unknown"
     fdc_id: int | None = None
@@ -32,6 +34,7 @@ class ResolvedItem:
     assumed: bool | None = None
     assumption: str | None = None
     source: str | None = None
+    fdc_id: int | None = None
     barcode: str | None = None
     brand: str | None = None
     alternatives: tuple[dict[str, str], ...] | None = None
@@ -56,7 +59,6 @@ def scale_food(
     assumption: str | None = None,
 ) -> ResolvedItem:
     factor = grams / 100.0
-    is_branded = food.source in {"openfoodfacts", "user"}
     return ResolvedItem(
         name=food.name,
         grams=round_nutrition(grams),
@@ -67,7 +69,8 @@ def scale_food(
         match_confidence=round(confidence, 2),
         assumed=assumed,
         assumption=assumption,
-        source=food.source if is_branded else None,
+        source=food.source if food.source != "unknown" else None,
+        fdc_id=food.fdc_id,
         barcode=food.barcode,
         brand=food.brand,
         alternatives=food.alternatives or None,

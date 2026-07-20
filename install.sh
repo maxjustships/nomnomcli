@@ -66,4 +66,5 @@ else
 fi
 
 say "nomnomcli installation complete."
-say "Next: run 'nomnom --help', then 'nomnom search buckwheat'."
+say "Next: run 'nomnom setup' in an interactive terminal before the first food log."
+say "Then verify provider readiness with 'nomnom doctor --json'."

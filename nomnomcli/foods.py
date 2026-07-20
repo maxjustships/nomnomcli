@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import sqlite3
 from dataclasses import replace
 
-import requests
-
+from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
+from nomnomcli.usda import USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
 USDA_KEY_REQUIRED_MESSAGE = (
     f"USDA FoodData Central API key required. Get a free key at {USDA_SETUP_URL}, "
-    "then set NOMNOM_USDA_KEY."
+    "then run nomnom setup or set NOMNOM_USDA_KEY."
 )
-USDA_KEY_SETUP = f"Get a free key at {USDA_SETUP_URL} then: export NOMNOM_USDA_KEY=..."
+USDA_KEY_SETUP = f"Run nomnom setup; signup: {USDA_SETUP_URL}"
 
 
 def normalize_name(value: str) -> str:
@@ -44,27 +43,10 @@ def _comparison_token(token: str) -> str:
     return token
 
 
-_FOOD_TYPE_MARKERS = {
-    "cheese": {"cheese", "сыр", "сыры"},
-    "eggs": {"egg", "яйц"},
-    "nuts": {"nut", "орех", "орехи", "орехов"},
-}
-
-
-def _food_types(tokens: set[str]) -> set[str]:
-    return {
-        food_type
-        for food_type, markers in _FOOD_TYPE_MARKERS.items()
-        if tokens & markers
-    }
-
-
 def _off_confidence(query: str, food: Food) -> float:
     query_tokens = _name_tokens(query)
     category_tokens = _name_tokens(" ".join(food.categories))
-    query_types = _food_types(query_tokens)
-    category_types = _food_types(category_tokens)
-    if query_types and category_types and query_types.isdisjoint(category_types):
+    if category_tokens and query_tokens.isdisjoint(category_tokens):
         return 0.0
     candidate_tokens = _name_tokens(" ".join((food.name, food.brand or "")))
     if not query_tokens:
@@ -85,16 +67,6 @@ def _candidate_details(food: Food, confidence: float) -> dict:
     }
 
 
-def _usda_serving_grams(record: dict) -> float | None:
-    if str(record.get("servingSizeUnit") or "").casefold() not in {"g", "gram", "grams"}:
-        return None
-    try:
-        value = float(record.get("servingSize"))
-    except (TypeError, ValueError):
-        return None
-    return value if math.isfinite(value) and value > 0 else None
-
-
 def _brand_matches_query(food: Food, query: str) -> bool:
     if not food.brand:
         return False
@@ -108,9 +80,18 @@ def _brand_matches_query(food: Food, query: str) -> bool:
 
 
 class FoodRepository:
-    def __init__(self, user_connection: sqlite3.Connection) -> None:
+    def __init__(
+        self,
+        user_connection: sqlite3.Connection,
+        *,
+        provider_config: ProviderConfig | None = None,
+        off_client: OpenFoodFactsClient | None = None,
+        usda_client: USDAClient | None = None,
+    ) -> None:
         self.user_connection = user_connection
-        self.off_client = OpenFoodFactsClient()
+        self.provider_config = provider_config or ProviderConfig()
+        self.off_client = off_client or OpenFoodFactsClient()
+        self.usda_client = usda_client or USDAClient()
 
     def _canonicalize_query(self, query: str) -> str:
         return normalize_name(query)
@@ -127,6 +108,16 @@ class FoodRepository:
             fat=float(row["fat"]),
             carbs=float(row["carbs"]),
             piece_grams=float(row["piece_grams"]) if row["piece_grams"] is not None else None,
+            piece_grams_source=(
+                str(row["piece_grams_source"])
+                if "piece_grams_source" in columns and row["piece_grams_source"]
+                else None
+            ),
+            piece_grams_source_value=(
+                str(row["piece_grams_source_value"])
+                if "piece_grams_source_value" in columns and row["piece_grams_source_value"]
+                else None
+            ),
             density_g_ml=float(row["density_g_ml"]) if row["density_g_ml"] is not None else None,
             source=row["source"],
             fdc_id=int(row["fdc_id"]) if row["fdc_id"] is not None else None,
@@ -209,13 +200,13 @@ class FoodRepository:
 
         remote_enabled = allow_remote and not os.getenv("NOMNOM_OFFLINE")
         off_enabled = remote_enabled and not os.getenv("NOMNOM_DISABLE_OFF")
-        api_key = os.getenv("NOMNOM_USDA_KEY")
+        credential = self.provider_config.usda_credential()
         low_confidence_error: NomnomError | None = None
         if off_enabled:
             try:
                 off_matches = self.off_client.search(query, page_size=5)
             except NomnomError:
-                if not api_key:
+                if credential is None:
                     raise
                 off_matches = []
             if off_matches:
@@ -242,8 +233,8 @@ class FoodRepository:
                                 _candidate_details(food, score) for food, score in scored[1:]
                             ],
                             "action": (
-                                "Try a more specific name, configure NOMNOM_USDA_KEY, or pin "
-                                "verified label values with nomnom add"
+                                "Try a more specific name, run nomnom setup, or pin verified "
+                                "label values with nomnom add"
                             ),
                         },
                     )
@@ -270,8 +261,10 @@ class FoodRepository:
                     self._cache_food(food, lookup_query=query)
                     return food, confidence
 
-        if remote_enabled and api_key:
-            return self._fetch_usda(query, api_key), 0.72
+        if remote_enabled and credential is not None:
+            food, confidence = self.usda_client.resolve(query, credential.value)
+            self._cache_food(food, lookup_query=query)
+            return food, confidence
         if low_confidence_error is not None:
             raise low_confidence_error
         suggestions = [food.name for food in matches[:3]]
@@ -285,8 +278,9 @@ class FoodRepository:
                     "setup": USDA_KEY_SETUP,
                     "environment_variable": "NOMNOM_USDA_KEY",
                     "action": (
-                        "Set NOMNOM_USDA_KEY or pin verified nutrition with nomnom add "
-                        "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
+                        "Run nomnom setup (or set NOMNOM_USDA_KEY in CI), or pin verified "
+                        "nutrition with nomnom add --name NAME --brand BRAND --kcal KCAL "
+                        "--protein P --fat F --carbs C"
                     ),
                 },
             )
@@ -296,7 +290,7 @@ class FoodRepository:
             details={
                 "food": query,
                 "suggestions": suggestions,
-                "offline": not off_enabled and not bool(api_key),
+                "offline": not off_enabled and credential is None,
                 "action": (
                     "Search a more specific product name or pin label values with nomnom add "
                     "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
@@ -429,15 +423,18 @@ class FoodRepository:
     def _cache_food(self, food: Food, *, lookup_query: str) -> None:
         self.user_connection.execute(
             """INSERT INTO food_cache
-            (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id,
-             barcode, brand, lookup_query, alternatives_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (name, kcal, protein, fat, carbs, piece_grams, piece_grams_source,
+             piece_grams_source_value, density_g_ml, source, fdc_id, barcode, brand,
+             lookup_query, alternatives_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
               kcal=excluded.kcal,
               protein=excluded.protein,
               fat=excluded.fat,
               carbs=excluded.carbs,
               piece_grams=excluded.piece_grams,
+              piece_grams_source=excluded.piece_grams_source,
+              piece_grams_source_value=excluded.piece_grams_source_value,
               density_g_ml=excluded.density_g_ml,
               source=excluded.source,
               fdc_id=excluded.fdc_id,
@@ -452,6 +449,8 @@ class FoodRepository:
                 food.fat,
                 food.carbs,
                 food.piece_grams,
+                food.piece_grams_source,
+                food.piece_grams_source_value,
                 food.density_g_ml,
                 food.source,
                 food.fdc_id,
@@ -480,56 +479,10 @@ class FoodRepository:
             fat=fat,
             carbs=carbs,
             piece_grams=piece_grams,
+            piece_grams_source="--piece-grams" if piece_grams is not None else None,
+            piece_grams_source_value=(f"{piece_grams:g} g" if piece_grams is not None else None),
             source="user",
             brand=brand.strip(),
         )
         self._cache_food(food, lookup_query=f"{name} {brand}")
-        return food
-
-    def _fetch_usda(self, query: str, api_key: str) -> Food:
-        try:
-            response = requests.get(
-                "https://api.nal.usda.gov/fdc/v1/foods/search",
-                params={"api_key": api_key, "query": query, "pageSize": 1},
-                timeout=15,
-            )
-            response.raise_for_status()
-            foods = response.json().get("foods", [])
-        except (requests.RequestException, ValueError) as exc:
-            raise NomnomError(
-                "usda_unavailable", "USDA fallback request failed", details={"food": query}
-            ) from exc
-        if not foods:
-            raise NomnomError(
-                "food_not_found",
-                f"USDA could not resolve food: {query}",
-                details={
-                    "food": query,
-                    "action": (
-                        "Try a more specific name or pin verified nutrition with nomnom add "
-                        "--name NAME --brand BRAND --kcal KCAL --protein P --fat F --carbs C"
-                    ),
-                },
-            )
-        record = foods[0]
-        nutrients = {}
-        for item in record.get("foodNutrients", []):
-            name = item.get("nutrientName", "").casefold()
-            if name == "energy" and (
-                str(item.get("nutrientNumber", "")) != "208"
-                and str(item.get("unitName", "")).casefold() != "kcal"
-            ):
-                continue
-            nutrients[name] = float(item.get("value") or 0)
-        food = Food(
-            name=record["description"].casefold(),
-            kcal=nutrients.get("energy", 0.0),
-            protein=nutrients.get("protein", 0.0),
-            fat=nutrients.get("total lipid (fat)", 0.0),
-            carbs=nutrients.get("carbohydrate, by difference", 0.0),
-            piece_grams=_usda_serving_grams(record),
-            source="usda",
-            fdc_id=record.get("fdcId"),
-        )
-        self._cache_food(food, lookup_query=query)
         return food

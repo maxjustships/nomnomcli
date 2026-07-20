@@ -35,21 +35,21 @@
       "piece_grams": 50
     },
     {
-      "name": "tomato, raw",
-      "lookup_query": "томат томата помидор tomato raw",
-      "kcal": 18,
-      "protein": 0.88,
-      "fat": 0.2,
-      "carbs": 3.89,
+      "name": "fixture pod",
+      "lookup_query": "fixture pod",
+      "kcal": 80,
+      "protein": 4,
+      "fat": 2,
+      "carbs": 12,
       "piece_grams": 100
     },
     {
-      "name": "onion, raw",
-      "lookup_query": "лук луковица луковицы onion raw",
-      "kcal": 40,
-      "protein": 1.1,
-      "fat": 0.1,
-      "carbs": 9.34,
+      "name": "fixture bulb",
+      "lookup_query": "fixture bulb",
+      "kcal": 120,
+      "protein": 6,
+      "fat": 3,
+      "carbs": 18,
       "piece_grams": 80
     },
     {
@@ -95,13 +95,15 @@
   "usda": {
     "fdcId": 175200,
     "description": "Chickpeas, cooked",
+    "dataType": "Foundation",
+    "foodCategory": "Legumes and Legume Products",
     "servingSize": 130,
     "servingSizeUnit": "g",
     "foodNutrients": [
       {"nutrientName": "Energy", "nutrientNumber": "208", "unitName": "KCAL", "value": 164},
-      {"nutrientName": "Protein", "value": 8.86},
-      {"nutrientName": "Total lipid (fat)", "value": 2.59},
-      {"nutrientName": "Carbohydrate, by difference", "value": 27.42}
+      {"nutrientId": 1003, "nutrientName": "Protein", "unitName": "G", "value": 8.86},
+      {"nutrientId": 1004, "nutrientName": "Total lipid (fat)", "unitName": "G", "value": 2.59},
+      {"nutrientId": 1005, "nutrientName": "Carbohydrate, by difference", "unitName": "G", "value": 27.42}
     ]
   }
 }

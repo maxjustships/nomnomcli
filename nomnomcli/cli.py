@@ -11,6 +11,7 @@ from nomnomcli.db import connect, get_stats, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
+from nomnomcli.onboarding import doctor_report, setup_providers
 from nomnomcli.parser import parse_free_text
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
 
@@ -59,6 +60,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("setup", help="configure and validate nutrition providers")
+
+    doctor = commands.add_parser("doctor", help="probe provider readiness")
+    doctor.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     log = commands.add_parser("log", help="resolve and store food")
     form = log.add_mutually_exclusive_group(required=True)
@@ -112,6 +118,35 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "setup":
+        print("Open Food Facts: free, no account or key; branded packaged foods.")
+        print("USDA FoodData Central: free API key; generic/raw foods and fallback.")
+        print("USDA signup: https://fdc.nal.usda.gov/api-key-signup.html")
+        result = setup_providers(interactive=sys.stdin.isatty())
+        off_status = (
+            "reachable"
+            if result["providers"]["openfoodfacts"]["reachable"]
+            else "unreachable"
+        )
+        print(f"Open Food Facts (no key): {off_status}")
+        print(
+            "USDA: reachable; key source "
+            f"{result['providers']['usda']['key_source']}"
+        )
+        if result.get("config_path"):
+            print(f"Saved secure provider config: {result['config_path']} (0600)")
+        return 0
+
+    if args.command == "doctor":
+        result = doctor_report()
+        if args.json:
+            print(_json_output(result))
+        else:
+            for provider, status in result["providers"].items():
+                state = "reachable" if status["reachable"] else "unreachable"
+                print(f"{provider}: {state}")
+        return 0
+
     with connect() as connection:
         repository = FoodRepository(connection)
         if args.command == "alias":
