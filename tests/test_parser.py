@@ -13,12 +13,26 @@ def test_descriptor_weight_comes_from_resolved_food():
     class Repository:
         def resolve(self, query):
             assert query == "egg"
-            return Food("runtime egg", 155, 12.6, 10.6, 1.1, piece_grams=52), 0.8
+            return (
+                Food(
+                    "runtime egg",
+                    155,
+                    12.6,
+                    10.6,
+                    1.1,
+                    piece_grams=52,
+                    piece_grams_source="servingSize",
+                    piece_grams_source_value="52 g",
+                    source="usda",
+                ),
+                0.8,
+            )
 
     item = parse_item_phrase("small egg", Repository())
 
     assert item.name == "runtime egg"
     assert item.grams == 52
+    assert item.assumption == "1 small egg = 52g (source: usda.servingSize=52 g)"
 
 
 def test_descriptor_without_runtime_piece_weight_asks_for_grams():
@@ -31,6 +45,18 @@ def test_descriptor_without_runtime_piece_weight_asks_for_grams():
 
     assert caught.value.code == "piece_weight_unknown"
     assert "provide grams" in caught.value.message
+
+
+def test_descriptor_rejects_opaque_legacy_piece_weight():
+    class Repository:
+        def resolve(self, query):
+            return Food("legacy cache record", 60, 3, 2, 8, piece_grams=64), 1.0
+
+    with pytest.raises(NomnomError) as caught:
+        parse_item_phrase("small legacy record", Repository())
+
+    assert caught.value.code == "piece_weight_unknown"
+    assert caught.value.details["reason"] == "serving_weight_provenance_missing"
 
 
 def test_parse_russian_grams(seeded_repository):
@@ -120,8 +146,8 @@ def test_parse_size_descriptors(seeded_repository, phrase, expected_grams):
     ],
 )
 def test_parse_piece_fractions(seeded_repository, fraction, factor):
-    item = parse_item_phrase(f"{fraction} small tomato", seeded_repository)
-    assert item.name == "tomato, raw"
+    item = parse_item_phrase(f"{fraction} small fixture pod", seeded_repository)
+    assert item.name == "fixture pod"
     assert item.grams == 100 * factor
     assert item.to_dict()["assumed"] is True
 
@@ -139,16 +165,29 @@ def test_parse_explicit_each_grams_for_shtuk(seeded_repository):
     assert item.grams == 150
 
 
+def test_leading_piece_count_with_explicit_user_grams_wins():
+    class Repository:
+        def resolve(self, query):
+            assert query == "egg whole cooked fried"
+            return Food("provider candidate", 155, 12.6, 10.6, 1.1, piece_grams=52), 0.9
+
+    item = parse_item_phrase("3 pieces egg whole cooked fried at 38g", Repository())
+
+    assert item.grams == 114
+    assert item.kcal == 176.7
+    assert item.assumption is None
+
+
 def test_decompose_dish_prefix_with_russian_inflection(seeded_repository):
     items = parse_free_text(
-        "яичница из 3 небольших яиц, половины небольшого томата "
-        "и половины средней луковицы, хлеб 2 куска по 40г",
+        "яичница из 3 небольших яиц, half small fixture pod "
+        "и half medium fixture bulb, хлеб 2 куска по 40г",
         seeded_repository,
     )
     assert [item.name for item in items] == [
         "egg, whole, boiled",
-        "tomato, raw",
-        "onion, raw",
+        "fixture pod",
+        "fixture bulb",
         "bread, wheat",
     ]
     assert [item.grams for item in items] == [150, 50, 40, 80]
@@ -159,7 +198,7 @@ def test_decompose_dish_prefix_with_russian_inflection(seeded_repository):
 @pytest.mark.parametrize("prefix", ["яичница из", "омлет из", "салат из", "каша из"])
 def test_all_dish_prefixes_split_conjunctions(seeded_repository, prefix):
     items = parse_free_text(
-        f"{prefix} small tomato и medium onion", seeded_repository
+        f"{prefix} small fixture pod и medium fixture bulb", seeded_repository
     )
     assert [item.grams for item in items] == [100, 80]
 

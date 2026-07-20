@@ -33,7 +33,20 @@ git clone https://github.com/maxjustships/nomnomcli
 cd nomnomcli
 python3 -m pip install -e .
 nomnom --version
+nomnom setup
+nomnom doctor --json
 ```
+
+Run `nomnom setup` in an interactive terminal before the first food log. It probes Open Food
+Facts, explains that OFF needs no key, shows the official USDA signup URL, validates the USDA key
+with a minimal FoodData Central request, and only then stores it locally. Follow with
+`nomnom doctor --json` to verify current provider reachability instead of assuming setup worked.
+
+USDA credentials are local user configuration, never repository or database content. The default
+path is `$XDG_CONFIG_HOME/nomnomcli/config.toml` or `~/.config/nomnomcli/config.toml`, written with
+owner-only `0600` permissions. `NOMNOM_USDA_KEY` is the non-interactive/CI option and takes
+precedence over the stored key. Avoid putting it in commands, logs, or checked-in environment
+files.
 
 ## Resolve and log food
 
@@ -48,7 +61,7 @@ Resolution is deterministic and ordered:
 2. exact match in the user's `food_cache`;
 3. token-overlap search in that cache;
 4. Open Food Facts free-text search;
-5. USDA FoodData Central, only when `NOMNOM_USDA_KEY` is set;
+5. USDA FoodData Central, when a setup key or `NOMNOM_USDA_KEY` is configured;
 6. actionable JSON error—never a guessed food.
 
 Open Food Facts candidates need at least 0.5 normalized token overlap between the query and
@@ -60,16 +73,37 @@ Successful API results are cached in the user's database, so the same food can r
 later. Existing v0.2 cache records, logs, and recipes are preserved when v0.3 opens the database.
 `nomnom search QUERY` searches this user cache; it is not a packaged food catalog.
 
+Open Food Facts search goes directly through its official REST endpoint,
+`https://api.openfoodfacts.org/api/v2/search`, with a descriptive nomnomcli User-Agent. Direct
+`requests` calls are intentional: the official REST contract is small and transparent, while a
+third-party OFF SDK would add an unofficial dependency without adding an authenticated workflow or
+schema capability. nomnom applies bounded backoff to HTTP 429 and 5xx responses, safely honors a
+numeric `Retry-After`, and reports a typed retryable `openfoodfacts_unavailable` error after retries
+are exhausted. It never silently falls back to the unstable `world` search host.
+
 ### Enable USDA fallback
 
-Get a free key at <https://fdc.nal.usda.gov/api-key-signup.html>, then set it in the environment:
+Run the guided flow (recommended):
+
+```sh
+nomnom setup
+nomnom doctor --json
+```
+
+Get a free key at the official signup page
+<https://fdc.nal.usda.gov/api-key-signup.html>. For non-interactive/CI use only, set it in the
+environment:
 
 ```sh
 export NOMNOM_USDA_KEY="your-key"
 ```
 
-Without the key, a food that OFF cannot resolve returns `usda_key_required`, the same setup URL,
-and the environment variable name. USDA matches cache with `source=usda` and their `fdc_id`.
+Without a key, a food that OFF cannot resolve returns `usda_key_required`, the setup command, and
+the same signup URL. USDA search requires complete positive kcal/protein/fat/carbs, scores query
+token overlap together with data type and category, prefers Foundation and SR Legacy, and enforces
+a confidence floor. Weak matches return `usda_low_confidence` with candidate alternatives and are
+never cached. Accepted matches cache `source=usda`, `fdc_id`, and any returned serving-field
+provenance.
 
 Set `NOMNOM_OFFLINE=1` to prevent all remote food lookup. Set `NOMNOM_DISABLE_OFF=1` to skip OFF
 while retaining USDA when its key is configured.
@@ -119,8 +153,10 @@ The agent must not translate by inventing nutrition values or silently substitut
 
 The parser accepts kilograms, grams, millilitres, pieces, fractions, and explicit per-piece grams.
 English and Russian size words such as `small` and `небольшой` remain valid syntax, but a size word
-does not supply a packaged estimate. Piece grams come only from the resolved cached/pinned/API food
-record. When that field is absent, `piece_weight_unknown` asks for grams.
+does not supply a packaged estimate. Piece grams come only from explicit user input or serving data
+on the resolved cached/pinned/API food record. Assumptions identify the provider, source field, and
+returned value. When serving data is absent, structured `piece_weight_unknown` asks for exact
+grams. Explicit grams always win, including `3 pieces FOOD at 38g` → `114g`.
 
 ```sh
 nomnom log --parse "bread 2 pieces at 40g" --json
@@ -150,10 +186,16 @@ an `error` object and exit with status 2. Important codes include:
 
 - `off_low_confidence`: inspect `candidate` and `alternatives`; retry more specifically or pin a
   verified label.
+- `usda_low_confidence`: inspect the FDC candidate/data type/category and retry more specifically;
+  no near match was cached.
+- `usda_invalid_nutrition`: every USDA candidate lacked one or more complete positive core values.
 - `usda_key_required`: configure the free FDC key or pin verified values.
 - `piece_weight_unknown`: ask for grams or add a verified `--piece-grams` value.
 - `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
+
+Provider-unavailable errors include a `retryable` boolean. `nomnom doctor --json` always emits only
+provider `configured`/`reachable` state and USDA `key_source`; it never includes credential values.
 
 Successful logs are stored immediately. Agents should show the returned names, grams, confidence,
 alternatives, and assumptions before treating the resolution as confirmed.

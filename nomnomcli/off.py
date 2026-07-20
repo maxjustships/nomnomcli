@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import math
 import re
+import time
+from collections.abc import Callable
 
 import requests
 
 from nomnomcli import __version__
-from nomnomcli.errors import NomnomError
+from nomnomcli.errors import NomnomError, ProviderUnavailableError
 from nomnomcli.models import Food
+from nomnomcli.providers import RetryPolicy, request_with_retry
 
-OFF_SEARCH_URL = "https://world.openfoodfacts.org/api/v2/search"
+OFF_SEARCH_URL = "https://api.openfoodfacts.org/api/v2/search"
 OFF_FIELDS = "product_name,brands,nutriments,code,serving_size,categories,categories_tags"
 
 
@@ -66,6 +69,10 @@ def _normalize_product(product: dict) -> Food | None:
         fat=fat,
         carbs=carbs,
         piece_grams=_serving_grams(product.get("serving_size")),
+        piece_grams_source="serving_size",
+        piece_grams_source_value=(
+            str(product["serving_size"]) if product.get("serving_size") else None
+        ),
         source="openfoodfacts",
         fdc_id=None,
         barcode=barcode,
@@ -75,7 +82,18 @@ def _normalize_product(product: dict) -> Food | None:
 
 
 class OpenFoodFactsClient:
-    def search(self, query: str, page_size: int = 5) -> list[Food]:
+    def __init__(
+        self,
+        *,
+        request_get: Callable | None = None,
+        retry_policy: RetryPolicy | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._request_get = request_get
+        self.retry_policy = retry_policy or RetryPolicy()
+        self.sleep = sleep
+
+    def _get_payload(self, query: str, page_size: int) -> dict:
         details = {
             "food": query,
             "offline_escape": (
@@ -83,36 +101,41 @@ class OpenFoodFactsClient:
                 "--kcal KCAL --protein P --fat F --carbs C"
             ),
         }
-        try:
-            response = requests.get(
-                OFF_SEARCH_URL,
-                params={
+        response = request_with_retry(
+            provider="openfoodfacts",
+            code="openfoodfacts_unavailable",
+            message="Open Food Facts lookup is unavailable",
+            request_get=self._request_get or requests.get,
+            url=OFF_SEARCH_URL,
+            request_kwargs={
+                "params": {
                     "search_terms": query,
                     "fields": OFF_FIELDS,
                     "page_size": page_size,
                 },
-                timeout=10,
-                headers={
+                "timeout": 10,
+                "headers": {
                     "User-Agent": (
                         f"nomnomcli/{__version__} "
                         "(+https://github.com/maxjustships/nomnomcli)"
                     )
                 },
-            )
+            },
+            details=details,
+            retry_policy=self.retry_policy,
+            sleep=self.sleep,
+        )
+        try:
             response.raise_for_status()
         except requests.RequestException as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status is not None:
-                details["status"] = status
-                details["reason"] = "http_error"
-            else:
-                details["reason"] = "network_error"
-            raise NomnomError(
+            status = getattr(response, "status_code", None)
+            raise ProviderUnavailableError(
+                "openfoodfacts",
                 "openfoodfacts_unavailable",
                 "Open Food Facts lookup is unavailable",
-                details=details,
+                retryable=False,
+                details={**details, "reason": "http_error", "status": status, "attempts": 1},
             ) from exc
-
         try:
             payload = response.json()
         except ValueError as exc:
@@ -127,6 +150,14 @@ class OpenFoodFactsClient:
                 "Open Food Facts returned an invalid product payload",
                 details=details,
             )
+        return payload
+
+    def probe(self) -> bool:
+        self._get_payload("a", 1)
+        return True
+
+    def search(self, query: str, page_size: int = 5) -> list[Food]:
+        payload = self._get_payload(query, page_size)
         return [
             food
             for product in payload["products"]

@@ -82,8 +82,7 @@ def test_cli_no_usda_key_is_actionable_json_error(user_db, monkeypatch, capsys):
     assert captured.out == ""
     assert error["error"]["code"] == "usda_key_required"
     assert error["error"]["setup"] == (
-        "Get a free key at https://fdc.nal.usda.gov/api-key-signup.html then: "
-        "export NOMNOM_USDA_KEY=..."
+        "Run nomnom setup; signup: https://fdc.nal.usda.gov/api-key-signup.html"
     )
     assert error["error"]["details"]["setup_url"] == (
         "https://fdc.nal.usda.gov/api-key-signup.html"
@@ -141,14 +140,14 @@ def test_cli_json_and_text_surface_size_assumptions(
     seeded_user_db, monkeypatch, capsys
 ):
     monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
-    phrase = "омлет из 2 small eggs, половины небольшого томата"
+    phrase = "омлет из 2 small eggs, half small fixture pod"
 
     code = main(["log", "--parse", phrase, "--json"])
     result = json.loads(capsys.readouterr().out)
     assert code == 0
     assert result["assumptions"] == [
-        "2 small eggs = 100g",
-        "1/2 small томата = 50g",
+        "2 small eggs = 100g (source: fixture.synthetic_serving=50 g)",
+        "1/2 small fixture pod = 50g (source: fixture.synthetic_serving=100 g)",
     ]
     assert all(item["assumed"] is True for item in result["items"])
 
@@ -156,7 +155,7 @@ def test_cli_json_and_text_surface_size_assumptions(
     output = capsys.readouterr().out
     assert code == 0
     assert "Assumptions:" in output
-    assert "2 small eggs = 100g" in output
+    assert "2 small eggs = 100g (source: fixture.synthetic_serving=50 g)" in output
 
 
 def test_cli_add_pins_branded_product_for_offline_piece_lookup(
@@ -249,8 +248,8 @@ def test_exact_issue_phrase_with_pinned_brand(seeded_user_db, monkeypatch, capsy
     capsys.readouterr()
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     phrase = (
-        "яичница из 3 небольших яиц, половины небольшого томата и половины средней "
-        "луковицы, хлеб harry's 2 куска по 40г"
+        "яичница из 3 небольших яиц, half small fixture pod и half medium "
+        "fixture bulb, хлеб harry's 2 куска по 40г"
     )
     assert main(["log", "--parse", phrase, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
@@ -262,10 +261,72 @@ def test_exact_issue_phrase_with_pinned_brand(seeded_user_db, monkeypatch, capsy
         for item in result["items"]
     )
     assert result["assumptions"] == [
-        "3 small яиц = 150g",
-        "1/2 small томата = 50g",
-        "1/2 medium луковицы = 40g",
+        "3 small яиц = 150g (source: fixture.synthetic_serving=50 g)",
+        "1/2 small fixture pod = 50g (source: fixture.synthetic_serving=100 g)",
+        "1/2 medium fixture bulb = 40g (source: fixture.synthetic_serving=80 g)",
     ]
+
+
+def test_cli_leading_piece_count_with_explicit_grams_is_114g(
+    seeded_user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
+
+    assert (
+        main(
+            [
+                "log",
+                "--parse",
+                "3 pieces egg whole boiled at 38g",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["items"][0]["grams"] == 114
+    assert "assumptions" not in result
+
+
+def test_cli_doctor_json_contract(monkeypatch, capsys):
+    expected = {
+        "providers": {
+            "openfoodfacts": {"configured": True, "reachable": True},
+            "usda": {
+                "configured": False,
+                "reachable": False,
+                "key_source": None,
+            },
+        }
+    }
+    monkeypatch.setattr("nomnomcli.cli.doctor_report", lambda: expected)
+
+    assert main(["doctor", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_cli_setup_passes_noninteractive_state_and_is_actionable(
+    monkeypatch, capsys
+):
+    class NonInteractive:
+        def isatty(self):
+            return False
+
+    def setup(*, interactive):
+        assert interactive is False
+        raise NomnomError(
+            "setup_requires_interactive",
+            "interactive terminal required",
+            details={"action": "Run nomnom setup in an interactive terminal"},
+        )
+
+    monkeypatch.setattr("nomnomcli.cli.sys.stdin", NonInteractive())
+    monkeypatch.setattr("nomnomcli.cli.setup_providers", setup)
+
+    assert main(["setup"]) == 2
+    captured = capsys.readouterr()
+    assert "Open Food Facts: free, no account or key" in captured.out
+    assert json.loads(captured.err)["error"]["code"] == "setup_requires_interactive"
 
 
 def test_cli_off_alternatives_are_additive_json(user_db, monkeypatch, capsys):

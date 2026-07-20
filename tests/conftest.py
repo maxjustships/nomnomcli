@@ -26,8 +26,8 @@ def seed_food_cache(connection, foods: list[dict]) -> None:
         connection.execute(
             """INSERT INTO food_cache
             (name, kcal, protein, fat, carbs, piece_grams, density_g_ml, source, fdc_id,
-             lookup_query)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             lookup_query, piece_grams_source, piece_grams_source_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 food["name"],
                 food["kcal"],
@@ -39,6 +39,12 @@ def seed_food_cache(connection, foods: list[dict]) -> None:
                 "fixture",
                 None,
                 food.get("lookup_query"),
+                "synthetic_serving" if food.get("piece_grams") is not None else None,
+                (
+                    f"{food['piece_grams']:g} g"
+                    if food.get("piece_grams") is not None
+                    else None
+                ),
             ),
         )
 

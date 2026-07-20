@@ -17,3 +17,24 @@ class NomnomError(Exception):
         if self.details:
             error["details"] = self.details
         return {"error": error}
+
+
+class ProviderUnavailableError(NomnomError):
+    """A provider failure whose retryability is explicit in the public contract."""
+
+    def __init__(
+        self,
+        provider: str,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(
+            code,
+            message,
+            details={"provider": provider, "retryable": retryable, **(details or {})},
+        )
+        self.provider = provider
+        self.retryable = retryable

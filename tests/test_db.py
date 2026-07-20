@@ -152,6 +152,8 @@ def test_connect_migrates_v1_database_without_losing_data(tmp_path):
             None,
             None,
             None,
+            None,
+            None,
         )
         assert tuple(connection.execute("SELECT * FROM log_entries").fetchone()) == (
             7,
@@ -196,9 +198,9 @@ def test_connect_creates_fresh_database_at_latest_schema(tmp_path):
         }
 
 
-def test_connect_migrates_v2_to_v3_without_losing_user_data(v2_database):
+def test_connect_migrates_v2_to_latest_without_losing_user_data(v2_database):
     with connect(v2_database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         assert tuple(connection.execute("SELECT * FROM food_cache").fetchone()) == (
             "v2 egg",
             155.0,
@@ -213,6 +215,8 @@ def test_connect_migrates_v2_to_v3_without_losing_user_data(v2_database):
             "Fixture",
             "v2 egg fixture",
             "[]",
+            None,
+            None,
         )
         assert tuple(connection.execute("SELECT * FROM log_entries").fetchone()) == (
             9,
@@ -240,7 +244,7 @@ def test_connect_migrates_v2_to_v3_without_losing_user_data(v2_database):
         assert connection.execute("SELECT count(*) FROM food_aliases").fetchone()[0] == 0
 
     with connect(v2_database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM recipes").fetchone()[0] == 1

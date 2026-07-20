@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
 
 LATEST_SCHEMA = (
@@ -25,7 +25,9 @@ LATEST_SCHEMA = (
     barcode TEXT,
     brand TEXT,
     lookup_query TEXT,
-    alternatives_json TEXT
+    alternatives_json TEXT,
+    piece_grams_source TEXT,
+    piece_grams_source_value TEXT
 )""",
     """CREATE TABLE log_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +103,20 @@ def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
+def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    columns = _column_names(connection, "food_cache")
+    additions = {
+        "piece_grams_source": "ALTER TABLE food_cache ADD COLUMN piece_grams_source TEXT",
+        "piece_grams_source_value": (
+            "ALTER TABLE food_cache ADD COLUMN piece_grams_source_value TEXT"
+        ),
+    }
+    for column, statement in additions.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4}
 
 
 def _initialize_database(connection: sqlite3.Connection) -> None:
