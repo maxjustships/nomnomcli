@@ -1,5 +1,76 @@
 # Plans
 
+## Issue #17 Source
+- Task: Fix the Open Food Facts full-text provider contract without live-test traffic.
+- Canonical input: GitHub issue #17 and the user's required behavior.
+- Repo context: `nomnomcli/off.py`, provider onboarding/doctor output, focused tests, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #17 Assumptions
+- OFF's legacy production full-text endpoint is `https://world.openfoodfacts.org/cgi/search.pl`.
+- Product/barcode reachability and full-text readiness are independent capabilities and must be reported separately.
+- Existing user-cache and USDA fallback behavior remains unchanged; OFF never substitutes v2 catalog rows for failed full-text search.
+
+## Issue #17 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M9 | Add failing OFF v1 and readiness contract tests | M8 | [x] |
+| M10 | Implement v1-only full-text and split probes | M9 | [x] |
+| M11 | Document status semantics and validate | M10 | [x] |
+| M12 | Audit and commit scoped changes | M11 | [x] |
+
+## M9. Add failing OFF v1 and readiness contract tests `[x]`
+### Goal
+- Capture endpoint, parameter, semantic, retry, no-fallback, confidence, and doctor contracts before implementation.
+
+### Validation
+```sh
+pytest -q tests/test_off.py tests/test_foods.py tests/test_config.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Record the expected RED failures before modifying runtime code.
+
+## M10. Implement v1-only full-text and split probes `[x]`
+### Goal
+- Free text uses only the capability-probed v1 CGI endpoint; v2 remains product/barcode-only.
+
+### Validation
+```sh
+pytest -q tests/test_off.py tests/test_foods.py tests/test_config.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Never add a v2 free-text fallback or live-network test to make a contract test pass.
+
+## M11. Document status semantics and validate `[x]`
+### Goal
+- README, setup output, and `skill/SKILL.md` explain product reachability versus full-text resolution readiness exactly.
+
+### Validation
+```sh
+pytest -q tests/test_off.py tests/test_foods.py tests/test_config.py tests/test_cli.py tests/test_install.py
+pytest -q
+ruff check .
+```
+
+### Stop-and-Fix Rule
+- Repair any focused, full-suite, or lint regression before committing.
+
+## M12. Audit and commit scoped changes `[x]`
+### Goal
+- Commit only coherent issue #17 code, tests, docs, and execution records before the separate push/PR step.
+
+### Validation
+```sh
+git diff --check
+git status --short
+git diff --stat
+```
+
+### Stop-and-Fix Rule
+- Do not commit until the diff is scoped and every acceptance gate passes.
+
 ## v0.2 Source
 - Task: Ship nomnomcli v0.2 resolving GitHub issues #1, #2, and #3.
 - Canonical input: User-provided release brief for size parsing, Open Food Facts, and data quality.

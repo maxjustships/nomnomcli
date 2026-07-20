@@ -12,7 +12,8 @@ from nomnomcli.errors import NomnomError, ProviderUnavailableError
 from nomnomcli.models import Food
 from nomnomcli.providers import RetryPolicy, request_with_retry
 
-OFF_SEARCH_URL = "https://api.openfoodfacts.org/api/v2/search"
+OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
+OFF_PRODUCT_PROBE_URL = "https://api.openfoodfacts.org/api/v2/product/0"
 OFF_FIELDS = "product_name,brands,nutriments,code,serving_size,categories,categories_tags"
 
 
@@ -93,6 +94,14 @@ class OpenFoodFactsClient:
         self.retry_policy = retry_policy or RetryPolicy()
         self.sleep = sleep
 
+    def _headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": (
+                f"nomnomcli/{__version__} "
+                "(+https://github.com/maxjustships/nomnomcli)"
+            )
+        }
+
     def _get_payload(self, query: str, page_size: int) -> dict:
         details = {
             "food": query,
@@ -104,22 +113,20 @@ class OpenFoodFactsClient:
         response = request_with_retry(
             provider="openfoodfacts",
             code="openfoodfacts_unavailable",
-            message="Open Food Facts lookup is unavailable",
+            message="Open Food Facts full-text search is unavailable",
             request_get=self._request_get or requests.get,
             url=OFF_SEARCH_URL,
             request_kwargs={
                 "params": {
                     "search_terms": query,
+                    "search_simple": 1,
+                    "action": "process",
+                    "json": 1,
                     "fields": OFF_FIELDS,
                     "page_size": page_size,
                 },
                 "timeout": 10,
-                "headers": {
-                    "User-Agent": (
-                        f"nomnomcli/{__version__} "
-                        "(+https://github.com/maxjustships/nomnomcli)"
-                    )
-                },
+                "headers": self._headers(),
             },
             details=details,
             retry_policy=self.retry_policy,
@@ -132,7 +139,7 @@ class OpenFoodFactsClient:
             raise ProviderUnavailableError(
                 "openfoodfacts",
                 "openfoodfacts_unavailable",
-                "Open Food Facts lookup is unavailable",
+                "Open Food Facts full-text search is unavailable",
                 retryable=False,
                 details={**details, "reason": "http_error", "status": status, "attempts": 1},
             ) from exc
@@ -153,7 +160,25 @@ class OpenFoodFactsClient:
         return payload
 
     def probe(self) -> bool:
-        self._get_payload("a", 1)
+        self._get_payload("nomnom", 1)
+        return True
+
+    def probe_product(self) -> bool:
+        request_with_retry(
+            provider="openfoodfacts",
+            code="openfoodfacts_unavailable",
+            message="Open Food Facts product lookup is unavailable",
+            request_get=self._request_get or requests.get,
+            url=OFF_PRODUCT_PROBE_URL,
+            request_kwargs={
+                "params": {"fields": "code"},
+                "timeout": 10,
+                "headers": self._headers(),
+            },
+            details={"capability": "product_lookup"},
+            retry_policy=self.retry_policy,
+            sleep=self.sleep,
+        )
         return True
 
     def search(self, query: str, page_size: int = 5) -> list[Food]:

@@ -68,8 +68,14 @@ def test_off_low_confidence_does_not_cache_candidate(
         def json(self):
             return {"products": [food_fixtures["off"]["cheese"]]}
 
+    urls = []
+
+    def get(url, *args, **kwargs):
+        urls.append(url)
+        return Response()
+
     monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
-    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(requests, "get", get)
 
     with pytest.raises(NomnomError) as caught:
         repository.resolve("кедровые орехи")
@@ -77,6 +83,7 @@ def test_off_low_confidence_does_not_cache_candidate(
     assert caught.value.code == "off_low_confidence"
     assert caught.value.details["candidate"]["name"] == "Cheese — Wrong Match"
     assert caught.value.details["alternatives"] == []
+    assert urls == ["https://world.openfoodfacts.org/cgi/search.pl"]
     assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
 

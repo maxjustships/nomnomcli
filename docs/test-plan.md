@@ -1,5 +1,32 @@
 # Test Plan
 
+## Issue #17 Source
+- Task: Validate the OFF full-text provider contract from GitHub issue #17.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-21
+
+## Issue #17 Validation Scope
+- In scope: v1 CGI URL and parameters, query-specific mocked results, no v2 free-text fallback, bounded 503/429 retry including `Retry-After`, split OFF doctor readiness, existing confidence filtering, README, setup output, and agent skill.
+- Out of scope: live OFF/USDA traffic, bundled food data, aliases, nutrition facts, or unrelated resolver behavior.
+
+## Issue #17 Fixtures and Network Rules
+- Every HTTP response is injected or monkeypatched; tests must be deterministic and replayable offline.
+- Distinct terms map to distinct mocked v1 payloads so forwarding semantics are observable.
+
+## Issue #17 Acceptance Gates
+- [x] Focused contract tests observed RED before runtime implementation.
+- [x] `pytest -q tests/test_off.py tests/test_foods.py tests/test_config.py tests/test_cli.py tests/test_install.py` — 62 passed.
+- [x] `pytest -q` — 126 passed.
+- [x] `ruff check .` — clean.
+- [x] `git diff --check` — clean.
+- [x] Scoped conventional commit created locally; no push or PR.
+
+## Issue #17 Negative / Edge Cases
+- v1 503 exhausts bounded retries and raises retryable `openfoodfacts_unavailable` without any v2 request.
+- A valid but unrelated v1 candidate remains rejected as `off_low_confidence` and is not cached.
+- Product/barcode HTTP reachability cannot make doctor report full-text resolution ready.
+
 ## v0.2 Source
 - Task: Validate nomnomcli v0.2 issues #1, #2, and #3.
 - Plan file: `docs/plans.md`

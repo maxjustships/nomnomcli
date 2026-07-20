@@ -123,12 +123,19 @@ def _run(args: argparse.Namespace) -> int:
         print("USDA FoodData Central: free API key; generic/raw foods and fallback.")
         print("USDA signup: https://fdc.nal.usda.gov/api-key-signup.html")
         result = setup_providers(interactive=sys.stdin.isatty())
-        off_status = (
+        off_product_status = (
             "reachable"
-            if result["providers"]["openfoodfacts"]["reachable"]
+            if result["providers"]["openfoodfacts"]["product_lookup_reachable"]
             else "unreachable"
         )
-        print(f"Open Food Facts (no key): {off_status}")
+        off_search_status = (
+            "ready"
+            if result["providers"]["openfoodfacts"]["full_text_search_ready"]
+            else "unavailable"
+        )
+        print(f"Open Food Facts product/barcode lookup (no key): {off_product_status}")
+        print(f"Open Food Facts full-text resolution: {off_search_status}")
+        print("Product reachability does not imply full-text readiness.")
         print(
             "USDA: reachable; key source "
             f"{result['providers']['usda']['key_source']}"
@@ -143,6 +150,16 @@ def _run(args: argparse.Namespace) -> int:
             print(_json_output(result))
         else:
             for provider, status in result["providers"].items():
+                if provider == "openfoodfacts":
+                    product_state = (
+                        "reachable" if status["product_lookup_reachable"] else "unreachable"
+                    )
+                    search_state = (
+                        "ready" if status["full_text_search_ready"] else "unavailable"
+                    )
+                    print(f"openfoodfacts product/barcode lookup: {product_state}")
+                    print(f"openfoodfacts full-text resolution: {search_state}")
+                    continue
                 state = "reachable" if status["reachable"] else "unreachable"
                 print(f"{provider}: {state}")
         return 0

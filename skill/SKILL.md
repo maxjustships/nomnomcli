@@ -107,13 +107,22 @@ human grams always override provider serving data, including per-piece input.
 
 ## Provider contract
 
-OFF search intentionally uses direct `requests` calls to the official REST endpoint
-`https://api.openfoodfacts.org/api/v2/search` with a descriptive User-Agent. No
-third-party OFF SDK or alternate `world` search host is used. Retryable 429/5xx
-failures use bounded backoff; never implement a silent provider/cache fallback.
+OFF free-text search intentionally uses direct `requests` calls to the official
+legacy v1 endpoint `https://world.openfoodfacts.org/cgi/search.pl` with
+`search_terms`, `search_simple=1`, `action=process`, `json=1`, `page_size`,
+supported response fields, and a descriptive User-Agent. API v2 is only for
+structured filters or product/barcode data: never send it free-text
+`search_terms`, and never use its unfiltered rows as fallback results. Retryable
+429/5xx failures use bounded backoff, including bounded numeric `Retry-After`;
+exhausted v1 failures are retryable `openfoodfacts_unavailable` errors.
 
-Use `nomnom doctor --json` when diagnosing resolution. Report only
-`configured`, `reachable`, and USDA `key_source`; never expose a credential value.
+Use `nomnom doctor --json` when diagnosing resolution. OFF
+`product_lookup_reachable` means only that the v2 product-by-barcode endpoint
+answered. OFF `full_text_search_ready` means the same v1 CGI capability used by
+free-text resolution returned a valid product-list payload. Product reachability
+must never be presented as full-text readiness. `configured` means OFF needs no
+credential; USDA retains `configured`, `reachable`, and `key_source`. Never expose
+a credential value.
 
 ## Stats
 

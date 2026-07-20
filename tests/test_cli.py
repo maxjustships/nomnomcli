@@ -291,7 +291,11 @@ def test_cli_leading_piece_count_with_explicit_grams_is_114g(
 def test_cli_doctor_json_contract(monkeypatch, capsys):
     expected = {
         "providers": {
-            "openfoodfacts": {"configured": True, "reachable": True},
+            "openfoodfacts": {
+                "configured": True,
+                "product_lookup_reachable": True,
+                "full_text_search_ready": False,
+            },
             "usda": {
                 "configured": False,
                 "reachable": False,
@@ -327,6 +331,37 @@ def test_cli_setup_passes_noninteractive_state_and_is_actionable(
     captured = capsys.readouterr()
     assert "Open Food Facts: free, no account or key" in captured.out
     assert json.loads(captured.err)["error"]["code"] == "setup_requires_interactive"
+
+
+def test_cli_setup_explains_independent_off_statuses(monkeypatch, capsys):
+    class Interactive:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("nomnomcli.cli.sys.stdin", Interactive())
+    monkeypatch.setattr(
+        "nomnomcli.cli.setup_providers",
+        lambda *, interactive: {
+            "providers": {
+                "openfoodfacts": {
+                    "configured": True,
+                    "product_lookup_reachable": True,
+                    "full_text_search_ready": False,
+                },
+                "usda": {
+                    "configured": True,
+                    "reachable": True,
+                    "key_source": "environment",
+                },
+            }
+        },
+    )
+
+    assert main(["setup"]) == 0
+    output = capsys.readouterr().out
+    assert "product/barcode lookup (no key): reachable" in output
+    assert "full-text resolution: unavailable" in output
+    assert "Product reachability does not imply full-text readiness." in output
 
 
 def test_cli_off_alternatives_are_additive_json(user_db, monkeypatch, capsys):

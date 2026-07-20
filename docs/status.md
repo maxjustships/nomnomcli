@@ -1,12 +1,13 @@
 # Status
 
 ## Snapshot
-- Current phase: v0.2 complete
+- Current phase: issue #17 complete
 - Plan file: `docs/plans.md`
 - Status: green
-- Last updated: 2026-07-19
+- Last updated: 2026-07-21
 
 ## Done
+- Fixed issue #17 with OFF v1-only full-text search, independent product/full-text probes, typed bounded 503 handling, deterministic contract coverage, and updated provider docs.
 - Built the complete package, 431-food database, 258-entry Russian synonym layer, CLI, recipes, installer, skill, docs, CI, and tests.
 - Passed 30 pytest tests and Ruff with no issues.
 - Passed the exact mixed-Russian log/stats flow, fixture recipe import/log, and installer dry-run.
@@ -19,14 +20,17 @@
 - None.
 
 ## Next
-- No push or PR was requested; the local conventional release commit is the handoff point.
+- Push `feat/off-fulltext-contract` and open the issue #17 pull request after independent verification.
 
 ## Decisions Made
+- Route all OFF free text to legacy v1 `/cgi/search.pl`; never pass `search_terms` to v2.
+- Report OFF product/barcode reachability separately from full-text resolution readiness.
 - Use stdlib `argparse` — keeps runtime dependencies to `requests` only.
 - Use SQLite for shipped foods and per-user mutable state — matches the offline-first contract.
 - Reuse `scripts/build_mini_db.py --update-existing` for deterministic offline v0.2 data repair without shrinking the tracked USDA corpus.
 
 ## Assumptions In Force
+- Issue #17 tests use only mocked/replay transports and never live OFF traffic.
 - Agent confirmation is an operating pattern, not a pending database transaction in v0.1.
 - Named brands are never resolved to bundled generic foods; manual cache entries are the offline escape hatch.
 - Descriptor weights are estimates that must be surfaced as assumptions in JSON and text.
@@ -52,6 +56,8 @@ ruff check .
 | 2026-07-19 | M6 | OFF client, food repository, cache migration, CLI add, tests | mocked OFF success/503/network/malformed/ambiguity/cache runs | pass | M7 |
 | 2026-07-19 | M7 | data overrides, offline seed, bundled SQLite, builder, quality tests | `build_mini_db.py --update-existing`; deterministic hash audit | 431 rows; pass | M8 |
 | 2026-07-19 | M8 | README, skill, version, planning docs | `pytest -q`; `ruff check .`; exact isolated smoke; diff/junk audit | 72 pass; clean | commit |
+| 2026-07-21 | M9 | OFF, food confidence, doctor/setup contract tests | `PYTHONPATH=. pytest -q tests/test_off.py tests/test_foods.py tests/test_config.py tests/test_cli.py`; focused setup test | RED: missing product probe; RED: missing status explanation | M10 |
+| 2026-07-21 | M10–M11 | OFF client, onboarding/CLI, README, skill, tests | focused pytest; full pytest; full Ruff | 62 pass; 126 pass; clean | M12 |
 
 ## Smoke / Demo Checklist
 - [x] Russian mixed-item log works and persists.
@@ -63,3 +69,5 @@ ruff check .
 - [x] OFF success/failure paths are covered without live traffic.
 - [x] Bundled database passes v0.2 quality tests.
 - [x] Version and documentation report 0.2.0 behavior.
+- [x] OFF free text uses v1 with no unfiltered v2 fallback.
+- [x] Doctor and setup distinguish product/barcode reachability from full-text readiness.
