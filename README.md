@@ -37,10 +37,12 @@ nomnom setup
 nomnom doctor --json
 ```
 
-Run `nomnom setup` in an interactive terminal before the first food log. It probes Open Food
-Facts, explains that OFF needs no key, shows the official USDA signup URL, validates the USDA key
-with a minimal FoodData Central request, and only then stores it locally. Follow with
-`nomnom doctor --json` to verify current provider reachability instead of assuming setup worked.
+Run `nomnom setup` in an interactive terminal before the first food log. It independently probes
+Open Food Facts product/barcode lookup and full-text resolution, explains that OFF needs no key,
+shows the official USDA signup URL, validates the USDA key with a minimal FoodData Central request,
+and only then stores it locally. Follow with `nomnom doctor --json` to verify current provider
+readiness instead of assuming setup worked. OFF product reachability does not imply that full-text
+resolution is ready.
 
 USDA credentials are local user configuration, never repository or database content. The default
 path is `$XDG_CONFIG_HOME/nomnomcli/config.toml` or `~/.config/nomnomcli/config.toml`, written with
@@ -73,13 +75,18 @@ Successful API results are cached in the user's database, so the same food can r
 later. Existing v0.2 cache records, logs, and recipes are preserved when v0.3 opens the database.
 `nomnom search QUERY` searches this user cache; it is not a packaged food catalog.
 
-Open Food Facts search goes directly through its official REST endpoint,
-`https://api.openfoodfacts.org/api/v2/search`, with a descriptive nomnomcli User-Agent. Direct
-`requests` calls are intentional: the official REST contract is small and transparent, while a
-third-party OFF SDK would add an unofficial dependency without adding an authenticated workflow or
-schema capability. nomnom applies bounded backoff to HTTP 429 and 5xx responses, safely honors a
-numeric `Retry-After`, and reports a typed retryable `openfoodfacts_unavailable` error after retries
-are exhausted. It never silently falls back to the unstable `world` search host.
+Open Food Facts free-text search goes directly through the official legacy v1 endpoint,
+`https://world.openfoodfacts.org/cgi/search.pl`, with `search_terms`, `search_simple=1`,
+`action=process`, `json=1`, `page_size`, the supported response `fields`, and a descriptive
+nomnomcli User-Agent. API v2 search is structured/filter-only: nomnom never sends free-text
+`search_terms` to v2 and never falls back to unfiltered v2 catalog rows. Direct `requests` calls are
+intentional because this small provider contract remains explicit and replay-testable.
+
+Both OFF capabilities use bounded backoff for HTTP 429 and 5xx responses and safely honor a
+numeric, bounded `Retry-After`. If v1 remains unavailable after retries, free-text resolution raises
+the typed retryable error `openfoodfacts_unavailable`; it does not silently change endpoint or
+return unrelated products. Product normalization and the token/category confidence checks still
+apply to every v1 candidate.
 
 ### Enable USDA fallback
 
@@ -194,8 +201,15 @@ an `error` object and exit with status 2. Important codes include:
 - `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
 
-Provider-unavailable errors include a `retryable` boolean. `nomnom doctor --json` always emits only
-provider `configured`/`reachable` state and USDA `key_source`; it never includes credential values.
+Provider-unavailable errors include a `retryable` boolean. In `nomnom doctor --json`, OFF reports:
+
+- `product_lookup_reachable`: the v2 product-by-barcode endpoint answered after bounded retries;
+  this says nothing about free-text search.
+- `full_text_search_ready`: the same v1 CGI capability used by runtime free-text resolution
+  answered with a valid product-list payload; when false, OFF free-text resolution is unavailable.
+
+`configured` means OFF needs no credential. USDA retains `configured`, `reachable`, and
+`key_source`. Doctor never includes credential values.
 
 Successful logs are stored immediately. Agents should show the returned names, grams, confidence,
 alternatives, and assumptions before treating the resolution as confirmed.

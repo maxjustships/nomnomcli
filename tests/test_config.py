@@ -11,6 +11,9 @@ from nomnomcli.onboarding import doctor_report, setup_providers
 
 
 class HealthyOFF:
+    def probe_product(self):
+        return True
+
     def probe(self):
         return True
 
@@ -76,6 +79,11 @@ def test_interactive_setup_validates_before_secure_write(tmp_path):
         "configured": True,
         "reachable": True,
         "key_source": "user_config",
+    }
+    assert result["providers"]["openfoodfacts"] == {
+        "configured": True,
+        "product_lookup_reachable": True,
+        "full_text_search_ready": True,
     }
     assert usda.keys == ["new-placeholder"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -149,7 +157,11 @@ def test_doctor_report_is_deterministic_and_never_contains_key(tmp_path):
 
     assert report == {
         "providers": {
-            "openfoodfacts": {"configured": True, "reachable": True},
+            "openfoodfacts": {
+                "configured": True,
+                "product_lookup_reachable": True,
+                "full_text_search_ready": True,
+            },
             "usda": {
                 "configured": True,
                 "reachable": True,
@@ -158,3 +170,29 @@ def test_doctor_report_is_deterministic_and_never_contains_key(tmp_path):
         }
     }
     assert "never-print-placeholder" not in json.dumps(report)
+
+
+def test_doctor_distinguishes_off_product_reachability_from_full_text_readiness(
+    tmp_path,
+):
+    class ProductOnlyOFF:
+        def probe_product(self):
+            return True
+
+        def probe(self):
+            raise NomnomError(
+                "openfoodfacts_unavailable",
+                "Open Food Facts full-text search is unavailable",
+            )
+
+    report = doctor_report(
+        config=ProviderConfig(environ={}, config_path=tmp_path / "config.toml"),
+        off_client=ProductOnlyOFF(),
+        usda_client=HealthyUSDA(),
+    )
+
+    assert report["providers"]["openfoodfacts"] == {
+        "configured": True,
+        "product_lookup_reachable": True,
+        "full_text_search_ready": False,
+    }

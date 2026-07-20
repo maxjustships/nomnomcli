@@ -17,6 +17,14 @@ def _reachable(probe: Callable[[], bool]) -> bool:
         return False
 
 
+def _off_status(off: OpenFoodFactsClient) -> dict:
+    return {
+        "configured": True,
+        "product_lookup_reachable": _reachable(off.probe_product),
+        "full_text_search_ready": _reachable(off.probe),
+    }
+
+
 def doctor_report(
     *,
     config: ProviderConfig | None = None,
@@ -32,7 +40,7 @@ def doctor_report(
         credential = None
     return {
         "providers": {
-            "openfoodfacts": {"configured": True, "reachable": _reachable(off.probe)},
+            "openfoodfacts": _off_status(off),
             "usda": {
                 "configured": credential is not None,
                 "reachable": (
@@ -57,13 +65,13 @@ def setup_providers(
     provider_config = config or ProviderConfig()
     off = off_client or OpenFoodFactsClient()
     usda = usda_client or USDAClient()
-    off_reachable = _reachable(off.probe)
+    off_status = _off_status(off)
     credential = provider_config.usda_credential()
     if credential is not None:
         usda.probe(credential.value)
         return {
             "providers": {
-                "openfoodfacts": {"configured": True, "reachable": off_reachable},
+                "openfoodfacts": off_status,
                 "usda": {
                     "configured": True,
                     "reachable": True,
@@ -94,7 +102,7 @@ def setup_providers(
     path = provider_config.store_usda_key(api_key)
     return {
         "providers": {
-            "openfoodfacts": {"configured": True, "reachable": off_reachable},
+            "openfoodfacts": off_status,
             "usda": {"configured": True, "reachable": True, "key_source": "user_config"},
         },
         "config_path": str(path),

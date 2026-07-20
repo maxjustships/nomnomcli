@@ -4,7 +4,7 @@ import pytest
 import requests
 
 from nomnomcli.errors import NomnomError, ProviderUnavailableError
-from nomnomcli.off import OFF_SEARCH_URL, OpenFoodFactsClient
+from nomnomcli.off import OFF_PRODUCT_PROBE_URL, OFF_SEARCH_URL, OpenFoodFactsClient
 from nomnomcli.providers import RetryPolicy
 
 
@@ -40,7 +40,7 @@ def product(name="Whole Grain Bread", brand="Acme", code="0123456789012", kcal=2
     }
 
 
-def test_off_v2_search_normalizes_product(monkeypatch):
+def test_off_v1_full_text_search_uses_official_contract(monkeypatch):
     captured = {}
 
     def fake_get(url, **kwargs):
@@ -50,12 +50,14 @@ def test_off_v2_search_normalizes_product(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
     foods = OpenFoodFactsClient().search("Acme bread", page_size=3)
 
-    assert OFF_SEARCH_URL == "https://api.openfoodfacts.org/api/v2/search"
-    assert "world.openfoodfacts.org" not in captured["url"]
+    assert OFF_SEARCH_URL == "https://world.openfoodfacts.org/cgi/search.pl"
     assert captured == {
         "url": OFF_SEARCH_URL,
         "params": {
             "search_terms": "Acme bread",
+            "search_simple": 1,
+            "action": "process",
+            "json": 1,
             "fields": (
                 "product_name,brands,nutriments,code,serving_size,"
                 "categories,categories_tags"
@@ -73,6 +75,72 @@ def test_off_v2_search_normalizes_product(monkeypatch):
     assert (foods[0].kcal, foods[0].protein, foods[0].fat, foods[0].carbs) == (250, 9, 4, 45)
 
 
+def test_off_v1_distinct_terms_receive_distinct_results():
+    requested_terms = []
+
+    def replay_get(url, **kwargs):
+        assert url == OFF_SEARCH_URL
+        term = kwargs["params"]["search_terms"]
+        requested_terms.append(term)
+        return Response({"products": [product(name=f"Result for {term}")]})
+
+    client = OpenFoodFactsClient(request_get=replay_get)
+
+    soy = client.search("soy protein isolate")
+    peanuts = client.search("peanuts")
+
+    assert requested_terms == ["soy protein isolate", "peanuts"]
+    assert soy[0].name == "Result for soy protein isolate — Acme"
+    assert peanuts[0].name == "Result for peanuts — Acme"
+    assert soy != peanuts
+
+
+def test_off_probe_exercises_same_v1_full_text_capability():
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response({"products": []})
+
+    assert OpenFoodFactsClient(request_get=get).probe() is True
+    assert len(calls) == 1
+    assert calls[0][0] == OFF_SEARCH_URL
+    assert {
+        "search_terms": "nomnom",
+        "search_simple": 1,
+        "action": "process",
+        "json": 1,
+        "page_size": 1,
+    }.items() <= calls[0][1]["params"].items()
+    assert "fields" in calls[0][1]["params"]
+    assert "/api/v2/search" not in calls[0][0]
+
+
+def test_off_product_probe_uses_v2_barcode_endpoint_without_free_text():
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response({"status": 0})
+
+    assert OpenFoodFactsClient(request_get=get).probe_product() is True
+    assert calls == [
+        (
+            OFF_PRODUCT_PROBE_URL,
+            {
+                "params": {"fields": "code"},
+                "timeout": 10,
+                "headers": {
+                    "User-Agent": (
+                        "nomnomcli/0.3.0 (+https://github.com/maxjustships/nomnomcli)"
+                    )
+                },
+            },
+        )
+    ]
+    assert "search_terms" not in calls[0][1]["params"]
+
+
 def test_off_rejects_candidate_with_nonpositive_core_nutrient(monkeypatch):
     candidate = product()
     candidate["nutriments"]["fat_100g"] = 0
@@ -86,7 +154,13 @@ def test_off_rejects_candidate_with_nonpositive_core_nutrient(monkeypatch):
 
 
 def test_off_http_503_is_clear(monkeypatch):
-    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response(status_code=503))
+    urls = []
+
+    def unavailable(url, **kwargs):
+        urls.append(url)
+        return Response(status_code=503)
+
+    monkeypatch.setattr(requests, "get", unavailable)
     with pytest.raises(ProviderUnavailableError) as caught:
         OpenFoodFactsClient(sleep=lambda _: None).search("Acme bread")
     assert caught.value.code == "openfoodfacts_unavailable"
@@ -94,6 +168,8 @@ def test_off_http_503_is_clear(monkeypatch):
     assert caught.value.details["attempts"] == 3
     assert caught.value.details["retryable"] is True
     assert "nomnom add" in caught.value.details["offline_escape"]
+    assert urls == [OFF_SEARCH_URL, OFF_SEARCH_URL, OFF_SEARCH_URL]
+    assert all("/api/v2/search" not in url for url in urls)
 
 
 def test_off_network_error_is_clear(monkeypatch):
