@@ -58,6 +58,33 @@ nomnom log --food "chickpeas, cooked" --grams 150 --json
 
 Always use the human's weight.
 
+## Exact package capture
+
+When an exact packaged food is needed, do not substitute a generic food or ask the human to look up
+label numbers manually. Ask for the barcode first, or request a clear package photo when the barcode
+is unavailable or incomplete in Open Food Facts.
+
+```sh
+nomnom capture barcode "BARCODE" --json
+```
+
+Barcode capture uses the OFF v2 product endpoint only. If it returns `invalid_barcode`,
+`barcode_not_found`, or `barcode_nutrition_incomplete`, request a package photo. Read the product
+name, brand, per-100 g kcal/protein/fat/carbs, and optional serving grams from the supplied image,
+then run:
+
+```sh
+nomnom capture label --name NAME --brand BRAND \
+  --kcal KCAL --protein PROTEIN --fat FAT --carbs CARBS \
+  --serving-grams GRAMS --source-note "image:LOCAL_REFERENCE" --json
+```
+
+Omit `--brand` or `--serving-grams` only when the label does not provide them. `--source-note` is
+always required and must be a nonempty local/opaque reference to the supplied image or barcode.
+Vision/OCR remains agent-side: never pass the photo to nomnom, and never store image content or
+invent a missing value. A successful capture returns `resolution_mode=exact_product`, source id,
+source note, and provenance. Use its exact returned `name` for an alias or later log.
+
 ## User aliases
 
 When the user wants a durable phrase for an exact food already in their local
@@ -71,7 +98,7 @@ Aliases are user-database records, never packaged translations. They resolve
 only to exact local cache names and must not invent, approximate, or remotely
 substitute a target.
 
-## Unknown-food workflow: OFF → USDA → add → error
+## Unknown-food workflow: OFF → safe USDA proxy → capture → error
 
 The CLI automatically checks exact user alias, exact cache, cache search, then
 Open Food Facts.
@@ -79,18 +106,16 @@ For an unresolved food:
 
 1. Let OFF run. For `off_low_confidence`, show its `candidate` and
    `alternatives`; do not accept one without the user's explicit choice.
-2. Let USDA run only when setup or `NOMNOM_USDA_KEY` has configured it. For
+2. Let USDA run only when setup or `NOMNOM_USDA_KEY` has configured it. The default
+   `allow_for_unbranded` policy accepts only unbranded generic records with an FDC id, complete
+   validated nutrition, sufficient confidence, and full query-token coverage. Always show returned
+   `assumptions`. Never treat a branded or SKU-like query as a generic proxy. For
    `usda_key_required`, offer `nomnom setup` and the free-key URL returned in
    `details`. Use the environment only for non-interactive/CI operation.
-3. If the user has verified label values, manually pin them:
-
-   ```sh
-   nomnom add --name NAME --brand BRAND --kcal KCAL \
-     --protein PROTEIN --fat FAT --carbs CARBS --piece-grams GRAMS --json
-   ```
-
-   Omit `--piece-grams` when the label does not provide a serving weight.
-4. If OFF, USDA, and a verified manual pin cannot resolve the food, report the
+3. On `generic_proxy_confirmation_required`, show the candidate and ask; do not change policy or
+   write anything without the user's choice. On `exact_resolution_required`, ask for the package
+   barcode or photo and use the exact capture flow above.
+4. If OFF, USDA, and source-backed capture cannot resolve the food, report the
    structured error. Never substitute a similar food or invent values.
 
 Other error handling:

@@ -20,6 +20,12 @@ class Food:
     brand: str | None = None
     categories: tuple[str, ...] = ()
     alternatives: tuple[dict[str, str], ...] = ()
+    resolution_mode: str = "legacy"
+    source_id: str | None = None
+    source_note: str | None = None
+    provenance: str | None = None
+    assumption: str | None = None
+    provider_data_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +44,10 @@ class ResolvedItem:
     barcode: str | None = None
     brand: str | None = None
     alternatives: tuple[dict[str, str], ...] | None = None
+    resolution_mode: str | None = None
+    source_id: str | None = None
+    source_note: str | None = None
+    provenance: str | None = None
 
     def to_dict(self) -> dict[str, str | float | bool]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -59,6 +69,7 @@ def scale_food(
     assumption: str | None = None,
 ) -> ResolvedItem:
     factor = grams / 100.0
+    assumptions = [value for value in (food.assumption, assumption) if value]
     return ResolvedItem(
         name=food.name,
         grams=round_nutrition(grams),
@@ -67,13 +78,17 @@ def scale_food(
         fat=round_nutrition(food.fat * factor),
         carbs=round_nutrition(food.carbs * factor),
         match_confidence=round(confidence, 2),
-        assumed=assumed,
-        assumption=assumption,
+        assumed=assumed if assumed is not None else (True if food.assumption else None),
+        assumption="; ".join(assumptions) if assumptions else None,
         source=food.source if food.source != "unknown" else None,
         fdc_id=food.fdc_id,
         barcode=food.barcode,
         brand=food.brand,
         alternatives=food.alternatives or None,
+        resolution_mode=food.resolution_mode,
+        source_id=food.source_id,
+        source_note=food.source_note,
+        provenance=food.provenance,
     )
 
 

@@ -151,6 +151,9 @@ def _normalize_record(record: dict) -> tuple[Food | None, list[str]]:
         piece_grams_source_value=source_value,
         source="usda",
         fdc_id=int(record["fdcId"]) if record.get("fdcId") is not None else None,
+        source_id=(str(record["fdcId"]) if record.get("fdcId") is not None else None),
+        provenance="usda",
+        provider_data_type=str(record.get("dataType") or "").strip() or None,
         brand=str(record.get("brandOwner") or "").strip() or None,
         categories=(category,) if category else (),
     )

@@ -4,7 +4,11 @@ import pytest
 import requests
 
 from nomnomcli.errors import NomnomError, ProviderUnavailableError
-from nomnomcli.off import OFF_PRODUCT_PROBE_URL, OFF_SEARCH_URL, OpenFoodFactsClient
+from nomnomcli.off import (
+    OFF_PRODUCT_PROBE_URL,
+    OFF_SEARCH_URL,
+    OpenFoodFactsClient,
+)
 from nomnomcli.providers import RetryPolicy
 
 
@@ -65,7 +69,7 @@ def test_off_v1_full_text_search_uses_official_contract(monkeypatch):
             "page_size": 3,
         },
         "timeout": 10,
-        "headers": {"User-Agent": "nomnomcli/0.3.0 (+https://github.com/maxjustships/nomnomcli)"},
+        "headers": {"User-Agent": "nomnomcli/0.4.0 (+https://github.com/maxjustships/nomnomcli)"},
     }
     assert foods[0].name == "Whole Grain Bread — Acme"
     assert foods[0].source == "openfoodfacts"
@@ -132,13 +136,73 @@ def test_off_product_probe_uses_v2_barcode_endpoint_without_free_text():
                 "timeout": 10,
                 "headers": {
                     "User-Agent": (
-                        "nomnomcli/0.3.0 (+https://github.com/maxjustships/nomnomcli)"
+                        "nomnomcli/0.4.0 (+https://github.com/maxjustships/nomnomcli)"
                     )
                 },
             },
         )
     ]
     assert "search_terms" not in calls[0][1]["params"]
+
+
+def test_off_barcode_capture_uses_exact_v2_product_endpoint_only():
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response({"status": 1, "product": product(code="0123456789012")})
+
+    food = OpenFoodFactsClient(request_get=get).product_by_barcode("0123456789012")
+
+    assert calls == [
+        (
+            "https://api.openfoodfacts.org/api/v2/product/0123456789012",
+            {
+                "params": {"fields": (
+                    "product_name,brands,nutriments,code,serving_size,"
+                    "categories,categories_tags"
+                )},
+                "timeout": 10,
+                "headers": {
+                    "User-Agent": (
+                        "nomnomcli/0.4.0 (+https://github.com/maxjustships/nomnomcli)"
+                    )
+                },
+            },
+        )
+    ]
+    assert food.barcode == "0123456789012"
+    assert food.source == "openfoodfacts"
+    assert food.source_id == "0123456789012"
+    assert food.resolution_mode == "exact_product"
+    assert "search_terms" not in calls[0][1]["params"]
+
+
+@pytest.mark.parametrize("barcode", ["", "abc", "1234567", "123456789012345"])
+def test_off_barcode_capture_rejects_invalid_code_without_request(barcode):
+    client = OpenFoodFactsClient(
+        request_get=lambda *args, **kwargs: pytest.fail("invalid barcode must not request")
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        client.product_by_barcode(barcode)
+
+    assert caught.value.code == "invalid_barcode"
+
+
+def test_off_barcode_capture_rejects_incomplete_core_nutrition():
+    incomplete = product()
+    del incomplete["nutriments"]["proteins_100g"]
+    client = OpenFoodFactsClient(
+        request_get=lambda *args, **kwargs: Response(
+            {"status": 1, "product": incomplete}
+        )
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        client.product_by_barcode("0123456789012")
+
+    assert caught.value.code == "barcode_nutrition_incomplete"
 
 
 def test_off_rejects_candidate_with_nonpositive_core_nutrient(monkeypatch):

@@ -3,10 +3,183 @@ from __future__ import annotations
 import pytest
 import requests
 
+from nomnomcli.config import ProviderConfig
 from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import Food
+
+
+def _usda_generic_response(description="Chicken breast, roasted", *, branded=False):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "foods": [
+                    {
+                        "fdcId": 171477,
+                        "description": description,
+                        "dataType": "Branded" if branded else "Foundation",
+                        "brandOwner": "Acme" if branded else None,
+                        "foodCategory": "Poultry Products",
+                        "foodNutrients": [
+                            {
+                                "nutrientId": 1008,
+                                "nutrientName": "Energy",
+                                "unitName": "KCAL",
+                                "value": 165,
+                            },
+                            {
+                                "nutrientId": 1003,
+                                "nutrientName": "Protein",
+                                "unitName": "G",
+                                "value": 31,
+                            },
+                            {
+                                "nutrientId": 1004,
+                                "nutrientName": "Total lipid (fat)",
+                                "unitName": "G",
+                                "value": 3.6,
+                            },
+                            {
+                                "nutrientId": 1005,
+                                "nutrientName": "Carbohydrate, by difference",
+                                "unitName": "G",
+                                "value": 1,
+                            },
+                        ],
+                    }
+                ]
+            }
+
+    return Response()
+
+
+def test_default_unbranded_usda_fallback_is_explicit_generic_proxy(
+    repository, monkeypatch
+):
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.delenv("NOMNOM_GENERIC_PROXY_POLICY", raising=False)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _usda_generic_response())
+
+    food, confidence = repository.resolve("chicken breast roasted")
+
+    assert confidence >= 0.8
+    assert food.name == "chicken breast, roasted"
+    assert food.source == "usda"
+    assert food.source_id == "171477"
+    assert food.resolution_mode == "generic_proxy"
+    assert food.assumption == (
+        "Brand not specified; used USDA generic proxy: chicken breast, roasted."
+    )
+    row = repository.user_connection.execute(
+        """SELECT resolution_mode, source_id, provenance, assumption
+        FROM food_cache WHERE name = ?""",
+        (food.name,),
+    ).fetchone()
+    assert tuple(row) == (
+        "generic_proxy",
+        "171477",
+        "usda",
+        "Brand not specified; used USDA generic proxy: chicken breast, roasted.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "error_code"),
+    [
+        ("ask", "generic_proxy_confirmation_required"),
+        ("exact_only", "exact_resolution_required"),
+    ],
+)
+def test_generic_proxy_policy_returns_structured_candidate_without_writes(
+    user_db, monkeypatch, tmp_path, policy, error_code
+):
+    config_path = tmp_path / f"{policy}.toml"
+    config_path.write_text(
+        f'[resolution]\ngeneric_proxy_policy = "{policy}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _usda_generic_response())
+
+    with connect(user_db) as connection:
+        repository = FoodRepository(
+            connection,
+            provider_config=ProviderConfig(
+                environ={"NOMNOM_USDA_KEY": "test-key"}, config_path=config_path
+            ),
+        )
+        with pytest.raises(NomnomError) as caught:
+            repository.resolve("chicken breast roasted")
+
+        assert caught.value.code == error_code
+        assert caught.value.details["candidate"] == {
+            "name": "chicken breast, roasted",
+            "source": "usda",
+            "source_id": "171477",
+            "resolution_mode": "generic_proxy",
+            "confidence": pytest.approx(caught.value.details["candidate"]["confidence"]),
+        }
+        assert caught.value.details["candidate"]["confidence"] >= 0.8
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "query", ["Acme chicken breast roasted", "chicken breast roasted 12345"]
+)
+def test_brand_or_sku_token_denies_usda_generic_fallback_even_when_policy_allows(
+    repository, monkeypatch, query
+):
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setenv("NOMNOM_GENERIC_PROXY_POLICY", "allow_for_unbranded")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _usda_generic_response())
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(query)
+
+    assert caught.value.code == "exact_resolution_required"
+    assert "barcode" in caught.value.details["action"].casefold()
+    assert "photo" in caught.value.details["action"].casefold()
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_usda_branded_record_is_never_a_generic_proxy(repository, monkeypatch):
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *args, **kwargs: _usda_generic_response(branded=True),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("chicken breast roasted")
+
+    assert caught.value.code == "exact_resolution_required"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_cached_generic_proxy_is_not_reused_for_later_branded_query(
+    repository, monkeypatch
+):
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _usda_generic_response())
+    repository.resolve("chicken breast roasted")
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("Acme chicken breast roasted")
+
+    assert caught.value.code == "exact_resolution_required"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
 
 
 def test_repository_does_not_read_bundled_food_resources(user_db, monkeypatch):
@@ -313,6 +486,9 @@ def test_named_brand_never_substitutes_generic_food(repository, monkeypatch):
         source="openfoodfacts",
         barcode="42",
         brand="Acme",
+        resolution_mode="exact_product",
+        source_id="42",
+        provenance="openfoodfacts",
     )
     monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [branded])
     food, _ = repository.resolve("bread Acme")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -18,6 +19,11 @@ USDA_KEY_REQUIRED_MESSAGE = (
     "then run nomnom setup or set NOMNOM_USDA_KEY."
 )
 USDA_KEY_SETUP = f"Run nomnom setup; signup: {USDA_SETUP_URL}"
+GENERIC_USDA_DATA_TYPES = frozenset({"foundation", "sr legacy", "survey (fndds)"})
+EXACT_CAPTURE_ACTION = (
+    "Provide the package barcode or photo so the agent can run nomnom capture "
+    "barcode or nomnom capture label"
+)
 
 
 def normalize_name(value: str) -> str:
@@ -79,6 +85,24 @@ def _brand_matches_query(food: Food, query: str) -> bool:
     )
 
 
+def _generic_proxy_query_is_safe(query: str, food: Food) -> bool:
+    query_tokens = _name_tokens(query)
+    candidate_tokens = _name_tokens(food.name)
+    return bool(query_tokens) and query_tokens <= candidate_tokens and not any(
+        token.isdigit() for token in query_tokens
+    )
+
+
+def _generic_proxy_candidate(food: Food, confidence: float) -> dict:
+    return {
+        "name": food.name,
+        "source": "usda",
+        "source_id": str(food.fdc_id),
+        "resolution_mode": "generic_proxy",
+        "confidence": round(confidence, 2),
+    }
+
+
 class FoodRepository:
     def __init__(
         self,
@@ -124,7 +148,97 @@ class FoodRepository:
             barcode=(str(row["barcode"]) if "barcode" in columns and row["barcode"] else None),
             brand=(str(row["brand"]) if "brand" in columns and row["brand"] else None),
             alternatives=alternatives,
+            resolution_mode=(
+                str(row["resolution_mode"])
+                if "resolution_mode" in columns and row["resolution_mode"]
+                else "legacy"
+            ),
+            source_id=(
+                str(row["source_id"])
+                if "source_id" in columns and row["source_id"]
+                else None
+            ),
+            source_note=(
+                str(row["source_note"])
+                if "source_note" in columns and row["source_note"]
+                else None
+            ),
+            provenance=(
+                str(row["provenance"])
+                if "provenance" in columns and row["provenance"]
+                else str(row["source"])
+            ),
+            assumption=(
+                str(row["assumption"])
+                if "assumption" in columns and row["assumption"]
+                else None
+            ),
         )
+
+    def _apply_generic_proxy_policy(
+        self, food: Food, confidence: float
+    ) -> tuple[Food, float]:
+        if food.resolution_mode != "generic_proxy":
+            return food, confidence
+        policy = self.provider_config.generic_proxy_policy()
+        if policy == "allow_for_unbranded":
+            return food, confidence
+        candidate = _generic_proxy_candidate(food, confidence)
+        if policy == "ask":
+            raise NomnomError(
+                "generic_proxy_confirmation_required",
+                f"Confirm the USDA generic proxy for: {food.name}",
+                details={
+                    "candidate": candidate,
+                    "policy": policy,
+                    "action": (
+                        "Confirm this named USDA proxy by setting the policy to "
+                        "allow_for_unbranded, or provide a package barcode/photo"
+                    ),
+                },
+            )
+        raise NomnomError(
+            "exact_resolution_required",
+            f"Exact product resolution is required for: {food.name}",
+            details={"candidate": candidate, "policy": policy, "action": EXACT_CAPTURE_ACTION},
+        )
+
+    def _prepare_usda_generic_proxy(
+        self, query: str, food: Food, confidence: float
+    ) -> tuple[Food, float]:
+        generic_type = (food.provider_data_type or "").casefold()
+        eligible = (
+            food.source == "usda"
+            and food.fdc_id is not None
+            and food.brand is None
+            and generic_type in GENERIC_USDA_DATA_TYPES
+            and _generic_proxy_query_is_safe(query, food)
+        )
+        if not eligible:
+            raise NomnomError(
+                "exact_resolution_required",
+                f"Exact product resolution is required for: {query}",
+                details={
+                    "food": query,
+                    "candidate": {
+                        "name": food.name,
+                        "source": food.source,
+                        "source_id": str(food.fdc_id) if food.fdc_id is not None else None,
+                        "data_type": food.provider_data_type,
+                        "brand": food.brand,
+                        "confidence": round(confidence, 2),
+                    },
+                    "action": EXACT_CAPTURE_ACTION,
+                },
+            )
+        proxy = replace(
+            food,
+            resolution_mode="generic_proxy",
+            source_id=str(food.fdc_id),
+            provenance="usda",
+            assumption=f"Brand not specified; used USDA generic proxy: {food.name}.",
+        )
+        return self._apply_generic_proxy_policy(proxy, confidence)
 
     def _find_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
@@ -175,20 +289,24 @@ class FoodRepository:
         normalized = normalize_name(query)
         alias = self._alias_target(normalized)
         if alias is not None:
-            return alias, 1.0
+            return self._apply_generic_proxy_policy(alias, 1.0)
 
         exact = self._find_exact(normalized)
         if exact:
-            return exact, 1.0
+            return self._apply_generic_proxy_policy(exact, 1.0)
 
         canonical = self._canonicalize_query(normalized)
         exact = self._find_exact(canonical)
         if exact:
-            return exact, 0.98 if canonical != normalized else 1.0
+            return self._apply_generic_proxy_policy(
+                exact, 0.98 if canonical != normalized else 1.0
+            )
 
         ranked_cache_matches = self._ranked_user_cache_matches(canonical, limit=5)
         if ranked_cache_matches:
-            return self._row_to_food(ranked_cache_matches[0]), 0.85
+            return self._apply_generic_proxy_policy(
+                self._row_to_food(ranked_cache_matches[0]), 0.85
+            )
 
         matches = self.search(canonical, limit=5)
         if len(matches) == 1:
@@ -257,12 +375,19 @@ class FoodRepository:
                         }
                         for alternative in off_matches[1:]
                     )
-                    food = replace(off_matches[0], alternatives=alternatives)
+                    food = replace(
+                        off_matches[0],
+                        alternatives=alternatives,
+                        resolution_mode="exact_product",
+                        source_id=off_matches[0].source_id or off_matches[0].barcode,
+                        provenance=off_matches[0].provenance or "openfoodfacts",
+                    )
                     self._cache_food(food, lookup_query=query)
                     return food, confidence
 
         if remote_enabled and credential is not None:
             food, confidence = self.usda_client.resolve(query, credential.value)
+            food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
             self._cache_food(food, lookup_query=query)
             return food, confidence
         if low_confidence_error is not None:
@@ -313,6 +438,10 @@ class FoodRepository:
         unique: dict[str, Food] = {}
         for row in rows:
             food = self._row_to_food(row)
+            if food.resolution_mode == "generic_proxy" and not _generic_proxy_query_is_safe(
+                query, food
+            ):
+                continue
             unique.setdefault(normalize_name(food.name), food)
         return list(unique.values())[:limit]
 
@@ -395,6 +524,10 @@ class FoodRepository:
         ).fetchall()
         for row in rows:
             food = self._row_to_food(row)
+            if food.resolution_mode == "generic_proxy" and not _generic_proxy_query_is_safe(
+                query, food
+            ):
+                continue
             candidate_tokens = _name_tokens(
                 " ".join(
                     value
@@ -425,8 +558,9 @@ class FoodRepository:
             """INSERT INTO food_cache
             (name, kcal, protein, fat, carbs, piece_grams, piece_grams_source,
              piece_grams_source_value, density_g_ml, source, fdc_id, barcode, brand,
-             lookup_query, alternatives_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             lookup_query, alternatives_json, resolution_mode, source_id, source_note,
+             provenance, assumption)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
               kcal=excluded.kcal,
               protein=excluded.protein,
@@ -441,7 +575,12 @@ class FoodRepository:
               barcode=excluded.barcode,
               brand=excluded.brand,
               lookup_query=excluded.lookup_query,
-              alternatives_json=excluded.alternatives_json""",
+              alternatives_json=excluded.alternatives_json,
+              resolution_mode=excluded.resolution_mode,
+              source_id=excluded.source_id,
+              source_note=excluded.source_note,
+              provenance=excluded.provenance,
+              assumption=excluded.assumption""",
             (
                 food.name,
                 food.kcal,
@@ -458,8 +597,83 @@ class FoodRepository:
                 food.brand,
                 normalize_name(lookup_query),
                 json.dumps(food.alternatives, ensure_ascii=False, sort_keys=True),
+                food.resolution_mode,
+                food.source_id,
+                food.source_note,
+                food.provenance,
+                food.assumption,
             ),
         )
+
+    def capture_barcode(self, barcode: str) -> Food:
+        food = self.off_client.product_by_barcode(barcode)
+        exact = replace(
+            food,
+            source="openfoodfacts",
+            barcode=barcode.strip(),
+            resolution_mode="exact_product",
+            source_id=barcode.strip(),
+            provenance="openfoodfacts",
+            assumption=None,
+        )
+        self._cache_food(exact, lookup_query=" ".join(filter(None, (exact.name, exact.brand))))
+        return exact
+
+    def capture_label(
+        self,
+        *,
+        name: str,
+        brand: str | None,
+        kcal: float,
+        protein: float,
+        fat: float,
+        carbs: float,
+        serving_grams: float | None,
+        source_note: str | None,
+    ) -> Food:
+        clean_name = " ".join(name.strip().split())
+        clean_brand = " ".join((brand or "").strip().split()) or None
+        note = " ".join((source_note or "").strip().split())
+        if not clean_name:
+            raise NomnomError("invalid_product", "Package label name must not be empty")
+        if not note or any(ord(character) < 32 for character in note):
+            raise NomnomError(
+                "invalid_source_note",
+                "--source-note is required and must contain a nonempty image/barcode reference",
+            )
+        nutrients = (kcal, protein, fat, carbs)
+        if any(not math.isfinite(value) or value < 0 for value in nutrients):
+            raise NomnomError(
+                "invalid_nutrition", "Nutrition values must be finite and non-negative"
+            )
+        if serving_grams is not None and (
+            not math.isfinite(serving_grams) or serving_grams <= 0
+        ):
+            raise NomnomError(
+                "invalid_serving_grams",
+                "Serving grams must be finite and greater than zero",
+            )
+        canonical_name = f"{clean_name} — {clean_brand}" if clean_brand else clean_name
+        food = Food(
+            name=canonical_name,
+            kcal=kcal,
+            protein=protein,
+            fat=fat,
+            carbs=carbs,
+            piece_grams=serving_grams,
+            piece_grams_source=("--serving-grams" if serving_grams is not None else None),
+            piece_grams_source_value=(
+                f"{serving_grams:g} g" if serving_grams is not None else None
+            ),
+            source="package_label",
+            brand=clean_brand,
+            resolution_mode="exact_product",
+            source_id=note,
+            source_note=note,
+            provenance="package_label",
+        )
+        self._cache_food(food, lookup_query=" ".join(filter(None, (clean_name, clean_brand))))
+        return food
 
     def add_food(
         self,
@@ -483,6 +697,8 @@ class FoodRepository:
             piece_grams_source_value=(f"{piece_grams:g} g" if piece_grams is not None else None),
             source="user",
             brand=brand.strip(),
+            resolution_mode="exact_product",
+            provenance="legacy_manual",
         )
         self._cache_food(food, lookup_query=f"{name} {brand}")
         return food

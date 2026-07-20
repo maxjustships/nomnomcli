@@ -27,6 +27,24 @@ def _nutrition_line(totals: dict) -> str:
     )
 
 
+def _capture_result(food) -> dict:
+    return {
+        "name": food.name,
+        "brand": food.brand,
+        "source": food.source,
+        "source_id": food.source_id,
+        "source_note": food.source_note,
+        "provenance": food.provenance,
+        "resolution_mode": food.resolution_mode,
+        "barcode": food.barcode,
+        "kcal_per_100g": round(food.kcal, 2),
+        "protein_per_100g": round(food.protein, 2),
+        "fat_per_100g": round(food.fat, 2),
+        "carbs_per_100g": round(food.carbs, 2),
+        "serving_grams": food.piece_grams,
+    }
+
+
 def _print_log(result: dict, as_json: bool) -> None:
     if as_json:
         print(_json_output(result))
@@ -91,6 +109,32 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument("--carbs", type=float, required=True)
     add.add_argument("--piece-grams", type=float)
     add.add_argument("--json", action="store_true", help="machine-readable JSON output")
+
+    capture = commands.add_parser(
+        "capture", help="capture exact package facts from a barcode or agent-extracted label"
+    )
+    capture_commands = capture.add_subparsers(dest="capture_command", required=True)
+    capture_barcode = capture_commands.add_parser(
+        "barcode", help="fetch one exact Open Food Facts v2 product"
+    )
+    capture_barcode.add_argument("code")
+    capture_barcode.add_argument(
+        "--json", action="store_true", help="machine-readable JSON output"
+    )
+    capture_label = capture_commands.add_parser(
+        "label", help="persist facts extracted by an agent from a supplied package photo"
+    )
+    capture_label.add_argument("--name", required=True)
+    capture_label.add_argument("--brand")
+    capture_label.add_argument("--kcal", type=float, required=True)
+    capture_label.add_argument("--protein", type=float, required=True)
+    capture_label.add_argument("--fat", type=float, required=True)
+    capture_label.add_argument("--carbs", type=float, required=True)
+    capture_label.add_argument("--serving-grams", type=float)
+    capture_label.add_argument("--source-note")
+    capture_label.add_argument(
+        "--json", action="store_true", help="machine-readable JSON output"
+    )
 
     alias = commands.add_parser("alias", help="manage user food aliases")
     alias_commands = alias.add_subparsers(dest="alias_command", required=True)
@@ -166,6 +210,27 @@ def _run(args: argparse.Namespace) -> int:
 
     with connect() as connection:
         repository = FoodRepository(connection)
+        if args.command == "capture":
+            if args.capture_command == "barcode":
+                food = repository.capture_barcode(args.code)
+            else:
+                food = repository.capture_label(
+                    name=args.name,
+                    brand=args.brand,
+                    kcal=args.kcal,
+                    protein=args.protein,
+                    fat=args.fat,
+                    carbs=args.carbs,
+                    serving_grams=args.serving_grams,
+                    source_note=args.source_note,
+                )
+            result = _capture_result(food)
+            if args.json:
+                print(_json_output(result))
+            else:
+                print(f"Captured: {food.name} ({food.kcal:.2f} kcal/100g)")
+            return 0
+
         if args.command == "alias":
             if args.alias_command == "add":
                 result = repository.add_alias(args.phrase, args.canonical_food_name)
