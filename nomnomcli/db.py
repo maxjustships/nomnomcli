@@ -512,6 +512,8 @@ def _trusted_snapshot_helper_command() -> tuple[list[str], Path]:
 
 def _run_snapshot_helper(source_path: Path, private_root: Path) -> Path | None:
     """Acquire a source snapshot in a fresh exec process with no inherited DB FDs."""
+    if not source_path.is_absolute():
+        source_path = Path.cwd() / source_path
     request = json.dumps(
         {"source_path": os.fspath(source_path), "private_root": os.fspath(private_root)},
         allow_nan=False,

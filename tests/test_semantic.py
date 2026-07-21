@@ -13,7 +13,7 @@ import pytest
 
 import nomnomcli.db as database_module
 from nomnomcli.cli import main
-from nomnomcli.db import connect
+from nomnomcli.db import connect, connect_read_only
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import Food
@@ -1520,6 +1520,81 @@ def test_cli_snapshot_helper_ignores_hostile_cwd_imports(
     assert _directory_file_state(source_root) == original_files
 
 
+def test_cli_snapshot_helper_reads_relative_database_from_caller_cwd(
+    tmp_path, monkeypatch, capsys
+):
+    caller_cwd = tmp_path / "caller-cwd"
+    relative_database = Path(f"relative-{tmp_path.name}") / "food.sqlite3"
+    database = caller_cwd / relative_database
+    database.parent.mkdir(parents=True)
+    original = "Caller cwd chicken"
+    with connect(database) as connection:
+        pinned = Food(
+            name=original,
+            kcal=165,
+            protein=31,
+            fat=3.6,
+            carbs=1,
+            source="user",
+            resolution_mode="exact_product",
+            source_id="caller-cwd-pin",
+            provenance="user",
+        )
+        FoodRepository(connection)._cache_food(pinned, lookup_query=original)
+
+    original_state = _database_state(database)
+    original_files = _directory_file_state(database.parent)
+    package_root = Path(database_module.__file__).resolve(strict=True).parent.parent
+    package_root_database = package_root / relative_database
+    assert not package_root_database.exists()
+    assert not caller_cwd.is_relative_to(package_root)
+
+    monkeypatch.chdir(caller_cwd)
+    monkeypatch.setenv("NOMNOM_DB_PATH", os.fspath(relative_database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    output = _strict_json_loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert output["would_write"] is False
+    assert output["retrieval_query"] == original
+    assert output["provider"] == "user"
+    assert output["source_id"] == "caller-cwd-pin"
+    assert output["resolution_mode"] == "exact_product"
+    assert not package_root_database.exists()
+    assert _database_state(database) == original_state
+    assert _directory_file_state(database.parent) == original_files
+
+
+def test_connect_read_only_relative_missing_database_does_not_create_path(
+    tmp_path, monkeypatch
+):
+    caller_cwd = tmp_path / "caller-cwd"
+    caller_cwd.mkdir()
+    relative_database = Path(f"missing-{tmp_path.name}") / "food.sqlite3"
+    package_root = Path(database_module.__file__).resolve(strict=True).parent.parent
+    package_root_database = package_root / relative_database
+    assert not package_root_database.exists()
+
+    monkeypatch.chdir(caller_cwd)
+    with connect_read_only(relative_database) as connection:
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+    assert not (caller_cwd / relative_database).exists()
+    assert not (caller_cwd / relative_database.parent).exists()
+    assert not package_root_database.exists()
+
+
 def test_cli_snapshot_missing_trusted_helper_is_structured_without_source_changes(
     user_db, tmp_path, monkeypatch, capsys
 ):
@@ -1975,9 +2050,10 @@ def test_cli_resolve_preserves_stale_source_atime_mtime_and_content(
         writer.close()
 
 
+@pytest.mark.parametrize("path_kind", ["absolute", "relative"])
 @pytest.mark.parametrize("symlink_kind", ["final", "parent"])
 def test_cli_resolve_rejects_stale_atime_symlink_without_metadata_or_source_changes(
-    tmp_path, monkeypatch, capsys, symlink_kind
+    tmp_path, monkeypatch, capsys, symlink_kind, path_kind
 ):
     source_directory = tmp_path / "source"
     source_directory.mkdir()
@@ -2026,7 +2102,12 @@ def test_cli_resolve_rejects_stale_atime_symlink_without_metadata_or_source_chan
         before.st_ino,
     )
 
-    monkeypatch.setenv("NOMNOM_DB_PATH", str(supplied_path))
+    if path_kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        configured_path = supplied_path.relative_to(tmp_path)
+    else:
+        configured_path = supplied_path
+    monkeypatch.setenv("NOMNOM_DB_PATH", os.fspath(configured_path))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     code = main(
         [
