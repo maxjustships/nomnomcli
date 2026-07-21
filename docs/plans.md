@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Source
+- Task: Protect arbitrary digit-bearing explicit `SKU` markers and refuse semantic resolution from SQLite source files that do not remain stable across a complete private copy.
+- Canonical input: Two independent-review P2 findings requiring `SKUABC123`, bounded main/journal/WAL/SHM fingerprint-and-copy retries, structured safe refusal under ongoing writes, deterministic concurrency regressions, full validation, a local conventional commit, and no push/PR.
+- Repo context: `_query_has_sku`, `connect_read_only`, semantic CLI regressions, existing WAL/hot-journal/legacy/empty source preservation, README/skill guidance, and Phase A no-write guarantees.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Assumptions
+- An explicit standalone `sku` prefix followed immediately by alphanumeric, hyphen, or underscore content is exact intent when the complete marker contains at least one digit; existing standalone numeric 4+ and conservative `ABC-12345` detection remain unchanged.
+- A copy is usable only when source main, `-journal`, `-wal`, and `-shm` existence/device/inode/size/mtime fingerprints are identical before and after copying every file that existed at the start of the attempt.
+- Three private attempts are sufficient to tolerate a transient source-side transition while bounding resolver latency; continued churn returns `database_snapshot_unstable` with `would_write:false` and no plan.
+
+## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M55 | Freeze explicit-SKU and concurrent-copy regressions | M54 | [x] |
+| M56 | Implement exact marker detection and stable private copies | M55 | [x] |
+| M57 | Document, verify, smoke, audit, and commit | M56 | [x] |
+
+## M55. Freeze both independent-review regressions `[x]`
+### Goal
+- `SKUABC123` refuses a cached semantic generic candidate, a sidecar transition during copying cannot produce a mixed plan, and permanently unstable fingerprints produce a structured no-write refusal.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'skuabc123 or snapshot_copy or snapshot_unstable'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until the explicit marker bypass and unsafe/uncaught snapshot behavior are reproduced while ordinary food, `vitamin B12`, empty/legacy, WAL, and hot-journal controls retain their established expectations.
+
+## M56. Detect explicit markers and require stable private SQLite copies `[x]`
+### Goal
+- `_query_has_sku` protects arbitrary allowed content after an explicit `sku` prefix when digit-bearing, and `connect_read_only` opens only a private snapshot whose complete source file set was stable across copying.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any mixed-state plan, source-side SQLite open/write, uncaught concurrency error, false SKU positive for ordinary controls, or regression in empty/legacy/WAL/hot-journal recovery blocks M57.
+
+## M57. Verify and commit both Phase A P2 fixes `[x]`
+### Goal
+- README and agent guidance state bounded fail-safe behavior under ongoing writes; targeted/full pytest, repository-wide Ruff, diff checks, disposable no-write smoke, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass, the disposable smoke preserves exact source state, and the diff contains only both P2 fixes, regressions, docs, and execution records.
+
 ## Issue #33 Phase A Alphanumeric-SKU P2 Source
 - Task: Treat common alphanumeric SKU tokens as exact intent during semantic planning without overblocking ordinary food quantities or nutrient terms.
 - Canonical input: Final-review P2 requiring Cyrillic `SKU12345` refusal, source immutability, ordinary-food controls, exact local pin preservation, full validation, a local conventional commit, and no push/PR.

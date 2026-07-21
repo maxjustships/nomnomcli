@@ -108,11 +108,15 @@ runtime evidence of exact intent. This can refuse a legitimate same-language sim
 cross-language brand detection has no comparable lexical signal, so agents must still set
 `brand_intent:true` and users should capture the exact package identity.
 
-This command is a dry-run boundary only. It opens existing SQLite state read-only, clones it into an
-isolated in-memory snapshot, and validates/migrates only that snapshot (or initializes an ephemeral
-snapshot when no database exists). It never creates or updates source cache/log/alias/recipe rows
-and does not apply the plan to `nomnom log`. There is no embedded LLM, translation table, synonym
-corpus, food record, or weight data; candidate generation stays agent-side.
+This command is a dry-run boundary only. It fingerprints the existing SQLite main file plus any
+rollback journal, WAL, and SHM siblings before and after copying the complete set into private
+storage. A changed identity, size, mtime, or existence discards that attempt. After three unstable
+attempts, ongoing writes fail safely with `database_snapshot_unstable` and `would_write:false`
+instead of planning from a mixed snapshot. SQLite opens only a stable private copy, which is then
+cloned into memory and validated/migrated (or an ephemeral snapshot is initialized when no database
+exists). Resolution never creates or updates source cache/log/alias/recipe rows and does not apply
+the plan to `nomnom log`. There is no embedded LLM, translation table, synonym corpus, food record,
+or weight data; candidate generation stays agent-side.
 
 For a remembered meal from a prior local calendar day, pass an explicit ISO date to either form:
 
@@ -386,6 +390,9 @@ an `error` object and exit with status 2. Important codes include:
 - `generic_proxy_confirmation_required`: show the named provider candidate and ask before changing the
   configured policy; nothing was cached or logged.
 - `exact_resolution_required`: request the barcode or a package photo for source-backed capture.
+- `database_snapshot_unstable`: active SQLite files changed throughout bounded private-copy
+  attempts; wait for writes to finish and retry. No plan was returned and source state was not
+  opened by SQLite or modified by resolution.
 - `invalid_barcode` / `barcode_not_found` / `barcode_nutrition_incomplete`: correct the barcode or
   request a package photo; failed captures write nothing.
 - `invalid_source_note` / `invalid_nutrition`: correct the extracted label facts; failed captures

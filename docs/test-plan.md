@@ -1,5 +1,33 @@
 # Test Plan
 
+## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Validation
+- In scope: `SKUABC123` exact intent, existing barcode/`ABC-12345` behavior, ordinary food and `vitamin B12` controls, bounded stable copying of main/journal/WAL/SHM, files appearing/disappearing, structured ongoing-write refusal, and exact source preservation.
+- Out of scope: SQLite writer coordination/locking, source-side SQLite opens, Phase B application/persistence, schema/policy changes, live providers, push, or PR operations.
+- Fixtures: a cached disjoint semantic generic candidate; current-schema exact local pin; deterministic copy hook that removes a source sidecar during the first attempt; deterministic permanently changing fingerprint; existing empty/legacy/WAL/hot-journal fixtures.
+
+### Critical Scenarios
+- Original `SKUABC123`, `brand_intent:false`, failed literal resolution, and cached semantic candidate `chicken` returns structured `exact_resolution_required`, `would_write:false`, with no writes; normal food expressions and `vitamin B12` remain eligible for safe semantic planning.
+- Removing a source sidecar during the complete copy window invalidates and discards that private attempt; a later stable attempt may return a consistent exact plan, never a mixed plan or uncaught SQLite error.
+- A fingerprint that changes on every bounded attempt returns `database_snapshot_unstable`, `would_write:false`, no plan, and leaves source files unchanged by resolution.
+- Existing empty, legacy, pending-WAL, and hot rollback-journal snapshots retain their source-state preservation and private recovery/migration behavior.
+
+### Acceptance Gates
+- [x] Requested explicit-SKU and concurrent-copy regressions observed RED before production changes — 3 failures; 7 controls green.
+- [x] Targeted semantic/database/food/CLI tests pass — 138 passed; focused preservation matrix 15 passed and database suite 9 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 274 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable CLI smoke returns `would_write:false` and preserves every source filename and SHA-256.
+- [x] One conventional local commit contains only the scoped P2 fixes and execution records; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'skuabc123 or snapshot_copy or snapshot_unstable or ordinary_food_expression or pending_wal or rollback_journal'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Alphanumeric-SKU P2 Validation
 - In scope: `SKU12345`/`ABC-12345`-style exact intent, existing numeric 4+ identifiers, Cyrillic originals with translated candidates, ordinary percentage/count/nutrient controls, matching exact local pins, and exact source immutability.
 - Out of scope: parser grammar changes, static SKU/brand dictionaries, schema/policy/log changes, live providers, push, or PR operations.

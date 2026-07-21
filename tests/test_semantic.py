@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import pytest
 
+import nomnomcli.db as database_module
 from nomnomcli.cli import main
 from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
@@ -818,10 +819,10 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     } == original_files
 
 
+@pytest.mark.parametrize("original", ["курица SKU12345", "SKUABC123"])
 def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
-    user_db, monkeypatch, capsys
+    user_db, monkeypatch, capsys, original
 ):
-    original = "курица SKU12345"
     semantic_query = "chicken"
     cached, _ = _generic_food(semantic_query)
     cached = replace(
@@ -861,6 +862,125 @@ def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
     assert error["error"]["details"]["original"] == original
     assert _database_state(user_db) == original_state
     assert _directory_file_state(user_db.parent) == original_files
+
+
+def test_cli_snapshot_copy_retries_after_wal_checkpoint_transition(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "checkpoint-source.sqlite3"
+    original = "Checkpointed chicken"
+    with connect(database):
+        pass
+
+    writer = sqlite3.connect(database)
+    assert writer.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    writer.execute(
+        "INSERT INTO food_cache "
+        "(name, kcal, protein, fat, carbs, source, lookup_query, "
+        "resolution_mode, source_id, provenance) "
+        "VALUES (?, 165, 31, 3.6, 1, 'user', ?, "
+        "'exact_product', 'checkpoint-pin', 'user')",
+        (original, original),
+    )
+    writer.commit()
+    wal_path = tmp_path / f"{database.name}-wal"
+    assert wal_path.exists()
+    wal_before_checkpoint = wal_path.read_bytes()
+    with sqlite3.connect(
+        f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True
+    ) as main_only:
+        assert (
+            main_only.execute(
+                "SELECT count(*) FROM food_cache WHERE name = ?", (original,)
+            ).fetchone()[0]
+            == 0
+        )
+
+    real_copyfile = database_module.shutil.copyfile
+    main_copy_count = 0
+    state_after_writer = None
+
+    def checkpoint_after_first_main_copy(source, destination):
+        nonlocal main_copy_count, state_after_writer
+        result = real_copyfile(source, destination)
+        if source == database.resolve():
+            main_copy_count += 1
+            if main_copy_count == 1:
+                assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+                writer.close()
+                state_after_writer = _directory_file_state(tmp_path)
+                assert state_after_writer.get(wal_path.name) != wal_before_checkpoint
+        return result
+
+    monkeypatch.setattr(database_module.shutil, "copyfile", checkpoint_after_first_main_copy)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert output["would_write"] is False
+    assert output["source_id"] == "checkpoint-pin"
+    assert main_copy_count == 2
+    assert state_after_writer is not None
+    assert _directory_file_state(tmp_path) == state_after_writer
+
+
+def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "Stable source chicken"
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    real_fingerprint = database_module._source_snapshot_fingerprint
+    fingerprint_call = 0
+
+    def permanently_changing_fingerprint(source_path):
+        nonlocal fingerprint_call
+        fingerprint_call += 1
+        fingerprint = real_fingerprint(source_path)
+        main = fingerprint[""]
+        assert main is not None
+        fingerprint[""] = (*main[:-1], main[-1] + fingerprint_call)
+        return fingerprint
+
+    monkeypatch.setattr(
+        database_module,
+        "_source_snapshot_fingerprint",
+        permanently_changing_fingerprint,
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "database_snapshot_unstable"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["attempts"] == 3
+    assert fingerprint_call == 6
+    assert _directory_file_state(user_db.parent) == before
 
 
 @pytest.mark.parametrize(

@@ -6,12 +6,16 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from nomnomcli.errors import NomnomError
+
 LATEST_SCHEMA_VERSION = 4
 V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
+_SNAPSHOT_SUFFIXES = ("", "-journal", "-wal", "-shm")
+_SNAPSHOT_COPY_ATTEMPTS = 3
 
 LATEST_SCHEMA = (
     """CREATE TABLE food_cache (
@@ -191,6 +195,60 @@ def default_db_path() -> Path:
     return Path.home() / ".local" / "share" / "nomnomcli" / "nomnom.sqlite3"
 
 
+def _source_snapshot_fingerprint(
+    source_path: Path,
+) -> dict[str, tuple[int, int, int, int] | None]:
+    """Capture existence, identity, size, and mtime for all SQLite source files."""
+    fingerprint: dict[str, tuple[int, int, int, int] | None] = {}
+    for suffix in _SNAPSHOT_SUFFIXES:
+        try:
+            stat = Path(f"{source_path}{suffix}").stat()
+        except FileNotFoundError:
+            fingerprint[suffix] = None
+        else:
+            fingerprint[suffix] = (
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+            )
+    return fingerprint
+
+
+def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Path | None:
+    """Copy a source file set that remains unchanged across the complete copy."""
+    for attempt in range(1, _SNAPSHOT_COPY_ATTEMPTS + 1):
+        attempt_directory = private_root / f"attempt-{attempt}"
+        attempt_directory.mkdir()
+        private_path = attempt_directory / "snapshot.sqlite3"
+        before = _source_snapshot_fingerprint(source_path)
+        copy_succeeded = True
+        try:
+            for suffix in _SNAPSHOT_SUFFIXES:
+                if before[suffix] is not None:
+                    shutil.copyfile(
+                        Path(f"{source_path}{suffix}"),
+                        Path(f"{private_path}{suffix}"),
+                    )
+        except FileNotFoundError:
+            copy_succeeded = False
+        after = _source_snapshot_fingerprint(source_path)
+
+        if copy_succeeded and before == after:
+            return private_path if before[""] is not None else None
+        shutil.rmtree(attempt_directory)
+
+    raise NomnomError(
+        "database_snapshot_unstable",
+        "Database changed while creating a read-only snapshot",
+        details={
+            "attempts": _SNAPSHOT_COPY_ATTEMPTS,
+            "would_write": False,
+            "action": "Wait for active database writes to finish, then retry resolution.",
+        },
+    )
+
+
 @contextmanager
 def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
     db_path = Path(path) if path is not None else default_db_path()
@@ -207,24 +265,18 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
 
 @contextmanager
 def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
-    """Open an isolated, migrated snapshot without modifying user state."""
+    """Open a stable isolated snapshot, failing safely while source writes continue."""
     db_path = Path(path) if path is not None else default_db_path()
     connection = sqlite3.connect(":memory:")
     try:
-        if db_path.exists():
-            source_path = db_path.resolve()
-            with tempfile.TemporaryDirectory(
-                prefix="nomnomcli-read-only-"
-            ) as temporary_directory:
-                private_path = Path(temporary_directory) / "snapshot.sqlite3"
-                shutil.copyfile(source_path, private_path)
-                for suffix in ("-journal", "-wal", "-shm"):
-                    with suppress(FileNotFoundError):
-                        shutil.copyfile(
-                            Path(f"{source_path}{suffix}"),
-                            Path(f"{private_path}{suffix}"),
-                        )
-
+        source_path = db_path.resolve()
+        with tempfile.TemporaryDirectory(
+            prefix="nomnomcli-read-only-"
+        ) as temporary_directory:
+            private_path = _copy_stable_database_snapshot(
+                source_path, Path(temporary_directory)
+            )
+            if private_path is not None:
                 source = sqlite3.connect(private_path)
                 try:
                     source.backup(connection)
@@ -232,9 +284,9 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
                     source.close()
 
         connection.row_factory = sqlite3.Row
-        # Validate and migrate only the in-memory snapshot. SQLite opened only
-        # the private file copy, so source-side journal/WAL/SHM files cannot be
-        # recovered, created, or otherwise modified.
+        # Validate and migrate only the in-memory snapshot. SQLite opens only a
+        # private file set proven stable across copying, so concurrent churn
+        # fails safely and source sidecars cannot be created or modified.
         _initialize_database(connection)
         connection.execute("PRAGMA query_only = ON")
         yield connection
