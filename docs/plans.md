@@ -1,5 +1,62 @@
 # Plans
 
+## Issue #31 Source
+- Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
+- Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.
+- Repo context: free-text parsing, provider resolution, nutrition scaling, log JSON persistence, stats, config/CLI policy, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #31 Assumptions
+- The estimate payload is inline JSON with an `items` array; each entry identifies one fuzzy phrase by both zero-based `item_index` and exact parser `input`, preventing similarity matching.
+- Every estimate carries finite nonnegative `grams`, `lower_grams`, and `upper_grams`, confidence in `0..1`, the literal method `agent_estimate`, and a nonempty human-readable assumption; `lower_grams <= grams <= upper_grams`.
+- Portion policy defaults to `strict`; `ask` returns an actionable structured request without writing, and `estimate` is the only policy that accepts a complete valid external payload.
+- Existing `items_json` can carry additive portion provenance without a schema migration; nutrition continues to use only central `grams` through `scale_food`.
+
+## Issue #31 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M28 | Freeze fuzzy estimate, mapping, policy, and atomicity contracts | M27 | [x] |
+| M29 | Implement external estimate parsing and additive provenance | M28 | [x] |
+| M30 | Document, validate, smoke, audit, and commit | M29 | [x] |
+
+## M28. Freeze issue #31 contracts `[x]`
+### Goal
+- Focused tests specify strict compatibility, exact all-or-nothing estimate mapping, full breakfast persistence/stats, explicit-gram precedence, config policy, and legacy-log readability before production changes.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_portions.py tests/test_cli.py tests/test_config.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Record the expected RED failures before changing production parser, model, config, CLI, or persistence behavior.
+
+## M29. Implement external estimate parsing and additive provenance `[x]`
+### Goal
+- `strict|ask|estimate` policy and exact structured payload validation allow only complete agent-supplied fuzzy masses, persist explicit approximate provenance, and preserve central deterministic nutrition calculation.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_portions.py tests/test_parser.py tests/test_cli.py tests/test_config.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Any partial write/application, imprecise match, locally generated weight, explicit-gram regression, or issue #29 identity regression blocks documentation work.
+
+## M30. Document, validate, smoke, audit, and commit `[x]`
+### Goal
+- README and agent guidance publish the exact schema, correction route, and non-measured semantics; all focused/full tests, Ruff, disposable mocked-provider CLI smoke, diff audit, and one scoped conventional commit pass.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until full validation passes, the exact breakfast smoke uses only a temporary database and mocked providers, and the diff is scoped to issue #31.
+
 ## Issue #29 Source
 - Task: Ensure unbranded foods resolve only to truthful generic proxies, never arbitrary branded exact products.
 - Canonical input: GitHub issue #29 and the user's strict TDD, smoke, commit, and no-push requirements.
