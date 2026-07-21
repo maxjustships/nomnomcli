@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import sqlite3
 import subprocess
@@ -1011,6 +1012,49 @@ def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
     assert _directory_file_state(user_db.parent) == before
 
 
+@pytest.mark.parametrize("suffix", ["-wal", "-journal"])
+def test_cli_unreadable_snapshot_sidecar_is_structured_without_source_writes(
+    user_db, monkeypatch, capsys, suffix
+):
+    with connect(user_db):
+        pass
+    sidecar = Path(f"{user_db}{suffix}")
+    sidecar.write_bytes(b"existing SQLite sidecar")
+    before = _directory_file_state(user_db.parent)
+    real_copyfile = database_module.shutil.copyfile
+
+    def refuse_sidecar_read(source, destination):
+        if Path(source) == sidecar:
+            raise PermissionError(errno.EACCES, "sidecar is unreadable", source)
+        return real_copyfile(source, destination)
+
+    monkeypatch.setattr(database_module.shutil, "copyfile", refuse_sidecar_read)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "database_snapshot_unreadable"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["snapshot_target"] == suffix.removeprefix("-")
+    assert error["error"]["details"]["os_error"] == errno.EACCES
+    assert _directory_file_state(user_db.parent) == before
+
+
 def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     tmp_path, monkeypatch, capsys
 ):
@@ -1053,6 +1097,7 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
         "SKUABC123",
         "курица SKU 12345",
         "курица SKU: ABC-123",
+        "курица SKU: ABC/123",
         "курица АБ12345",
     ],
 )
@@ -1232,6 +1277,7 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
         "курица SKU:12345",
         "курица SKU: ABC-123",
         "курица SKU : ABC_123",
+        "курица SKU: ABC/123",
         "курица ABC-12345",
         "курица ABC_12345",
         "курица АБ12345",
@@ -1523,6 +1569,20 @@ def test_cli_possessive_brand_raw_cache_match_requires_exact_resolution_without_
                 source="user",
                 resolution_mode="exact_product",
                 source_id="pin-separated-sku",
+                provenance="user",
+            ),
+        ),
+        (
+            "курица SKU: ABC/123",
+            Food(
+                name="Pinned slash-delimited SKU chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                resolution_mode="exact_product",
+                source_id="pin-slash-delimited-sku",
                 provenance="user",
             ),
         ),

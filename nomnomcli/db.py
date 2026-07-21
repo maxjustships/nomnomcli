@@ -219,6 +219,8 @@ def _source_snapshot_fingerprint(
             stat = Path(f"{source_path}{suffix}").stat()
         except FileNotFoundError:
             fingerprint[suffix] = None
+        except OSError as error:
+            raise _snapshot_read_error(suffix, error) from error
         else:
             fingerprint[suffix] = (
                 stat.st_dev,
@@ -247,6 +249,17 @@ def _snapshot_lock_error(code: str, message: str, **details: object) -> NomnomEr
             "would_write": False,
             **details,
         },
+    )
+
+
+def _snapshot_read_error(suffix: str, error: OSError) -> NomnomError:
+    target = suffix.removeprefix("-") or "main"
+    return _snapshot_lock_error(
+        "database_snapshot_unreadable",
+        "A SQLite source file cannot be read for a no-write snapshot",
+        snapshot_target=target,
+        os_error=error.errno,
+        action="Restore read access to the database and its SQLite sidecar files.",
     )
 
 
@@ -365,6 +378,7 @@ def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Pat
         copy_succeeded = True
         with _sqlite_snapshot_boundary(source_path) as descriptors:
             before = _source_snapshot_fingerprint(source_path)
+            copied_suffix = ""
             try:
                 if descriptors is None:
                     copy_succeeded = before[""] is None
@@ -375,11 +389,13 @@ def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Pat
                     else:
                         _copy_open_file(main_descriptor, private_path)
                     for suffix in ("-journal", "-wal"):
+                        copied_suffix = suffix
                         if before[suffix] is not None:
                             shutil.copyfile(
                                 Path(f"{source_path}{suffix}"),
                                 Path(f"{private_path}{suffix}"),
                             )
+                    copied_suffix = "-shm"
                     if before["-shm"] is not None:
                         if (
                             shm_descriptor is None
@@ -390,6 +406,8 @@ def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Pat
                             _copy_open_file(shm_descriptor, Path(f"{private_path}-shm"))
             except FileNotFoundError:
                 copy_succeeded = False
+            except OSError as error:
+                raise _snapshot_read_error(copied_suffix, error) from error
             after = _source_snapshot_fingerprint(source_path)
 
         if copy_succeeded and before == after:

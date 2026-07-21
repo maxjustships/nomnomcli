@@ -141,7 +141,7 @@ def _query_has_sku(query: str) -> bool:
         return True
     separated_sku = re.search(
         r"(?<!\w)sku(?:\s*:\s*|\s+)"
-        r"(?P<identifier>[^\W_]+(?:[-_][^\W_]+)*)(?!\w)",
+        r"(?P<identifier>[^\W_]+(?:[-_./][^\W_]+)*)(?!\w)",
         normalized,
     )
     if separated_sku and any(
