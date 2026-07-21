@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -208,17 +210,30 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
     """Open an isolated, migrated snapshot without modifying user state."""
     db_path = Path(path) if path is not None else default_db_path()
     connection = sqlite3.connect(":memory:")
-    if db_path.exists():
-        uri = f"{db_path.resolve().as_uri()}?mode=ro"
-        source = sqlite3.connect(uri, uri=True)
-        try:
-            source.backup(connection)
-        finally:
-            source.close()
     try:
+        if db_path.exists():
+            source_path = db_path.resolve()
+            with tempfile.TemporaryDirectory(
+                prefix="nomnomcli-read-only-"
+            ) as temporary_directory:
+                private_path = Path(temporary_directory) / "snapshot.sqlite3"
+                shutil.copyfile(source_path, private_path)
+                for suffix in ("-wal", "-shm"):
+                    with suppress(FileNotFoundError):
+                        shutil.copyfile(
+                            Path(f"{source_path}{suffix}"),
+                            Path(f"{private_path}{suffix}"),
+                        )
+
+                source = sqlite3.connect(private_path)
+                try:
+                    source.backup(connection)
+                finally:
+                    source.close()
+
         connection.row_factory = sqlite3.Row
-        # Validate and migrate only the private snapshot. The source was opened
-        # mode=ro and is already closed, so dry-run compatibility cannot write it.
+        # Validate and migrate only the in-memory snapshot. SQLite opened only
+        # the private file copy, so source-side WAL/SHM files cannot be created.
         _initialize_database(connection)
         connection.execute("PRAGMA query_only = ON")
         yield connection

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
 from dataclasses import replace
 
 import pytest
@@ -74,6 +76,14 @@ def _database_state(path) -> tuple[bytes, int, tuple, dict[str, int]]:
             for table in tables
         }
     return path.read_bytes(), version, schema, counts
+
+
+def _directory_file_state(path) -> dict[str, bytes]:
+    return {
+        child.name: child.read_bytes()
+        for child in sorted(path.iterdir())
+        if child.is_file()
+    }
 
 
 def _create_legacy_database(path, version: int) -> None:
@@ -570,6 +580,93 @@ def test_cli_resolve_uses_isolated_migrated_copy_for_existing_databases(
     assert output["would_write"] is False
     assert output["original"] == original
     assert _database_state(database) == original_state
+
+
+@pytest.mark.parametrize("remove_shm", [True, False], ids=["absent-shm", "existing-shm"])
+def test_cli_resolve_reads_pending_wal_without_creating_source_sidecars(
+    tmp_path, monkeypatch, capsys, remove_shm
+):
+    database = tmp_path / "wal-source.sqlite3"
+    original = "Pending WAL chicken"
+    with connect(database):
+        pass
+    original_directory_mode = tmp_path.stat().st_mode
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import os
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+assert connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+connection.execute(
+    "INSERT INTO food_cache "
+    "(name, kcal, protein, fat, carbs, source, lookup_query, "
+    "resolution_mode, source_id, provenance) "
+    "VALUES (?, 165, 31, 3.6, 1, 'user', ?, "
+    "'exact_product', 'pending-wal-pin', 'user')",
+    (sys.argv[2], sys.argv[2]),
+)
+connection.commit()
+os._exit(0)
+""",
+                str(database),
+                original,
+            ],
+            check=True,
+        )
+
+        wal_path = tmp_path / f"{database.name}-wal"
+        shm_path = tmp_path / f"{database.name}-shm"
+        assert wal_path.exists()
+        with sqlite3.connect(
+            f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True
+        ) as main_only:
+            assert (
+                main_only.execute(
+                    "SELECT count(*) FROM food_cache WHERE name = ?", (original,)
+                ).fetchone()[0]
+                == 0
+            )
+        if remove_shm:
+            try:
+                shm_path.unlink()
+            except PermissionError:
+                pytest.skip("platform cannot unlink an open SQLite SHM file")
+            assert not shm_path.exists()
+        else:
+            assert shm_path.exists()
+
+        original_files = _directory_file_state(tmp_path)
+        tmp_path.chmod(0o555)
+        monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+        monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+        code = main(
+            [
+                "resolve",
+                "--food",
+                original,
+                "--intent-json",
+                json.dumps(_intent(original, [])),
+                "--json",
+            ]
+        )
+        output = json.loads(capsys.readouterr().out)
+
+        assert code == 0
+        assert output["would_write"] is False
+        assert output["retrieval_query"] == original
+        assert output["source_id"] == "pending-wal-pin"
+        assert output["resolution_mode"] == "exact_product"
+        assert _directory_file_state(tmp_path) == original_files
+        assert shm_path.exists() is not remove_shm
+    finally:
+        tmp_path.chmod(original_directory_mode)
 
 
 def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(

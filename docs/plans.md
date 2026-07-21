@@ -1,5 +1,62 @@
 # Plans
 
+## Issue #33 Phase A WAL-Safe Snapshot Source
+- Task: Ensure read-only semantic resolution never opens the source SQLite database or creates source WAL/SHM side files while preserving valid WAL state.
+- Canonical input: Final-review P2 plus the user's WAL regression, read-only-directory, compatibility, verification, smoke, local-commit, and no-push requirements.
+- Repo context: `connect_read_only`, semantic CLI regressions, private temporary resources, and Phase A execution records.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A WAL-Safe Snapshot Assumptions
+- The source database and any already-present `-wal`/`-shm` siblings can be copied as ordinary files without opening SQLite against the source path.
+- SQLite may create, mutate, checkpoint, or remove sidecars only beside the uniquely owned private copy; the migrated working view remains in memory.
+- Permission checks are best-effort under the test runner's effective user, but success or structured refusal must never degrade into a source-side SQLite I/O crash.
+
+## Issue #33 Phase A WAL-Safe Snapshot Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M40 | Reproduce unsafe source opening with a pending WAL | M39 | [x] |
+| M41 | Copy SQLite files before opening the private snapshot | M40 | [x] |
+| M42 | Run full gates, WAL CLI smoke, audit, and commit | M41 | [x] |
+
+## M40. Reproduce source SHM creation from a pending WAL `[x]`
+### Goal
+- A WAL-mode source with pending committed data and no visible `-shm` proves semantic resolve must preserve exact main/sidecar names and bytes, including continued SHM absence.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'wal or read_only_directory'
+```
+
+### Stop-and-Fix Rule
+- Do not alter snapshot production code until the WAL regression exercises pending data and observes the unsafe source-open behavior where the platform reproduces it.
+
+## M41. Copy SQLite files before opening the private snapshot `[x]`
+### Goal
+- `connect_read_only` copies the main database and existing WAL/SHM files into one private temporary directory, then opens, backs up, and migrates only private state.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any source file change, source sidecar creation, pending-WAL data loss, temporary-resource leak, or empty/v1/v2 compatibility regression blocks M42.
+
+## M42. Verify and commit WAL-safe Phase A snapshot `[x]`
+### Goal
+- Focused and full pytest, Ruff, diff checks, a disposable WAL CLI smoke, and a scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass and the disposable CLI smoke proves the source directory gains no files and loses or changes none.
+
 ## Issue #33 Phase A Final P2 Source
 - Task: Prevent cached legacy/non-exact rows from bypassing SKU/barcode exact intent during read-only semantic planning.
 - Canonical input: Independent Codex final P2 review finding plus the user's regression, audit, validation, local-commit, and no-push requirements.

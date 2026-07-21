@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A final P2 completed and ready for local commit
+- Current phase: issue #33 Phase A WAL-safe snapshot completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Replaced source SQLite opening with byte-copy-first main/WAL/SHM isolation in a uniquely owned temporary directory; all SQLite open, backup, sidecar, and migration behavior is now private.
+- Added absent-SHM and existing-SHM pending-WAL regressions under a `0555` source directory, proving pending data remains visible while source sibling names and bytes remain exactly unchanged.
+- Passed 70 targeted tests, 255 full tests, repository-wide Ruff, diff checks, and a disposable installed-CLI WAL smoke with no source SHM creation.
 - Fixed the final P2 by applying one exact-intent validation boundary to every raw alias/exact/cache/search/provider result before returning a plan.
 - Added a migrated v2 legacy SKU cache CLI regression proving structured `exact_resolution_required`, `would_write: false`, and byte/schema/count/log/side-file immutability; preserved exact local barcode/pin and non-SKU raw-first behavior.
 - Recorded the regression RED, then passed 77 focused semantic/food tests, 253 full tests, Ruff, and diff checks.
@@ -42,9 +45,11 @@
 - No implementation work pending.
 
 ## Next
-- None; create the requested local conventional commit, then stop without pushing or opening a pull request.
+- None; this local conventional commit completes the requested work, with no push or pull request.
 
 ## Decisions Made
+- WAL-safe snapshot: never pass the source path to `sqlite3.connect`; copy the main file plus already-existing WAL/SHM siblings into one private temporary directory first.
+- WAL-safe snapshot: allow all SQLite open/backup/migration side effects only inside that owned directory, then remove it through scoped context cleanup.
 - Final P2: enforce exact intent once at the raw planning boundary so alias, exact/cache/search, and provider returns share the same protection.
 - Final P2: protected raw intent may pass only for a matching `exact_product`, including explicit local barcode/name/lookup pins and aliases.
 - Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
@@ -87,6 +92,9 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M42 WAL-safe snapshot | scoped production/test/docs diff | 255 full pytest; full Ruff; diff check; installed-CLI pending-WAL smoke | pass; source main/WAL bytes and names identical, no SHM, `would_write: false` | local commit |
+| 2026-07-21 | M41 WAL-safe snapshot | `nomnomcli/db.py`, semantic WAL regression | focused WAL plus semantic/database/CLI pytest; scoped Ruff; diff check | GREEN: 2 WAL variants and 70 targeted tests pass; source main/WAL/SHM state unchanged | M42 |
+| 2026-07-21 | M40 WAL-safe snapshot | semantic WAL regression and execution docs | focused pytest | RED: uncaught `sqlite3.OperationalError` opening pending WAL without SHM in read-only source directory | M41 |
 | 2026-07-21 | M37–M39 final P2 | raw-plan guard, migrated legacy SKU fixture, semantic regressions, docs | focused RED/GREEN; 77 focused; 253 full; Ruff; diff check | pass; source DB/cache/log/side files unchanged | local commit |
 | 2026-07-21 | M34–M36 review fixes | read-only DB snapshot, semantic guards/ranking, regressions, docs | focused RED/GREEN; 114 focused; 250 full; Ruff; diff check; subprocess smoke | pass; exact DB digest/schema/counts unchanged | local commit |
 | 2026-07-21 | M31–M33 | semantic contract/planner/CLI/read-only DB, benchmark, docs | focused/full pytest; Ruff; diff check; digest-preserving temp-DB smoke | 136 focused; 244 full; clean; success/refusal no writes | local commit |
@@ -118,6 +126,7 @@ ruff check .
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
 
 ## Smoke / Demo Checklist
+- [x] WAL-mode source with pending data and no SHM resolves through the CLI without creating or changing any source sibling.
 - [x] Review-fix success and offline explicit-brand refusal subprocesses preserve exact SQLite digest/schema/counts and create no side files.
 - [x] Issue #33 Russian fallback succeeds and mixed-meat refusal fails with unchanged cache/log/alias/recipe counts and identical SQLite digest.
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.

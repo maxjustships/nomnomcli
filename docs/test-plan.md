@@ -1,5 +1,33 @@
 # Test Plan
 
+## Issue #33 Phase A WAL-Safe Snapshot Validation
+- In scope: byte-copy-first source isolation, pending WAL visibility without source SHM creation, exact source-directory preservation, read-only-directory behavior, empty/v1/v2 compatibility, in-memory migration, and private temporary cleanup.
+- Out of scope: Phase B plan application, schema or semantic-policy changes, live providers, concurrent-write consistency guarantees beyond an already committed pending WAL, push, or PR operations.
+- Fixtures: temporary current-schema WAL databases with a committed cache row left by an abruptly exited writer, deliberately unlinked source SHM where supported, chmod-restricted source directories, and existing empty/v1/v2 sources.
+
+### Critical Scenarios
+- Resolve sees a food record present only in a pending WAL after the main database and existing WAL are copied to private storage.
+- Resolve leaves source main/WAL/SHM names and bytes exactly unchanged and does not recreate a deliberately absent source SHM.
+- A read-only source directory returns a successful plan or structured `NomnomError`, never an uncaught SQLite I/O failure.
+- Existing empty/v1/v2 inputs still initialize/migrate only in private memory and preserve exact source state.
+
+### Acceptance Gates
+- [x] Focused WAL/read-only-directory regression observed RED before production changes — uncaught `sqlite3.OperationalError`.
+- [x] Targeted semantic/database/CLI tests pass — 70 passed; both absent/existing SHM WAL variants pass.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 255 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable CLI WAL smoke preserves exact source sibling names/bytes and creates no source SHM.
+- [x] One conventional local commit contains the scoped fix; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'wal or read_only_directory'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Final P2 Validation
 - In scope: exact-intent guarding for every raw alias/exact/cache/search/provider plan return, a migrated legacy/non-exact SKU cache CLI regression, preserved raw-first behavior for ordinary input, preserved exact local barcode/pin behavior, and source-state immutability.
 - Out of scope: Phase B plan application, new semantic policy/config/log integration, schema changes, live provider traffic, push, or PR operations.
