@@ -1,33 +1,5 @@
 # Test Plan
 
-## Final Semantic Planning Review Validation
-- In scope: raw exact-product identity gates, safe candidate continuation/refusal, strict JSON/no-write behavior, descriptor-only no-follow Linux traversal, symlink metadata preservation, OFD/no-atime snapshots, WAL/rollback, and MEMORY/OFF writer refusal.
-- Fixtures: temporary SQLite databases and synthetic exact cache rows only; no live providers, personal data, or source writes.
-- Historical documentation is out of scope and must remain absent/unchanged.
-
-### Final Review Negative / Edge Cases
-- A partial ranked cache hit whose pinned brand conflicts with the original cannot become a raw `exact_product` plan and causes no database write.
-- Exact name/lookup pin, alias, barcode/SKU, and matching returned brand identity continue to produce exact plans.
-- A stale-atime final database symlink and a stale-atime parent-directory symlink each return structured strict JSON with `would_write:false` while preserving symlink atime, mtime, link target/content, and source directory state.
-- Sidecar symlinks are refused by the same no-follow path, and component/inode races fail closed before accepting source bytes.
-- An ordinary non-symlink database still resolves successfully; pending WAL, hot rollback, OFD locking, no-atime, and journal-less dirty writer protections remain green.
-
-### Final Review Acceptance Gates
-- [x] P1 identity regressions pass, including no-write conflicting brand, safe-candidate continuation, and positive pin/alias/barcode cases.
-- [x] P2 final/parent/sidecar symlink regressions pass with strict metadata equality and ordinary-file success.
-- [x] Targeted `tests/test_semantic.py` passes — 96 passed.
-- [x] Full `pytest -q` passes — 320 passed.
-- [x] `ruff check .` and `git diff --check` pass.
-- [x] Historical docs remain absent; diff is scoped; one conventional local commit is created; nothing is pushed.
-
-### Final Review Command Matrix
-```sh
-rtk pytest -q tests/test_semantic.py
-rtk pytest -q
-rtk ruff check .
-rtk git diff --check
-```
-
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.
