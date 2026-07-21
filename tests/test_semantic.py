@@ -1150,6 +1150,55 @@ def test_cli_fifo_database_is_rejected_without_hanging_or_source_changes(tmp_pat
     assert {child.name for child in tmp_path.iterdir()} == {database.name}
 
 
+def test_cli_invalid_regular_database_is_structured_without_source_changes(tmp_path):
+    database = tmp_path / "invalid-source.sqlite3"
+    content = b"not a SQLite database\n\x00invalid source bytes"
+    database.write_bytes(content)
+    initial = database.stat()
+    stale_atime_ns = 946_684_800_000_000_000
+    os.utime(database, ns=(stale_atime_ns, initial.st_mtime_ns))
+    before = database.stat()
+    before_metadata = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_uid,
+        before.st_gid,
+        before.st_size,
+        before.st_atime_ns,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+
+    completed = _run_resolve_cli(database, "Invalid source chicken")
+    error = _strict_json_loads(completed.stderr)["error"]
+    after = database.stat()
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert error["code"] == "database_snapshot_invalid"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert error["details"]["snapshot_target"] == "main"
+    assert "valid SQLite database" in error["details"]["action"]
+    assert (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_nlink,
+        after.st_uid,
+        after.st_gid,
+        after.st_size,
+        after.st_atime_ns,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ) == before_metadata
+    assert database.read_bytes() == content
+    assert {child.name for child in tmp_path.iterdir()} == {database.name}
+
+
 @pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
 def test_cli_fifo_snapshot_sidecar_is_rejected_without_hanging_or_source_changes(
     tmp_path, suffix

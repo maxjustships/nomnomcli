@@ -309,6 +309,18 @@ def _snapshot_unsafe_file_type_error(suffix: str, mode: int) -> NomnomError:
     )
 
 
+def _snapshot_invalid_database_error() -> NomnomError:
+    return _snapshot_lock_error(
+        "database_snapshot_invalid",
+        "The SQLite source is not a valid supported database",
+        snapshot_target="main",
+        action=(
+            "Replace the source with a valid SQLite database supported by this "
+            "nomnomcli version, or move it aside and retry with an empty database."
+        ),
+    )
+
+
 def _snapshot_unstable_path_error() -> NomnomError:
     return _snapshot_lock_error(
         "database_snapshot_unstable",
@@ -757,17 +769,30 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
                 else None
             )
             if private_path is not None:
-                source = sqlite3.connect(private_path)
                 try:
-                    source.backup(connection)
-                finally:
-                    source.close()
+                    source = sqlite3.connect(private_path)
+                    try:
+                        source.backup(connection)
+                    finally:
+                        source.close()
+                except sqlite3.ProgrammingError:
+                    raise
+                except sqlite3.DatabaseError as error:
+                    raise _snapshot_invalid_database_error() from error
 
         connection.row_factory = sqlite3.Row
         # Validate and migrate only the in-memory snapshot. SQLite opens only a
         # private file set proven stable across copying, so concurrent churn
         # fails safely and source sidecars cannot be created or modified.
-        _initialize_database(connection)
+        if private_path is None:
+            _initialize_database(connection)
+        else:
+            try:
+                _initialize_database(connection)
+            except sqlite3.ProgrammingError:
+                raise
+            except sqlite3.DatabaseError as error:
+                raise _snapshot_invalid_database_error() from error
         connection.execute("PRAGMA query_only = ON")
         yield connection
     finally:
