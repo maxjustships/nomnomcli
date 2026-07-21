@@ -5,6 +5,9 @@
 
 **nomnom stores nothing about food; it computes what you feed it.**
 
+> **Architecture contract:** contributors and coding agents must follow
+> [`AGENTS.md`](AGENTS.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 `nomnomcli` is an agent-first nutrition ledger. Version 0.4 ships zero food records: no food
 database, synonym corpus, or piece-weight table is hidden in the package. It resolves food at
 runtime, performs nutrition arithmetic in code, and stores successful logs plus a user-owned cache

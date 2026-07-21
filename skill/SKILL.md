@@ -10,6 +10,8 @@ description: >-
 Use `nomnom` as the only source of nutrition numbers. Never estimate calories, macros, or food
 composition. Portion mass may be externally estimated only through the contract below.
 
+> Repository changes follow [`AGENTS.md`](../AGENTS.md) and
+> [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md); they override this operational skill.
 ## Mandatory install protocol
 
 This protocol is required whenever `nomnom` is unavailable. Ask permission, then run the single
@@ -44,10 +46,8 @@ Follow this exact sequence:
    Offer `nomnom setup` only when the user wants broader no-photo generic/raw-food coverage
    or after a specific item returns `food_needs_source`. Never open a browser or run interactive
    setup automatically.
-4. Agents must never type, receive, echo, or persist a USDA key or any other user secret. Do not ask
-   for it in chat. Secret entry belongs only in the user's terminal through `nomnom setup`, which
-   links to <https://fdc.nal.usda.gov/api-key-signup.html>, validates the key, and stores it in the
-   owner-only XDG config (`0600`).
+4. Agents must never type, receive, echo, or persist secrets, or request them in chat. Only
+   `nomnom setup` may store them in owner-only XDG config.
 5. For base mode, use aliases/cache, strict OFF full text, exact OFF barcode, and package-photo label
    capture. `nomnom setup --status --json` is available when capability status is actually needed:
    `base_ready` means base mode works, and `connected` means USDA-enhanced coverage works.
