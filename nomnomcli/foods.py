@@ -477,9 +477,15 @@ class FoodRepository:
     def _find_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
             """SELECT * FROM food_cache
-            WHERE name = ? COLLATE NOCASE OR lookup_query = ? COLLATE NOCASE
-            ORDER BY CASE WHEN lookup_query = ? COLLATE NOCASE THEN 0 ELSE 1 END""",
-            (name, normalize_name(name), normalize_name(name)),
+            WHERE barcode = ?
+               OR name = ? COLLATE NOCASE
+               OR lookup_query = ? COLLATE NOCASE
+            ORDER BY CASE
+                WHEN barcode = ? THEN 0
+                WHEN lookup_query = ? COLLATE NOCASE THEN 1
+                ELSE 2
+            END""",
+            (name, name, normalize_name(name), name, normalize_name(name)),
         ).fetchall()
         for row in cached:
             food = self._row_to_food(row)

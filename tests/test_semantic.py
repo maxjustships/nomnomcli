@@ -298,6 +298,65 @@ def test_cli_rejects_non_finite_intent_numbers_with_strict_json_error(
     assert not database.exists()
 
 
+def test_cli_rejects_deeply_nested_intent_json_without_traceback(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "deep-intent.sqlite3"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    original = "chicken"
+    nesting = sys.getrecursionlimit() + 100
+    raw_intent = "[" * nesting + "0" + "]" * nesting
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            raw_intent,
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "invalid_resolution_intent"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"] == {
+        "would_write": False,
+        "original": original,
+        "reason": "Resolution intent JSON exceeds safe decoder limits",
+    }
+    assert not database.exists()
+
+
+@pytest.mark.parametrize(
+    "decoder_error",
+    [RecursionError(), MemoryError(), OverflowError()],
+    ids=("recursion", "memory", "overflow"),
+)
+def test_intent_decoder_capacity_errors_are_structured(
+    monkeypatch, decoder_error
+):
+    def fail_decode(*args, **kwargs):
+        raise decoder_error
+
+    monkeypatch.setattr("nomnomcli.semantic.json.loads", fail_decode)
+
+    with pytest.raises(NomnomError) as caught:
+        parse_resolution_intent("{}", expected_original="chicken")
+
+    assert caught.value.code == "invalid_resolution_intent"
+    assert caught.value.details == {
+        "would_write": False,
+        "original": "chicken",
+        "reason": "Resolution intent JSON exceeds safe decoder limits",
+    }
+
+
 @pytest.mark.parametrize(
     ("version", "parsed_version"),
     [("true", True), ("1.0", 1.0), ("1e0", 1.0)],
@@ -2572,6 +2631,122 @@ def test_cli_valid_exact_pin_or_alias_still_returns_raw_plan_without_writes(
     assert plan["resolution_mode"] == "exact_product"
     assert plan["source_id"] == canonical.source_id
     assert plan["would_write"] is False
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+def test_cli_resolve_reuses_exact_captured_barcode_without_provider_or_writes(
+    user_db, monkeypatch, capsys
+):
+    barcode = "0123456789012"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.product_by_barcode",
+        lambda self, code: Food(
+            name="Fixture Bar — Acme",
+            kcal=250,
+            protein=9,
+            fat=4,
+            carbs=45,
+            source="openfoodfacts",
+            barcode=code,
+            brand="Acme",
+        ),
+    )
+
+    assert main(["capture", "barcode", barcode, "--json"]) == 0
+    captured_product = _strict_json_loads(capsys.readouterr().out)
+    assert captured_product["barcode"] == barcode
+
+    def unexpected_provider_call(*args, **kwargs):
+        pytest.fail("exact captured barcode reached a remote provider")
+
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.product_by_barcode",
+        unexpected_provider_call,
+    )
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.search", unexpected_provider_call
+    )
+    monkeypatch.setattr("nomnomcli.foods.USDAClient.resolve", unexpected_provider_call)
+    monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
+    monkeypatch.delenv("NOMNOM_DISABLE_OFF", raising=False)
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            barcode,
+            "--intent-json",
+            json.dumps(_intent(barcode, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    plan = _strict_json_loads(captured.out)
+
+    assert code == 0
+    assert captured.err == ""
+    assert plan["original"] == barcode
+    assert plan["retrieval_query"] == barcode
+    assert plan["provider"] == "openfoodfacts"
+    assert plan["source_id"] == barcode
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["would_write"] is False
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+@pytest.mark.parametrize(
+    "unknown_barcode",
+    ["012345678901", "0123456789013"],
+    ids=("partial", "unknown"),
+)
+def test_cli_resolve_refuses_nonexact_captured_barcode(
+    user_db, monkeypatch, capsys, unknown_barcode
+):
+    captured_barcode = "0123456789012"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.product_by_barcode",
+        lambda self, code: Food(
+            name="Fixture Bar — Acme",
+            kcal=250,
+            protein=9,
+            fat=4,
+            carbs=45,
+            source="openfoodfacts",
+            barcode=code,
+            brand="Acme",
+        ),
+    )
+    assert main(["capture", "barcode", captured_barcode, "--json"]) == 0
+    capsys.readouterr()
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            unknown_barcode,
+            "--intent-json",
+            json.dumps(_intent(unknown_barcode, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
     assert _database_state(user_db) == original_state
     assert _directory_file_state(user_db.parent) == original_files
 

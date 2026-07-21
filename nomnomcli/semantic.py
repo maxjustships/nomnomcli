@@ -103,6 +103,12 @@ def parse_resolution_intent(raw_json: str, *, expected_original: str) -> Resolut
             parse_float=_parse_finite_json_float,
             parse_int=_parse_finite_json_int,
         )
+    except (RecursionError, MemoryError, OverflowError):
+        _intent_error(
+            "Resolution intent must be valid inline JSON",
+            expected_original=expected_original,
+            details={"reason": "Resolution intent JSON exceeds safe decoder limits"},
+        )
     except (TypeError, ValueError) as exc:
         _intent_error(
             "Resolution intent must be valid inline JSON",
