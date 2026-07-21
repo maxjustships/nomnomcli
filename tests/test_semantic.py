@@ -248,18 +248,32 @@ def test_intent_v1_requires_exact_original_match():
     assert caught.value.details["intent_original"] == " курица "
 
 
-@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
-def test_cli_rejects_non_finite_intent_constants_with_strict_json_error(
-    tmp_path, monkeypatch, capsys, constant
+@pytest.mark.parametrize(
+    "raw_intent",
+    [
+        '{"version": NaN, "original": "chicken", "brand_intent": false, "candidates": []}',
+        '{"version": Infinity, "original": "chicken", "brand_intent": false, "candidates": []}',
+        '{"version": -Infinity, "original": "chicken", "brand_intent": false, "candidates": []}',
+        '{"version": 1e400, "original": "chicken", "brand_intent": false, "candidates": []}',
+        '{"version": -1e400, "original": "chicken", "brand_intent": false, "candidates": []}',
+        '{"version": 1, "original": "chicken", "brand_intent": false, '
+        '"candidates": [{"query": 1e400, "relation": "same_form"}]}',
+    ],
+    ids=(
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+        "positive-overflow",
+        "negative-overflow",
+        "nested-overflow",
+    ),
+)
+def test_cli_rejects_non_finite_intent_numbers_with_strict_json_error(
+    tmp_path, monkeypatch, capsys, raw_intent
 ):
     database = tmp_path / "non-finite-intent.sqlite3"
     monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
     original = "chicken"
-    raw_intent = (
-        '{"version": '
-        + constant
-        + ', "original": "chicken", "brand_intent": false, "candidates": []}'
-    )
 
     code = main(
         [
@@ -276,7 +290,11 @@ def test_cli_rejects_non_finite_intent_constants_with_strict_json_error(
     assert code == 2
     assert error["error"]["code"] == "invalid_resolution_intent"
     assert error["error"]["would_write"] is False
-    assert error["error"]["details"]["original"] == original
+    assert error["error"]["details"] == {
+        "would_write": False,
+        "original": original,
+        "reason": "Resolution intent numbers must be finite",
+    }
     assert not database.exists()
 
 
@@ -400,6 +418,77 @@ def test_cli_rejects_non_finite_provider_confidence_with_strict_json_error(
         "reason": "non_finite_confidence",
         "minimum": 0.0,
         "maximum": 1.0,
+    }
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+@pytest.mark.parametrize("candidate_kind", ["raw", "semantic"])
+@pytest.mark.parametrize("nutrient", ["kcal", "protein", "fat", "carbs"])
+@pytest.mark.parametrize(
+    "invalid_value",
+    [-1.0, "NaN", "Infinity", "-Infinity"],
+    ids=("negative", "nan", "positive-infinity", "negative-infinity"),
+)
+def test_cli_rejects_invalid_cached_candidate_nutrition_without_source_writes(
+    user_db, monkeypatch, capsys, candidate_kind, nutrient, invalid_value
+):
+    original = (
+        "chicken breast roasted"
+        if candidate_kind == "raw"
+        else "unresolved poultry description"
+    )
+    retrieval_query = "chicken breast roasted"
+    cached, _ = _generic_food(retrieval_query)
+    if candidate_kind == "semantic":
+        cached = replace(
+            cached,
+            resolution_mode="generic_proxy",
+            assumption=(
+                "Brand not specified; used USDA generic proxy: "
+                "chicken breast roasted."
+            ),
+        )
+    with connect(user_db) as connection:
+        repository = FoodRepository(connection)
+        repository._cache_food(cached, lookup_query=retrieval_query)
+        connection.execute(
+            f"UPDATE food_cache SET {nutrient} = ? WHERE lookup_query = ?",
+            (invalid_value, retrieval_query),
+        )
+
+    candidates = (
+        []
+        if candidate_kind == "raw"
+        else [{"query": retrieval_query, "relation": "same_form"}]
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, candidates)),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "invalid_nutrition"
+    assert error["would_write"] is False
+    assert error["details"] == {
+        "would_write": False,
+        "reason": "non_finite_or_negative_nutrition",
+        "invalid_nutrients": [nutrient],
     }
     assert _database_state(user_db) == original_state
     assert _directory_file_state(user_db.parent) == original_files

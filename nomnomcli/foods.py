@@ -876,6 +876,7 @@ class FoodRepository:
                 enforce_policy=False,
                 evidence=evidence,
             )
+            self._validate_plan_nutrition(food)
             self._validate_plan_confidence(food, confidence)
             if (
                 food.resolution_mode == "exact_product"
@@ -896,7 +897,7 @@ class FoodRepository:
                     },
                 )
         except NomnomError as exc:
-            if exc.code == "provider_confidence_invalid":
+            if exc.code in {"invalid_nutrition", "provider_confidence_invalid"}:
                 raise
             original_error = exc
         else:
@@ -933,6 +934,7 @@ class FoodRepository:
                     persist=False,
                     enforce_policy=False,
                 )
+                self._validate_plan_nutrition(food)
                 self._validate_plan_confidence(food, confidence)
                 if food.resolution_mode != "generic_proxy":
                     raise NomnomError(
@@ -941,7 +943,7 @@ class FoodRepository:
                         details={"resolution_mode": food.resolution_mode},
                     )
             except NomnomError as exc:
-                if exc.code == "provider_confidence_invalid":
+                if exc.code in {"invalid_nutrition", "provider_confidence_invalid"}:
                     raise
                 failures.append(
                     {
@@ -990,6 +992,30 @@ class FoodRepository:
             food=food,
             confidence=confidence,
         )
+
+    @staticmethod
+    def _validate_plan_nutrition(food: Food) -> None:
+        nutrition = {
+            "kcal": food.kcal,
+            "protein": food.protein,
+            "fat": food.fat,
+            "carbs": food.carbs,
+        }
+        invalid_nutrients = [
+            nutrient
+            for nutrient, value in nutrition.items()
+            if not math.isfinite(value) or value < 0
+        ]
+        if invalid_nutrients:
+            raise NomnomError(
+                "invalid_nutrition",
+                "Nutrition values must be finite and non-negative",
+                details={
+                    "would_write": False,
+                    "reason": "non_finite_or_negative_nutrition",
+                    "invalid_nutrients": invalid_nutrients,
+                },
+            )
 
     @staticmethod
     def _validate_plan_confidence(food: Food, confidence: float) -> None:

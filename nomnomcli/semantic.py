@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import NoReturn
@@ -74,8 +75,19 @@ def _candidate_key(value: str) -> str:
     return " ".join(value.casefold().replace("ё", "е").split())
 
 
-def _reject_non_finite_json_constant(value: str) -> NoReturn:
-    raise ValueError(f"Non-finite JSON constant is not allowed: {value}")
+def _reject_non_finite_json_number(_value: str) -> NoReturn:
+    raise ValueError("Resolution intent numbers must be finite")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        _reject_non_finite_json_number(value)
+    return parsed
+
+
+def _parse_finite_json_int(value: str) -> int:
+    return int(value)
 
 
 def parse_resolution_intent(raw_json: str, *, expected_original: str) -> ResolutionIntent:
@@ -85,7 +97,12 @@ def parse_resolution_intent(raw_json: str, *, expected_original: str) -> Resolut
             expected_original=expected_original,
         )
     try:
-        payload = json.loads(raw_json, parse_constant=_reject_non_finite_json_constant)
+        payload = json.loads(
+            raw_json,
+            parse_constant=_reject_non_finite_json_number,
+            parse_float=_parse_finite_json_float,
+            parse_int=_parse_finite_json_int,
+        )
     except (TypeError, ValueError) as exc:
         _intent_error(
             "Resolution intent must be valid inline JSON",
