@@ -20,16 +20,63 @@ REMOVED_FOOD_INPUTS = (
 )
 STRUCTURED_DATA_SUFFIXES = {".csv", ".db", ".json", ".sqlite", ".sqlite3"}
 ALLOWED_STRUCTURED_FIXTURES = {"tests/fixtures/foods.json"}
+GENERATED_DIRECTORY_NAMES = {
+    ".git",
+    ".mypy_cache",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "htmlcov",
+    "venv",
+}
 
 
-def tracked_paths() -> set[str]:
-    result = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    )
+def _git_tracked_paths(root: Path) -> set[str] | None:
+    try:
+        top_level = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if Path(top_level).resolve() != root.resolve():
+            return None
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
     return {path.decode() for path in result.stdout.split(b"\0") if path}
+
+
+def _filesystem_paths(root: Path) -> set[str]:
+    paths = set()
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if any(
+            part in GENERATED_DIRECTORY_NAMES or part.endswith(".egg-info")
+            for part in relative.parts
+        ):
+            continue
+        if path.is_file():
+            paths.add(relative.as_posix())
+    return paths
+
+
+def tracked_paths(root: Path = ROOT) -> set[str]:
+    git_paths = _git_tracked_paths(root)
+    if git_paths is not None:
+        return git_paths
+    return _filesystem_paths(root)
 
 
 def test_architecture_contracts_exist_and_root_contract_is_concise():
@@ -42,6 +89,53 @@ def test_architecture_contracts_are_linked_from_readme_and_skill():
         text = path.read_text(encoding="utf-8")
         assert "AGENTS.md" in text
         assert "docs/ARCHITECTURE.md" in text
+
+
+def test_installed_skill_uses_stable_contract_links():
+    skill = (ROOT / "skill" / "SKILL.md").read_text(encoding="utf-8")
+    assert "https://github.com/maxjustships/nomnomcli/blob/main/AGENTS.md" in skill
+    assert (
+        "https://github.com/maxjustships/nomnomcli/blob/main/docs/ARCHITECTURE.md" in skill
+    )
+
+
+def test_tracked_paths_fall_back_without_git_and_ignore_generated_artifacts(
+    monkeypatch, tmp_path
+):
+    archive_root = tmp_path / "nomnomcli-source"
+    (archive_root / "tests" / "fixtures").mkdir(parents=True)
+    (archive_root / "build").mkdir()
+    (archive_root / "nomnomcli.egg-info").mkdir()
+    (archive_root / "AGENTS.md").write_text("contract", encoding="utf-8")
+    (archive_root / "tests" / "fixtures" / "foods.json").write_text("{}", encoding="utf-8")
+    (archive_root / "build" / "generated.json").write_text("{}", encoding="utf-8")
+    (archive_root / "nomnomcli.egg-info" / "generated.json").write_text(
+        "{}", encoding="utf-8"
+    )
+
+    def git_unavailable(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(subprocess, "run", git_unavailable)
+
+    assert tracked_paths(archive_root) == {
+        "AGENTS.md",
+        "tests/fixtures/foods.json",
+    }
+
+
+def test_tracked_paths_preserve_git_index_behavior(monkeypatch, tmp_path):
+    (tmp_path / "tracked.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "untracked.json").write_text("{}", encoding="utf-8")
+    responses = iter(
+        (
+            subprocess.CompletedProcess([], 0, stdout=f"{tmp_path}\n"),
+            subprocess.CompletedProcess([], 0, stdout=b"tracked.json\0"),
+        )
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(responses))
+
+    assert tracked_paths(tmp_path) == {"tracked.json"}
 
 
 def test_repository_contains_no_bundled_food_data_or_build_inputs():

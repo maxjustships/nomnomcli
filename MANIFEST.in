@@ -1,0 +1,6 @@
+include AGENTS.md
+include docs/ARCHITECTURE.md
+include skill/SKILL.md
+prune tests
+include tests/test_data_quality.py
+include tests/fixtures/foods.json

@@ -10,8 +10,8 @@ description: >-
 Use `nomnom` as the only source of nutrition numbers. Never estimate calories, macros, or food
 composition. Portion mass may be externally estimated only through the contract below.
 
-> Repository changes follow [`AGENTS.md`](../AGENTS.md) and
-> [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md); they override this operational skill.
+> Repository changes follow [`AGENTS.md`](https://github.com/maxjustships/nomnomcli/blob/main/AGENTS.md)
+> and [`docs/ARCHITECTURE.md`](https://github.com/maxjustships/nomnomcli/blob/main/docs/ARCHITECTURE.md); they override this operational skill.
 ## Mandatory install protocol
 
 This protocol is required whenever `nomnom` is unavailable. Ask permission, then run the single

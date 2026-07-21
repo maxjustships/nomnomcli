@@ -1,12 +1,16 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: architecture guardrail P2 follow-up verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Added docs/test-only sdist contents and an archive regression that builds from a Git-free source copy, extracts the archive, verifies required members, and runs its shipped data-quality tests.
+- Preserved Git-index enumeration in worktrees while adding a generated-artifact-aware filesystem fallback for archives and environments without Git.
+- Replaced installed Hermes skill relative contract links with stable canonical GitHub URLs.
+- Passed 15 focused tests, 232 full tests, Ruff, whitespace validation, and an independent extracted-sdist smoke with 14 data-quality tests.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,7 +34,7 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- None; the scoped follow-up is verified and ready for its local commit.
 
 ## Next
 - Do not push, merge, or open a pull request unless the user requests it separately.
@@ -97,6 +101,7 @@ ruff check .
 | 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
 | 2026-07-21 | M28 | issue #31 tests and planning records | targeted pytest before production edits | RED: 16 expected failures; 1 strict-path pass | M29 |
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
+| 2026-07-21 | M31–M33 | manifest, data-quality/sdist tests, skill links, execution records | focused/full pytest; Ruff; diff check; independent extracted-sdist smoke | 15 focused; 232 full; 14 archive tests; clean | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -119,3 +124,4 @@ ruff check .
 - [x] Issue #29 literal six-item temp-data smoke returns only explicit generic proxies with audited OFF candidate identity.
 - [x] Issue #31 exact breakfast logs atomically with four explicit agent estimates and two unflagged explicit-gram items.
 - [x] Issue #31 date stats preserve the four portion provenance objects and one concise correction route.
+- [x] Git-free extracted sdist contains both architecture contracts and the tiny required fixture, then passes its shipped data-quality tests.
