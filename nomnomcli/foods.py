@@ -5,7 +5,7 @@ import math
 import os
 import re
 import sqlite3
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
@@ -86,6 +86,38 @@ def _brand_matches_query(food: Food, query: str) -> bool:
         for part in brand_parts
         if (brand_tokens := _name_tokens(part))
     )
+
+
+def _provider_brand_evidence_matches_query(brand: str | None, query: str) -> bool:
+    if not brand:
+        return False
+    query_tokens = _name_tokens(query)
+    return any(
+        brand_tokens and brand_tokens <= query_tokens
+        for part in re.split(r"[,;/|]+", brand)
+        if (brand_tokens := _name_tokens(part))
+    )
+
+
+@dataclass(slots=True)
+class _ResolutionEvidence:
+    matching_provider_brand: bool = False
+
+    def observe_food(self, query: str, food: Food) -> None:
+        self.matching_provider_brand |= _provider_brand_evidence_matches_query(
+            food.brand, query
+        )
+
+    def observe_error(self, query: str, error: NomnomError) -> None:
+        candidate = error.details.get("candidate")
+        if not isinstance(candidate, dict):
+            return
+        brand = candidate.get("brand")
+        if not isinstance(brand, str) or not brand.strip():
+            return
+        self.matching_provider_brand |= _provider_brand_evidence_matches_query(
+            brand, query
+        )
 
 
 def _query_has_sku(query: str) -> bool:
@@ -466,6 +498,7 @@ class FoodRepository:
         allow_remote: bool,
         persist: bool,
         enforce_policy: bool,
+        evidence: _ResolutionEvidence | None = None,
     ) -> tuple[Food, float]:
         def apply_policy(food: Food, confidence: float) -> tuple[Food, float]:
             if enforce_policy:
@@ -510,8 +543,13 @@ class FoodRepository:
                 off_matches = self.off_client.search(query, page_size=5)
             except NomnomError as exc:
                 off_error = exc
+                if evidence is not None:
+                    evidence.observe_error(query, exc)
                 off_matches = []
             if off_matches:
+                if evidence is not None:
+                    for candidate in off_matches:
+                        evidence.observe_food(query, candidate)
                 matching_brand = next(
                     (food for food in off_matches if _brand_matches_query(food, query)), None
                 )
@@ -569,7 +607,11 @@ class FoodRepository:
                 food, confidence = self.usda_client.resolve(query, credential.value)
             except NomnomError as exc:
                 usda_error = exc
+                if evidence is not None:
+                    evidence.observe_error(query, exc)
             else:
+                if evidence is not None:
+                    evidence.observe_food(query, food)
                 food, confidence = self._prepare_usda_generic_proxy(
                     query,
                     food,
@@ -662,19 +704,6 @@ class FoodRepository:
             return 2
         return 3
 
-    @staticmethod
-    def _error_reveals_brand_intent(query: str, error: NomnomError) -> bool:
-        """Use provider-returned brand evidence without maintaining a brand corpus."""
-        candidate = error.details.get("candidate")
-        if not isinstance(candidate, dict):
-            return False
-        brand = candidate.get("brand")
-        if not isinstance(brand, str) or not brand.strip():
-            return False
-        brand_tokens = _name_tokens(brand)
-        query_tokens = _name_tokens(query)
-        return bool(brand_tokens and brand_tokens <= query_tokens)
-
     def _raw_record_satisfies_exact_intent(self, query: str, food: Food) -> bool:
         if food.resolution_mode != "exact_product":
             return False
@@ -685,6 +714,50 @@ class FoodRepository:
             return alias == food
         pinned = self._find_exact(query)
         return pinned == food
+
+    def _protect_original_intent(
+        self,
+        *,
+        original_query: str,
+        intent: ResolutionIntent,
+        evidence: _ResolutionEvidence,
+        raw_food: Food | None,
+    ) -> None:
+        hard_exact_intent = (
+            intent.brand_intent
+            or _query_has_sku(original_query)
+            or evidence.matching_provider_brand
+        )
+        dropped_token_specificity = _semantic_rewrite_drops_original_tokens(
+            original_query, intent.candidates
+        )
+        if not hard_exact_intent and not dropped_token_specificity:
+            return
+        if raw_food is not None and self._raw_record_satisfies_exact_intent(
+            original_query, raw_food
+        ):
+            return
+        raw_generic_preserves_original = (
+            raw_food is not None
+            and raw_food.resolution_mode == "generic_proxy"
+            and _generic_proxy_query_is_safe(original_query, raw_food)
+        )
+        if (
+            dropped_token_specificity
+            and not hard_exact_intent
+            and raw_generic_preserves_original
+        ):
+            return
+        raise NomnomError(
+            "exact_resolution_required",
+            f"Exact product resolution is required for: {original_query}",
+            details={
+                "would_write": False,
+                "original": original_query,
+                "intent_version": intent.version,
+                "action": EXACT_CAPTURE_ACTION,
+            },
+        )
 
     def _resolution_plan(
         self,
@@ -742,53 +815,37 @@ class FoodRepository:
                 },
             )
 
-        raw_exact_intent = intent.brand_intent or _query_has_sku(original_query)
-        original_error = None
+        evidence = _ResolutionEvidence()
+        original_error: NomnomError | None = None
+        raw_resolution: tuple[Food, float] | None = None
         try:
             food, confidence = self._resolve(
                 original_query,
                 allow_remote=allow_remote,
                 persist=False,
                 enforce_policy=False,
+                evidence=evidence,
             )
             self._validate_plan_confidence(food, confidence)
         except NomnomError as exc:
             original_error = exc
         else:
-            if raw_exact_intent and not self._raw_record_satisfies_exact_intent(
-                original_query, food
-            ):
-                original_error = NomnomError(
-                    "exact_resolution_required",
-                    f"Exact product resolution is required for: {original_query}",
-                    details={"resolution_mode": food.resolution_mode},
-                )
-            else:
-                return self._resolution_plan(
-                    original=original_query,
-                    retrieval_query=original_query,
-                    intent=intent,
-                    food=food,
-                    confidence=confidence,
-                )
+            raw_resolution = (food, confidence)
 
-        exact_intent = (
-            raw_exact_intent
-            or self._error_reveals_brand_intent(original_query, original_error)
-            or _semantic_rewrite_drops_original_tokens(
-                original_query, intent.candidates
-            )
+        self._protect_original_intent(
+            original_query=original_query,
+            intent=intent,
+            evidence=evidence,
+            raw_food=raw_resolution[0] if raw_resolution is not None else None,
         )
-        if exact_intent:
-            raise NomnomError(
-                "exact_resolution_required",
-                f"Exact product resolution is required for: {original_query}",
-                details={
-                    "would_write": False,
-                    "original": original_query,
-                    "intent_version": intent.version,
-                    "action": EXACT_CAPTURE_ACTION,
-                },
+        if raw_resolution is not None:
+            food, confidence = raw_resolution
+            return self._resolution_plan(
+                original=original_query,
+                retrieval_query=original_query,
+                intent=intent,
+                food=food,
+                confidence=confidence,
             )
 
         relation_priority = {

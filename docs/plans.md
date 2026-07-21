@@ -1,5 +1,62 @@
 # Plans
 
+## Issue #33 Phase A Exact-Intent Boundary Follow-up Source
+- Task: Fix raw-cache dropped-token and OFF-brand-evidence exact-intent bypasses without changing Phase A persistence or application behavior.
+- Canonical input: Two independent-review P2 findings plus targeted/full pytest, Ruff, diff, no-write smoke, local commit, and no-push requirements.
+- Repo context: `FoodRepository.plan_resolution`, non-persisting provider resolution evidence, semantic regressions, and Phase A execution records.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Exact-Intent Boundary Follow-up Assumptions
+- Dropped-token specificity is inferred from the original and its supplied semantic candidates before any raw result can be returned.
+- Provider brand evidence is observational planner state: a candidate brand whose normalized tokens are contained in the original survives later provider errors, while an unrelated brand never creates exact intent.
+- A protected original may still return an actual matching local `exact_product` pin, alias, or barcode; ordinary unprotected raw-first resolution remains unchanged.
+
+## Issue #33 Phase A Exact-Intent Boundary Follow-up Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M46 | Reproduce both exact-intent ordering/evidence bypasses | M45 | [x] |
+| M47 | Centralize original-intent inference and protection | M46 | [x] |
+| M48 | Run full gates, no-write smoke, audit, and commit | M47 | [x] |
+
+## M46. Reproduce both independent-review bypasses `[x]`
+### Goal
+- Focused regressions prove a raw generic cache hit cannot preempt dropped-token inference and OFF matching-brand evidence cannot be erased by a later USDA failure.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'raw_cache_dropped_token or off_brand_match_survives_usda_failure or nonmatching_provider_brand'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until both bypass regressions fail for the reviewed reasons and the nonmatching-brand control remains green.
+
+## M47. Centralize original-intent inference and protection `[x]`
+### Goal
+- One original-intent boundary combines declared brand/SKU intent, dropped-token specificity, and provider-observed matching-brand evidence before allowing either a raw plan or semantic candidates.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+PYTHONPATH=. pytest -q tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any regression to ordinary raw-first behavior, exact local pins/barcodes, provider ordering, nonmatching-brand behavior, or no-write guarantees blocks M48.
+
+## M48. Verify and commit the Phase A follow-up `[x]`
+### Goal
+- Targeted and full pytest, Ruff, diff checks, a disposable no-write smoke, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass and the smoke proves exact source bytes, schema/counts, and directory entries remain unchanged.
+
 ## Issue #33 Phase A Final Safety Findings Source
 - Task: Preserve hot DELETE-mode rollback recovery in private read-only snapshots and recognize provider-evidenced brand-only originals as exact intent.
 - Canonical input: Two final independent-review P2 findings plus the user's regression, full validation, disposable no-write smoke, local commit, and no-push requirements.

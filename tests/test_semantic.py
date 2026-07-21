@@ -839,12 +839,29 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
                 provenance="user",
             ),
         ),
+        (
+            "Acme chicken",
+            Food(
+                name="Pinned Acme chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                resolution_mode="exact_product",
+                source_id="pin-acme-chicken",
+                provenance="user",
+            ),
+        ),
     ],
 )
 def test_exact_local_barcode_or_pin_still_returns_raw_plan(repository, original, food):
     repository._cache_food(food, lookup_query=original)
     intent = parse_resolution_intent(
-        json.dumps(_intent(original, [])), expected_original=original
+        json.dumps(
+            _intent(original, [{"query": "chicken", "relation": "same_form"}])
+        ),
+        expected_original=original,
     )
 
     plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
@@ -853,6 +870,50 @@ def test_exact_local_barcode_or_pin_still_returns_raw_plan(repository, original,
     assert plan["resolution_mode"] == "exact_product"
     assert plan["source_id"] == food.source_id
     assert plan["would_write"] is False
+
+
+def test_cli_raw_cache_dropped_token_requires_exact_resolution_without_source_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "Acme chicken"
+    cached, _ = _generic_food("chicken")
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query=original)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": "chicken", "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
 
 
 def test_explicit_brand_is_protected_without_off_response(repository, monkeypatch):
@@ -942,7 +1003,67 @@ def test_cli_brand_only_provider_match_requires_exact_resolution_without_writes(
     assert _directory_file_state(user_db.parent) == original_files
 
 
-def test_non_brand_original_does_not_infer_unmatched_provider_brand(
+def test_off_brand_match_survives_usda_failure_without_source_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "Acme"
+    semantic_query = "chicken"
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query=semantic_query)
+
+    branded, _ = _generic_food(
+        "Acme chicken",
+        source="openfoodfacts",
+        source_id="10000012",
+    )
+    branded = replace(branded, brand="Acme", categories=("chicken",))
+    monkeypatch.setattr(
+        "nomnomcli.off.OpenFoodFactsClient.search",
+        lambda client, query, page_size=5: [branded] if query == original else [],
+    )
+
+    def fail_usda(client, query, api_key):
+        raise NomnomError("food_not_found", f"No USDA food for {query}")
+
+    monkeypatch.setattr("nomnomcli.usda.USDAClient.resolve", fail_usda)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": semantic_query, "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+def test_nonmatching_provider_brand_does_not_infer_exact_intent(
     repository, monkeypatch
 ):
     original = "mystery poultry"
@@ -971,7 +1092,12 @@ def test_non_brand_original_does_not_infer_unmatched_provider_brand(
     )
     branded = replace(branded, brand="Acme", categories=("chicken",))
     monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [branded])
-    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+
+    def fail_usda(query, api_key):
+        raise NomnomError("food_not_found", f"No USDA food for {query}")
+
+    monkeypatch.setattr(repository.usda_client, "resolve", fail_usda)
     before = _counts(repository)
 
     plan = repository.plan_resolution(original, intent=intent)

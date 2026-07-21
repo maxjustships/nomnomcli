@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A final safety findings completed
+- Current phase: issue #33 Phase A exact-intent boundary follow-up completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Centralized original-intent inference/protection before raw-plan return or semantic-candidate acceptance, including declared brand/SKU intent, dropped-token specificity, and provider-observed matching-brand evidence.
+- Added raw legacy/generic cache and OFF-brand-plus-USDA-failure CLI regressions with exact byte/schema/count/directory no-write assertions; preserved ordinary raw-first behavior, exact local pins/barcodes, and the nonmatching-brand control.
+- Recorded both regressions RED, then passed 116 targeted tests, 261 full tests, repository-wide Ruff, diff checks, and a disposable subprocess refusal smoke with identical source bytes and entries.
 - Copied matching hot DELETE-mode rollback journals into private snapshot storage before SQLite opens the copy, so recovery restores committed state without touching source main/journal bytes or directory entries.
 - Recognized provider-evidenced brand-token equality, including brand-only `Acme`, as exact intent without a static brand corpus; preserved unmatched non-brand semantic behavior.
 - Recorded both requested RED failures, then passed 122 targeted tests, 258 full tests, repository-wide Ruff, diff checks, existing pending-WAL regressions, and a disposable hot-journal subprocess CLI smoke with exact source hashes/names unchanged.
@@ -51,12 +54,15 @@
 - None; create the requested local conventional commit, with no push or pull request.
 
 ## Decisions Made
+- Exact-intent follow-up: infer all original specificity at one planner boundary before returning a raw plan or considering semantic candidates.
+- Exact-intent follow-up: carry matching OFF brand evidence as resolution-attempt state so later USDA exceptions cannot erase it; do not infer from unrelated provider brands.
+- Exact-intent follow-up: hard exact evidence requires a matching `exact_product`; conservative dropped-token inference may also pass a raw generic result that preserves every original query token.
 - Final safety findings: treat existing `-journal` as inseparable SQLite snapshot input and permit recovery only beside the private copy.
 - Final safety findings: infer brand-only exact intent only from provider-returned candidate evidence whose normalized brand tokens are contained in the original; do not introduce static brand data.
 - WAL-safe snapshot: never pass the source path to `sqlite3.connect`; copy the main file plus already-existing WAL/SHM siblings into one private temporary directory first.
 - WAL-safe snapshot: allow all SQLite open/backup/migration side effects only inside that owned directory, then remove it through scoped context cleanup.
 - Final P2: enforce exact intent once at the raw planning boundary so alias, exact/cache/search, and provider returns share the same protection.
-- Final P2: protected raw intent may pass only for a matching `exact_product`, including explicit local barcode/name/lookup pins and aliases.
+- Final P2: hard exact intent may pass only for a matching `exact_product`, including explicit local barcode/name/lookup pins and aliases.
 - Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
 - Issue #33 Phase A: semantic candidates can produce only `generic_proxy`; original barcode/SKU/explicit-brand intent remains exact-capture-only regardless of supplied `brand_intent`.
 - Issue #33 Phase A: rank across all accepted candidates by relation, generic USDA quality before safe OFF proxy, confidence, then normalized query.
@@ -97,6 +103,7 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M46–M48 exact-intent follow-up | `nomnomcli/foods.py`, semantic regressions, execution docs | focused RED/GREEN; 116 targeted; 261 full; Ruff; diff check; disposable no-write smoke | pass; exact refusal and source bytes/entries unchanged | local commit |
 | 2026-07-21 | M45 final safety findings | scoped production/test/docs diff | 258 full pytest; full Ruff; diff check; disposable hot-journal CLI smoke | pass; committed row recovered and exact source main/journal hashes and entries unchanged | local commit |
 | 2026-07-21 | M44 final safety findings | `nomnomcli/db.py`, `nomnomcli/foods.py`, regressions, docs | 122 targeted pytest; focused Ruff; pending-WAL regression | pass; rollback recovery and brand-only exact refusal green; non-brand control green | M45 |
 | 2026-07-21 | M43 final safety findings | semantic rollback/brand regressions and execution docs | focused pytest | RED: private snapshot exposed spilled uncommitted row; brand-only input returned semantic plan | M44 |

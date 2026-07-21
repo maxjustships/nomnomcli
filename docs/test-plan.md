@@ -1,5 +1,33 @@
 # Test Plan
 
+## Issue #33 Phase A Exact-Intent Boundary Follow-up Validation
+- In scope: raw-cache dropped-token specificity, matching OFF brand evidence across USDA failure/not-found, nonmatching provider-brand control behavior, actual exact local pins/barcodes, ordinary raw-first behavior, and Phase A no-write guarantees.
+- Out of scope: Phase B plan/log application, schema or policy changes, static brand/synonym datasets, live providers, push, or PR operations.
+- Fixtures: synthetic legacy/generic raw cache rows, synthetic OFF branded candidates, configured failing USDA, exact local pins/barcodes, and byte-audited temporary SQLite sources.
+
+### Critical Scenarios
+- Original `Acme chicken`, raw generic cached original, and semantic `chicken` refuses as `exact_resolution_required` with `would_write:false` before the raw plan can return; source state is unchanged.
+- Original brand-only `Acme`, OFF product brand `Acme`, configured USDA failure/not-found, and semantic `chicken` refuses as `exact_resolution_required` with no writes.
+- An unrelated OFF brand for an ordinary non-brand original does not create exact intent and does not falsely block a safe generic plan.
+- Ordinary raw-first resolution and matching local `exact_product` pins/barcodes continue to return read-only plans.
+
+### Acceptance Gates
+- [x] Both focused bypass regressions observed RED before production changes; nonmatching-brand control remained green.
+- [x] Targeted semantic/food/CLI tests pass — 116 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 261 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable CLI smoke returns `would_write:false` and preserves exact database bytes, schema/counts, and directory entries.
+- [x] One conventional local commit contains only the scoped Phase A follow-up; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'raw_cache_dropped_token or off_brand_match_survives_usda_failure or nonmatching_provider_brand'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Final Safety Findings Validation
 - In scope: hot DELETE-mode rollback journal recovery in a private snapshot, byte/name preservation of source main/journal state, existing WAL no-side-file behavior, provider-evidenced brand-only exact intent, non-brand behavior, and Phase A no-write guarantees.
 - Out of scope: Phase B plan/log application, schema or policy changes, static brand/synonym datasets, live providers, push, or PR operations.
