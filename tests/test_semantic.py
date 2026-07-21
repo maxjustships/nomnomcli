@@ -1092,6 +1092,68 @@ def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
 
 
 @pytest.mark.parametrize(
+    ("original", "brand"),
+    [("Acme's", "Acme"), ("Campbell", "Campbell’s")],
+)
+def test_cli_possessive_brand_raw_cache_match_requires_exact_resolution_without_writes(
+    user_db, monkeypatch, capsys, original, brand
+):
+    semantic_query = "chicken"
+    raw_food = Food(
+        name=original,
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="legacy fixture",
+        brand=brand,
+        resolution_mode="legacy",
+        source_id="legacy-possessive-brand",
+        provenance="legacy fixture",
+    )
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    with connect(user_db) as connection:
+        repository = FoodRepository(connection)
+        repository._cache_food(raw_food, lookup_query=original)
+        repository._cache_food(cached, lookup_query=semantic_query)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": semantic_query, "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+@pytest.mark.parametrize(
     ("original", "food"),
     [
         (
@@ -1149,6 +1211,36 @@ def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
                 brand="Acme",
                 resolution_mode="exact_product",
                 source_id="pin-acme-chicken",
+                provenance="user",
+            ),
+        ),
+        (
+            "Acme's chicken",
+            Food(
+                name="Pinned Acme chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                brand="Acme",
+                resolution_mode="exact_product",
+                source_id="pin-acme-possessive-chicken",
+                provenance="user",
+            ),
+        ),
+        (
+            "Campbell chicken",
+            Food(
+                name="Pinned Campbell chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                brand="Campbell’s",
+                resolution_mode="exact_product",
+                source_id="pin-campbell-possessive-chicken",
                 provenance="user",
             ),
         ),
@@ -1284,10 +1376,13 @@ def test_explicit_brand_is_protected_without_off_response(repository, monkeypatc
     assert _counts(repository) == before
 
 
-def test_cli_brand_only_provider_match_requires_exact_resolution_without_writes(
-    user_db, monkeypatch, capsys
+@pytest.mark.parametrize(
+    ("original", "brand"),
+    [("Acme's", "Acme"), ("Campbell", "Campbell’s")],
+)
+def test_cli_possessive_brand_provider_match_requires_exact_resolution_without_writes(
+    user_db, monkeypatch, capsys, original, brand
 ):
-    original = "Acme"
     semantic_query = "chicken"
     cached, _ = _generic_food(semantic_query)
     cached = replace(
@@ -1299,11 +1394,11 @@ def test_cli_brand_only_provider_match_requires_exact_resolution_without_writes(
         FoodRepository(connection)._cache_food(cached, lookup_query=semantic_query)
 
     branded, _ = _generic_food(
-        "Acme chicken",
+        f"{brand} chicken",
         source="openfoodfacts",
         source_id="10000010",
     )
-    branded = replace(branded, brand="Acme", categories=("chicken",))
+    branded = replace(branded, brand=brand, categories=("chicken",))
     monkeypatch.setattr(
         "nomnomcli.off.OpenFoodFactsClient.search",
         lambda client, query, page_size=5: [branded] if query == original else [],

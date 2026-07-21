@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A snapshot-integrity and explicit-SKU P2 completed
+- Current phase: issue #33 Phase A possessive-brand P2 completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Added a brand-only identity tokenizer that removes terminal ASCII/curly possessive-s forms while leaving `_name_tokens` and all non-brand comparisons unchanged; applied it consistently to provider evidence, raw-cache evidence, and exact brand matching.
+- Added both `Acme's`/`Acme` and `Campbell`/`Campbell’s` directions across provider and raw-cache CLI refusal paths, exact branded local-pin controls, and exact source byte/schema/count/directory preservation.
+- Recorded four focused RED failures with 11 controls green, then passed 15 focused tests, 134 targeted semantic/food/CLI tests, 279 full tests, repository-wide Ruff, and diff checks.
 - Added `SKUABC123` to the CLI semantic refusal regression with exact source-state preservation; extended explicit marker detection to arbitrary allowed suffix content containing a digit while retaining numeric and general alphanumeric controls.
 - Added a real WAL-checkpoint-during-copy regression proving the first private attempt is discarded and a second stable copy returns the committed exact pin without resolver source writes.
 - Added permanently unstable fingerprint coverage proving three attempts/six fingerprints end in structured `database_snapshot_unstable`, `would_write:false`, no plan, and unchanged source files.
@@ -65,6 +68,8 @@
 - Stop after the requested local conventional commit; do not push or open a PR.
 
 ## Decisions Made
+- Possessive-brand P2: introduce a brand-only token helper; do not modify `_name_tokens` or its ordinary food, semantic specificity, category, or confidence consumers.
+- Possessive-brand P2: use the helper on both sides of provider evidence, raw cache evidence, and exact brand matching so `Acme's`/`Acme` and `Campbell`/`Campbell’s` are symmetric.
 - Concurrent snapshot P2: fingerprint main plus rollback journal/WAL/SHM by existence, identity, size, and nanosecond mtime around the complete private copy; discard and retry any changed attempt.
 - Concurrent snapshot P2: bound copying at three attempts and return `database_snapshot_unstable` with `would_write:false` rather than opening a possibly mixed snapshot or returning a plan.
 - Explicit-SKU P2: make digit-bearing `sku` prefix forms exact regardless of the order of later letters/digits/separators, while preserving existing numeric and conservative general alphanumeric detection.
@@ -121,6 +126,7 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M58–M60 possessive-brand P2 | brand-only tokenizer, provider/raw/exact matching, regressions, execution docs | focused RED/GREEN; 134 targeted; 279 full; Ruff; diff check | pass; both possessive directions refuse disjoint semantic generics without source writes; exact/nonmatching/ordinary controls green | local commit, then stop |
 | 2026-07-21 | M55–M57 snapshot/SKU P2 | stable-copy protocol, SKU detector, regressions, README/skill, execution docs | focused RED/GREEN; 138 targeted; 274 full; Ruff; diff check; disposable no-write smoke | pass; transient checkpoint retries consistently, ongoing churn refuses structurally, exact source hashes/names unchanged | local commit, then stop |
 | 2026-07-21 | M54 alphanumeric-SKU P2 | scoped production/test/docs diff | 271 full pytest; full Ruff; diff check; scoped audit | pass; exact refusal/no-write behavior and all controls green | local commit, then stop |
 | 2026-07-21 | M53 alphanumeric-SKU P2 | `nomnomcli/foods.py`, semantic regressions, execution docs | 11 focused; 126 targeted; focused Ruff | pass; joined/separated identifiers refuse, ordinary expressions and exact local pin remain accepted | M54 |

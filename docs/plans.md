@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Possessive-Brand P2 Source
+- Task: Normalize trailing ASCII and curly possessive-s brand variants for exact-intent evidence without changing ordinary name-token behavior.
+- Canonical input: Final Phase A P2 requiring both possessive directions, provider/raw-cache/exact-brand consistency, disjoint semantic generic refusal, source immutability, retained controls, full validation, one local conventional commit, and no push/PR.
+- Repo context: `_brand_matches_query`, `_provider_brand_evidence_matches_query`, raw-cache intent protection, exact local pins, semantic CLI regressions, and Phase A no-write guarantees.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Possessive-Brand P2 Assumptions
+- Brand identity alone may remove a terminal ASCII `'s` or curly `’s` from a token; `_name_tokens` and every non-brand comparison retain current behavior.
+- The same brand-identity tokens must compare original queries against provider brands, raw cache brands, and exact branded candidates.
+- Runtime evidence only is in scope; no static brand corpus, schema/policy changes, persistence, or Phase B application is introduced.
+
+## Issue #33 Phase A Possessive-Brand P2 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M58 | Freeze possessive-brand regressions and controls | M57 | [x] |
+| M59 | Add narrow brand-identity token normalization | M58 | [x] |
+| M60 | Run full gates, audit, and commit | M59 | [x] |
+
+## M58. Freeze possessive-brand regressions and controls `[x]`
+### Goal
+- `Acme's` versus brand `Acme` and `Campbell` versus brand `Campbell’s` both refuse an available disjoint semantic generic plan, for provider and raw-cache evidence, without source writes.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'possessive_brand or nonmatching_provider_brand or nonmatching_raw_cache_brand or ordinary_food_expression'
+```
+
+### Stop-and-Fix Rule
+- Do not edit production matching until both directional variants reproduce the bypass while nonmatching brands, ordinary foods, and exact local pins retain their established behavior.
+
+## M59. Normalize possessives only for brand identity `[x]`
+### Goal
+- A dedicated brand tokenizer removes only terminal ASCII/curly possessive-s before existing comparison normalization, and all provider/raw/exact brand predicates use it consistently.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any general-token change, false match for unrelated brands, exact-pin regression, semantic write, or unrelated resolver behavior change blocks M60.
+
+## M60. Verify and commit the final Phase A P2 `[x]`
+### Goal
+- Full pytest, repository-wide Ruff, diff checks, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all requested gates pass and the diff contains only the narrow normalization, regressions, and execution records.
+
 ## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Source
 - Task: Protect arbitrary digit-bearing explicit `SKU` markers and refuse semantic resolution from SQLite source files that do not remain stable across a complete private copy.
 - Canonical input: Two independent-review P2 findings requiring `SKUABC123`, bounded main/journal/WAL/SHM fingerprint-and-copy retries, structured safe refusal under ongoing writes, deterministic concurrency regressions, full validation, a local conventional commit, and no push/PR.

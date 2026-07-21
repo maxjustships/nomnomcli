@@ -1,5 +1,32 @@
 # Test Plan
 
+## Issue #33 Phase A Possessive-Brand P2 Validation
+- In scope: terminal ASCII/curly possessive-s brand identity, both query/brand directions, provider evidence, raw-cache evidence, exact branded local pins, disjoint semantic generic refusal, nonmatching brands, ordinary food controls, and exact source preservation.
+- Out of scope: general tokenizer changes, static brand data, broader punctuation/inflection rules, schema/policy changes, Phase B persistence/application, live providers, push, or PR operations.
+- Fixtures: byte-audited temporary SQLite sources with an available cached semantic generic candidate, synthetic OFF candidates, raw legacy cache rows, and exact local branded pins.
+
+### Critical Scenarios
+- Original `Acme's`, provider/raw brand `Acme`, and cached semantic `chicken` refuse with `exact_resolution_required`, `would_write:false`, and unchanged source state.
+- Original `Campbell`, provider/raw brand `Campbell’s`, and cached semantic `chicken` produce the same structured no-write refusal.
+- Matching `exact_product` pins accept both possessive directions through exact brand matching.
+- Unrelated provider/raw brands and existing ordinary food expressions remain unprotected and can use their safe plans.
+
+### Acceptance Gates
+- [x] Both provider and raw-cache directional regressions observed RED before production changes — 4 failures; 11 nonmatching, ordinary-food, and exact-pin controls green.
+- [x] Targeted semantic/food/CLI tests pass — 134 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 279 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] One conventional local commit contains only the scoped P2 fix and execution records; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'possessive_brand or nonmatching_provider_brand or nonmatching_raw_cache_brand or ordinary_food_expression'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Snapshot-Integrity and Explicit-SKU P2 Validation
 - In scope: `SKUABC123` exact intent, existing barcode/`ABC-12345` behavior, ordinary food and `vitamin B12` controls, bounded stable copying of main/journal/WAL/SHM, files appearing/disappearing, structured ongoing-write refusal, and exact source preservation.
 - Out of scope: SQLite writer coordination/locking, source-side SQLite opens, Phase B application/persistence, schema/policy changes, live providers, push, or PR operations.

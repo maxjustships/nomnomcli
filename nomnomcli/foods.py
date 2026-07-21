@@ -50,6 +50,13 @@ def _comparison_token(token: str) -> str:
     return token
 
 
+def _brand_identity_tokens(value: str) -> set[str]:
+    return {
+        _comparison_token(re.sub(r"['’]s$", "", token))
+        for token in re.findall(r"\w+(?:['’]\w+)*", normalize_name(value))
+    }
+
+
 def _off_confidence(query: str, food: Food) -> float:
     query_tokens = _name_tokens(query)
     category_tokens = _name_tokens(" ".join(food.categories))
@@ -77,25 +84,25 @@ def _candidate_details(food: Food, confidence: float) -> dict:
 def _brand_matches_query(food: Food, query: str) -> bool:
     if not food.brand:
         return False
-    query_tokens = _name_tokens(query)
+    query_tokens = _brand_identity_tokens(query)
     brand_parts = re.split(r"[,;/|]+", food.brand)
     return any(
         brand_tokens
         and brand_tokens <= query_tokens
         and bool(query_tokens - brand_tokens)
         for part in brand_parts
-        if (brand_tokens := _name_tokens(part))
+        if (brand_tokens := _brand_identity_tokens(part))
     )
 
 
 def _provider_brand_evidence_matches_query(brand: str | None, query: str) -> bool:
     if not brand:
         return False
-    query_tokens = _name_tokens(query)
+    query_tokens = _brand_identity_tokens(query)
     return any(
         brand_tokens and brand_tokens <= query_tokens
         for part in re.split(r"[,;/|]+", brand)
-        if (brand_tokens := _name_tokens(part))
+        if (brand_tokens := _brand_identity_tokens(part))
     )
 
 
