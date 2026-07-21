@@ -1,12 +1,16 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: snapshot isolation and OFF fallback implemented and verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Isolated every source path open, OFD lock, fingerprint, and copy in a bounded fresh exec helper with `close_fds=True`; the parent opens only the returned private snapshot.
+- Added same-process writer-lock retention and structured helper-timeout regressions while preserving no-atime/no-follow/nonregular/symlink/parent-churn/WAL/MEMORY/OFF refusal coverage and source immutability.
+- Retained safe OFF generic candidates when configured USDA results fail identity preparation, while preserving valid USDA preference and invalid OFF refusal.
+- Passed 161 semantic tests, 79 focused provider tests, 390 full tests, Ruff, diff checks, and the historical-document absence audit.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,12 +34,15 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- No implementation work pending; the scoped local commit is next.
 
 ## Next
-- Do not push, merge, or open a pull request unless the user requests it separately.
+- Create one conventional local commit; do not push or open a PR.
 
 ## Decisions Made
+- Snapshot safety follow-up: source path walking, OFD locking, fingerprinting, and copying must execute only in a fresh interpreter with closed inherited descriptors.
+- Snapshot safety follow-up: helper timeout and protocol/process failures remain structured `would_write: false` errors.
+- Provider fallback follow-up: a validated USDA generic continues to win, but USDA identity/preparation rejection must not discard an already-safe OFF generic candidate.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -72,6 +79,7 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M31–M33 | snapshot helper, database/provider logic, focused tests, execution docs | focused/full pytest; Ruff; diff and historical-doc audits | 390 pass; clean | local commit only |
 | 2026-07-18 | Preflight | `.task-brief.md`, planning docs | repository inspection | pass | M1 |
 | 2026-07-18 | M1–M3 | package, data, tests, docs, skill, installer, CI | `pytest -q`; `ruff check .` | 30 pass; clean | M4 |
 | 2026-07-18 | M4 smoke | isolated user DB and local recipe fixture | CLI acceptance commands; `sh install.sh --dry-run` | pass | commit |

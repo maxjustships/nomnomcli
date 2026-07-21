@@ -1,5 +1,61 @@
 # Plans
 
+## Snapshot isolation and OFF fallback source
+- Task: Fix same-process SQLite lock safety and retain a safe OFF generic candidate when configured USDA identity validation fails.
+- Canonical input: User P1/P2 request dated 2026-07-21, including full pytest, Ruff/diff, historical-doc absence proof, one conventional commit, and no push/PR.
+- Repo context: `nomnomcli/db.py`, `nomnomcli/foods.py`, and focused semantic/provider regression tests.
+- Last updated: 2026-07-21
+
+## Snapshot isolation and OFF fallback assumptions
+- A fresh Python interpreter started with `subprocess` and `close_fds=True` is the required exec boundary; the parent gives it only serialized paths and receives only a structured JSON result.
+- The helper owns a parent-created private temporary directory but may write only snapshot files inside it; the parent opens only the returned private snapshot.
+- Existing no-follow, no-atime, regular-file, parent-chain, OFD, WAL, rollback-journal, MEMORY/OFF, and fail-closed checks remain helper-local.
+
+## Snapshot isolation and OFF fallback milestone order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M31 | Freeze lock-retention, helper protocol, timeout, and fallback regressions | M30 | [x] |
+| M32 | Isolate source snapshot acquisition in a bounded exec helper | M31 | [x] |
+| M33 | Retain safe OFF fallback after invalid USDA and verify all gates | M32 | [x] |
+
+## M31. Freeze safety regressions `[x]`
+### Goal
+- Tests prove resolve cannot release a same-process SQLite writer lock, helper timeout is structured, USDA remains preferred when valid, and safe OFF survives invalid USDA while invalid OFF still refuses.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py
+```
+
+### Stop-and-Fix Rule
+- Do not accept an implementation that opens the source path in the parent or weakens any existing snapshot refusal.
+
+## M32. Isolate source snapshot acquisition in a bounded exec helper `[x]`
+### Goal
+- Every source path descriptor, OFD lock, fingerprint, and copy operation runs in a fresh exec process with inherited descriptors closed and a bounded structured protocol.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+```
+
+### Stop-and-Fix Rule
+- Any unstructured helper failure, escaped private path, source mutation, inherited descriptor, or lock regression blocks M33.
+
+## M33. Retain safe OFF fallback and verify all gates `[x]`
+### Goal
+- Valid USDA still wins; USDA preparation/identity refusal falls back to an already-safe OFF generic; full tests and repository audits pass before one local commit.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until full pytest, Ruff, diff/status review, historical-doc absence proof, and no-source-mutation assertions pass.
+
 ## Issue #31 Source
 - Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
 - Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.

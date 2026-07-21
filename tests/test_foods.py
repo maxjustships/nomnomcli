@@ -637,6 +637,78 @@ def test_configured_usda_generic_beats_safe_branded_off_proxy(repository, monkey
     assert food.brand is None
 
 
+def test_safe_off_generic_survives_invalid_configured_usda_result(
+    repository, monkeypatch
+):
+    off_candidate = _off_candidate(
+        "Peanuts — Example Foods",
+        brand="Example Foods",
+        barcode="10000006",
+        categories=("en:peanuts",),
+    )
+    invalid_usda = Food(
+        "Peanuts — USDA Brand",
+        210,
+        21,
+        6,
+        11,
+        source="usda",
+        fdc_id=999001,
+        brand="USDA Brand",
+        provider_data_type="Branded",
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [off_candidate])
+    monkeypatch.setattr(
+        repository.usda_client,
+        "resolve",
+        lambda *args, **kwargs: (invalid_usda, 0.99),
+    )
+
+    food, confidence = repository.resolve("peanuts")
+
+    assert confidence >= 0.5
+    assert food.source == "openfoodfacts"
+    assert food.source_id == "10000006"
+    assert food.resolution_mode == "generic_proxy"
+    assert food.assumption is not None
+
+
+def test_invalid_off_is_not_rescued_by_invalid_configured_usda_result(
+    repository, monkeypatch
+):
+    invalid_off = _off_candidate(
+        "Chocolate spread — Example Foods",
+        brand="Example Foods",
+        barcode="10000007",
+        categories=("en:chocolate-spreads",),
+    )
+    invalid_usda = Food(
+        "Peanuts — USDA Brand",
+        210,
+        21,
+        6,
+        11,
+        source="usda",
+        fdc_id=999001,
+        brand="USDA Brand",
+        provider_data_type="Branded",
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [invalid_off])
+    monkeypatch.setattr(
+        repository.usda_client,
+        "resolve",
+        lambda *args, **kwargs: (invalid_usda, 0.99),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("peanuts")
+
+    assert caught.value.code == "exact_resolution_required"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize(
     ("literal", "candidate"),
     [

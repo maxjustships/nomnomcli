@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import stat
 import struct
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -26,6 +27,7 @@ LATEST_SCHEMA_VERSION = 4
 V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
 _SNAPSHOT_SUFFIXES = ("", "-journal", "-wal", "-shm")
 _SNAPSHOT_COPY_ATTEMPTS = 3
+_SNAPSHOT_HELPER_TIMEOUT_SECONDS = 10.0
 _SQLITE_LOCK_BYTE = 0x40000000
 _SQLITE_LOCK_BYTE_COUNT = 512
 _SQLITE_SHM_LOCK_OFFSET = 120
@@ -449,6 +451,125 @@ def _snapshot_unstable_path_error() -> NomnomError:
         attempts=_SNAPSHOT_COPY_ATTEMPTS,
         action="Wait for database path changes to finish, then retry resolution.",
     )
+
+
+def _snapshot_helper_error(
+    code: str, message: str, **details: object
+) -> NomnomError:
+    return _snapshot_lock_error(
+        code,
+        message,
+        action=(
+            "Retry resolution; if the failure persists, verify the local Python "
+            "installation and database filesystem."
+        ),
+        **details,
+    )
+
+
+def _run_snapshot_helper(source_path: Path, private_root: Path) -> Path | None:
+    """Acquire a source snapshot in a fresh exec process with no inherited DB FDs."""
+    request = json.dumps(
+        {"source_path": os.fspath(source_path), "private_root": os.fspath(private_root)},
+        allow_nan=False,
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "nomnomcli._snapshot_helper"],
+            input=request,
+            capture_output=True,
+            check=False,
+            close_fds=True,
+            text=True,
+            timeout=_SNAPSHOT_HELPER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise _snapshot_helper_error(
+            "database_snapshot_timeout",
+            "The isolated SQLite snapshot helper timed out",
+            timeout_seconds=_SNAPSHOT_HELPER_TIMEOUT_SECONDS,
+        ) from error
+    except OSError as error:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper could not start",
+            os_error=error.errno,
+        ) from error
+
+    if completed.returncode != 0:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper exited unexpectedly",
+            process_returncode=completed.returncode,
+        )
+    try:
+        result = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper returned an invalid response",
+        ) from error
+    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper returned an invalid response",
+        )
+    if result["ok"] is False:
+        serialized_error = result.get("error")
+        if not isinstance(serialized_error, dict):
+            raise _snapshot_helper_error(
+                "database_snapshot_helper_failed",
+                "The isolated SQLite snapshot helper returned an invalid error",
+            )
+        code = serialized_error.get("code")
+        message = serialized_error.get("message")
+        details = serialized_error.get("details", {})
+        if not isinstance(code, str) or not isinstance(message, str) or not isinstance(
+            details, dict
+        ):
+            raise _snapshot_helper_error(
+                "database_snapshot_helper_failed",
+                "The isolated SQLite snapshot helper returned an invalid error",
+            )
+        raise NomnomError(code, message, details=details)
+
+    snapshot = result.get("snapshot")
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, str):
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper returned an invalid path",
+        )
+    relative_path = Path(snapshot)
+    parts = relative_path.parts
+    valid_attempt = (
+        len(parts) == 2
+        and parts[0].startswith("attempt-")
+        and parts[0][len("attempt-") :].isdigit()
+        and 1 <= int(parts[0][len("attempt-") :]) <= _SNAPSHOT_COPY_ATTEMPTS
+        and parts[1] == "snapshot.sqlite3"
+    )
+    if relative_path.is_absolute() or not valid_attempt:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper returned an unsafe path",
+        )
+    private_path = private_root / relative_path
+    try:
+        metadata = private_path.lstat()
+    except OSError as error:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper did not create its snapshot",
+            os_error=error.errno,
+        ) from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The isolated SQLite snapshot helper returned a non-regular path",
+        )
+    return private_path
 
 
 def _snapshot_open_capabilities() -> tuple[int, int, int, int]:
@@ -896,17 +1017,10 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
     db_path = Path(path) if path is not None else default_db_path()
     connection = sqlite3.connect(":memory:")
     try:
-        with (
-            _open_snapshot_source_path(db_path) as source_path,
-            tempfile.TemporaryDirectory(
-                prefix="nomnomcli-read-only-"
-            ) as temporary_directory,
-        ):
-            private_path = (
-                _copy_stable_database_snapshot(source_path, Path(temporary_directory))
-                if source_path is not None
-                else None
-            )
+        with tempfile.TemporaryDirectory(
+            prefix="nomnomcli-read-only-"
+        ) as temporary_directory:
+            private_path = _run_snapshot_helper(db_path, Path(temporary_directory))
             if private_path is not None:
                 try:
                     source = sqlite3.connect(private_path)

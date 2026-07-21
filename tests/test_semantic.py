@@ -136,6 +136,18 @@ def _run_resolve_cli(database: Path, original: str) -> subprocess.CompletedProce
     )
 
 
+def _run_snapshot_worker_in_process_for_test(
+    source_path: Path, private_root: Path
+) -> Path | None:
+    """Exercise worker internals with monkeypatched faults, outside production paths."""
+    with database_module._open_snapshot_source_path(source_path) as source:
+        return (
+            database_module._copy_stable_database_snapshot(source, private_root)
+            if source is not None
+            else None
+        )
+
+
 def _create_legacy_database(path, version: int) -> None:
     extra_columns = (
         """, barcode TEXT, brand TEXT, lookup_query TEXT, alternatives_json TEXT"""
@@ -448,6 +460,11 @@ def test_cli_resolve_fails_closed_if_missing_parent_appears_during_confirmation(
     monkeypatch.setattr(
         database_module, "_open_snapshot_directory", open_directory_with_race
     )
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
@@ -498,6 +515,11 @@ def test_cli_resolve_parent_renamed_during_revalidation_is_structured_without_wr
 
     monkeypatch.setattr(
         database_module, "_open_snapshot_directory", open_directory_with_race
+    )
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
     )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
@@ -1349,6 +1371,11 @@ def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
     with connect(user_db):
         pass
     before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setattr(database_module, "_ofd_locks_supported", lambda: False)
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
@@ -1371,6 +1398,109 @@ def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
     assert _directory_file_state(user_db.parent) == before
 
 
+def test_cli_resolve_does_not_release_same_process_sqlite_writer_lock(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    writer = sqlite3.connect(user_db)
+    writer.execute("BEGIN IMMEDIATE")
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    try:
+        code = main(
+            [
+                "resolve",
+                "--food",
+                "writer lock chicken",
+                "--intent-json",
+                json.dumps(_intent("writer lock chicken", [])),
+                "--json",
+            ]
+        )
+        captured = capsys.readouterr()
+        error = _strict_json_loads(captured.err)["error"]
+        checker = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1], timeout=0)
+try:
+    connection.execute("BEGIN IMMEDIATE")
+except sqlite3.OperationalError:
+    print("busy")
+else:
+    print("acquired")
+    connection.rollback()
+finally:
+    connection.close()
+""",
+                str(user_db),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=5,
+        )
+
+        assert code == 2
+        assert captured.out == ""
+        assert error["code"] == "database_snapshot_busy"
+        assert error["would_write"] is False
+        assert checker.stdout.strip() == "busy"
+    finally:
+        writer.rollback()
+        writer.close()
+
+    assert _directory_file_state(user_db.parent) == before
+
+
+def test_cli_snapshot_helper_timeout_is_structured_without_source_changes(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+
+    def time_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            args[0] if args else "snapshot-helper",
+            kwargs["timeout"],
+        )
+
+    monkeypatch.setattr(database_module.subprocess, "run", time_out)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "timeout chicken",
+            "--intent-json",
+            json.dumps(_intent("timeout chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "database_snapshot_timeout"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert error["details"]["timeout_seconds"] == 10.0
+    assert _directory_file_state(user_db.parent) == before
+
+
 @pytest.mark.parametrize(
     ("platform", "ofd_supported"),
     [("darwin", True), ("linux", False)],
@@ -1382,6 +1512,11 @@ def test_cli_snapshot_platform_lock_capability_is_classified_without_writes(
     with connect(user_db):
         pass
     before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setattr(database_module.sys, "platform", platform)
     monkeypatch.setattr(
         database_module, "_ofd_locks_supported", lambda: ofd_supported
@@ -1424,6 +1559,11 @@ def test_cli_snapshot_missing_linux_noatime_is_classified_without_writes(
     with connect(user_db):
         pass
     before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setattr(database_module.sys, "platform", "linux")
     monkeypatch.setattr(database_module, "_ofd_locks_supported", lambda: True)
     monkeypatch.delattr(database_module.os, "O_NOATIME")
@@ -1607,6 +1747,11 @@ def test_cli_unreadable_snapshot_sidecar_is_structured_without_source_writes(
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(database_module.os, "open", refuse_sidecar_read)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
@@ -1879,6 +2024,11 @@ def test_cli_snapshot_noatime_unavailable_is_structured_and_does_not_copy(
 
     monkeypatch.setattr(database_module.os, "open", refuse_noatime)
     monkeypatch.setattr(database_module, "_copy_open_file", reject_copy)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
@@ -2049,6 +2199,11 @@ def test_cli_snapshot_lock_blocks_wal_checkpoint_during_copy(
         return result
 
     monkeypatch.setattr(database_module, "_copy_open_file", checkpoint_during_locked_copy)
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
+    )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
@@ -2099,6 +2254,11 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
         database_module,
         "_source_snapshot_fingerprint",
         permanently_changing_fingerprint,
+    )
+    monkeypatch.setattr(
+        database_module,
+        "_run_snapshot_helper",
+        _run_snapshot_worker_in_process_for_test,
     )
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")

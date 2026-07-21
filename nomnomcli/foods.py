@@ -662,15 +662,22 @@ class FoodRepository:
             else:
                 if evidence is not None:
                     evidence.observe_food(query, food)
-                food, confidence = self._prepare_usda_generic_proxy(
-                    query,
-                    food,
-                    confidence,
-                    enforce_policy=enforce_policy,
-                )
-                if persist:
-                    self._cache_food(food, lookup_query=query)
-                return food, confidence
+                try:
+                    food, confidence = self._prepare_usda_generic_proxy(
+                        query,
+                        food,
+                        confidence,
+                        enforce_policy=False,
+                    )
+                except NomnomError as exc:
+                    usda_error = exc
+                    if evidence is not None:
+                        evidence.observe_error(query, exc)
+                else:
+                    food, confidence = apply_policy(food, confidence)
+                    if persist:
+                        self._cache_food(food, lookup_query=query)
+                    return food, confidence
 
         if accepted:
             accepted.sort(key=lambda match: -match[1])
