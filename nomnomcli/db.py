@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import struct
 import sys
 import tempfile
@@ -281,6 +282,33 @@ def _snapshot_unsafe_path_error(
     )
 
 
+def _snapshot_file_type(mode: int) -> str:
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISCHR(mode):
+        return "character_device"
+    if stat.S_ISBLK(mode):
+        return "block_device"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    return "non_regular"
+
+
+def _snapshot_unsafe_file_type_error(suffix: str, mode: int) -> NomnomError:
+    return _snapshot_lock_error(
+        "database_snapshot_unsafe_file_type",
+        "SQLite snapshot sources must be ordinary regular files",
+        snapshot_target=suffix.removeprefix("-") or "main",
+        file_type=_snapshot_file_type(mode),
+        action=(
+            "Use a regular file for the database and every existing SQLite "
+            "journal, WAL, or SHM sidecar, then retry resolution."
+        ),
+    )
+
+
 def _snapshot_unstable_path_error() -> NomnomError:
     return _snapshot_lock_error(
         "database_snapshot_unstable",
@@ -461,18 +489,48 @@ def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target
         ) from error
 
 
+def _reject_non_regular_snapshot_path_after_open_error(
+    source: _SnapshotSource, filename: str, suffix: str
+) -> None:
+    """Classify file types such as sockets/devices that cannot be read-opened."""
+    noatime, nofollow, _, path_only = _snapshot_open_capabilities()
+    flags = path_only | os.O_CLOEXEC | os.O_NONBLOCK | nofollow | noatime
+    try:
+        descriptor = os.open(filename, flags, dir_fd=source.directory_descriptor)
+    except OSError:
+        return
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError:
+        return
+    finally:
+        os.close(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise _snapshot_unsafe_file_type_error(suffix, metadata.st_mode)
+
+
 def _open_snapshot_source(source: _SnapshotSource, suffix: str) -> int:
     noatime, nofollow, _, _ = _snapshot_open_capabilities()
-    flags = os.O_RDONLY | os.O_CLOEXEC | nofollow | noatime
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | nofollow | noatime
     filename = f"{source.filename}{suffix}"
     try:
-        return os.open(filename, flags, dir_fd=source.directory_descriptor)
+        descriptor = os.open(filename, flags, dir_fd=source.directory_descriptor)
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise _snapshot_unsafe_path_error(filename, suffix=suffix) from error
+        _reject_non_regular_snapshot_path_after_open_error(source, filename, suffix)
         if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
             raise _snapshot_noatime_error(suffix, error) from error
         raise
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError:
+        os.close(descriptor)
+        raise
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise _snapshot_unsafe_file_type_error(suffix, metadata.st_mode)
+    return descriptor
 
 
 def _source_snapshot_fingerprint(

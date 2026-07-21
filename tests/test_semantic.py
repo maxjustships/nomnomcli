@@ -97,6 +97,45 @@ def _directory_file_state(path) -> dict[str, bytes]:
     }
 
 
+def _fifo_identity(path: Path) -> tuple[int, int, int, int, int]:
+    metadata = os.lstat(path)
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _run_resolve_cli(database: Path, original: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "NOMNOM_DB_PATH": str(database),
+            "NOMNOM_OFFLINE": "1",
+        }
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "nomnomcli",
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+        timeout=2,
+    )
+
+
 def _create_legacy_database(path, version: int) -> None:
     extra_columns = (
         """, barcode TEXT, brand TEXT, lookup_query TEXT, alternatives_json TEXT"""
@@ -1088,6 +1127,59 @@ def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
     assert error["error"]["code"] == "database_snapshot_lock_unavailable"
     assert error["error"]["would_write"] is False
     assert _directory_file_state(user_db.parent) == before
+
+
+def test_cli_fifo_database_is_rejected_without_hanging_or_source_changes(tmp_path):
+    database = tmp_path / "fifo-source.sqlite3"
+    os.mkfifo(database)
+    before = _fifo_identity(database)
+
+    completed = _run_resolve_cli(database, "FIFO chicken")
+    error = _strict_json_loads(completed.stderr)["error"]
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert error["code"] == "database_snapshot_unsafe_file_type"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert error["details"]["snapshot_target"] == "main"
+    assert error["details"]["file_type"] == "fifo"
+    assert "regular file" in error["details"]["action"]
+    assert _fifo_identity(database) == before
+    assert {child.name for child in tmp_path.iterdir()} == {database.name}
+
+
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+def test_cli_fifo_snapshot_sidecar_is_rejected_without_hanging_or_source_changes(
+    tmp_path, suffix
+):
+    database = tmp_path / "regular-source.sqlite3"
+    with connect(database):
+        pass
+    sidecar = Path(f"{database}{suffix}")
+    os.mkfifo(sidecar)
+    database_content = database.read_bytes()
+    sidecar_identity = _fifo_identity(sidecar)
+
+    completed = _run_resolve_cli(database, "Sidecar FIFO chicken")
+    error = _strict_json_loads(completed.stderr)["error"]
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert error["code"] == "database_snapshot_unsafe_file_type"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert error["details"]["snapshot_target"] == suffix.removeprefix("-")
+    assert error["details"]["file_type"] == "fifo"
+    assert "regular file" in error["details"]["action"]
+    assert database.read_bytes() == database_content
+    assert _fifo_identity(sidecar) == sidecar_identity
+    assert {child.name for child in tmp_path.iterdir()} == {
+        database.name,
+        sidecar.name,
+    }
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-journal"])
