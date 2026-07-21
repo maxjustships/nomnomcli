@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import requests
 
@@ -8,6 +10,7 @@ from nomnomcli.db import connect
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import Food
+from nomnomcli.parser import parse_free_text
 
 
 def _usda_generic_response(description="Chicken breast, roasted", *, branded=False):
@@ -58,6 +61,113 @@ def _usda_generic_response(description="Chicken breast, roasted", *, branded=Fal
             }
 
     return Response()
+
+
+def _off_candidate(
+    name: str,
+    *,
+    brand: str | None,
+    barcode: str,
+    categories: tuple[str, ...],
+) -> Food:
+    return Food(
+        name,
+        200,
+        20,
+        5,
+        10,
+        source="openfoodfacts",
+        barcode=barcode,
+        brand=brand,
+        categories=categories,
+        source_id=barcode,
+        provenance="openfoodfacts",
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "candidate"),
+    [
+        (
+            "soy protein isolate",
+            _off_candidate(
+                "Soy Protein Isolate 2.0 — HSN, HSN Essentials",
+                brand="HSN, HSN Essentials",
+                barcode="8435611324100",
+                categories=("en:soy-protein-isolates",),
+            ),
+        ),
+        (
+            "cream cheese",
+            _off_candidate(
+                "cream-cheese — Cream cheese",
+                brand="Cream cheese",
+                barcode="8000000000024",
+                categories=("en:cream-cheeses",),
+            ),
+        ),
+        (
+            "peanuts",
+            _off_candidate(
+                "Menguy's Peanut 100%",
+                brand="Menguy's",
+                barcode="3336970205050",
+                categories=("en:peanuts",),
+            ),
+        ),
+    ],
+)
+def test_unbranded_reported_off_matches_are_never_arbitrary_exact_products(
+    repository, monkeypatch, query, candidate
+):
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    food, confidence = repository.resolve(query)
+
+    assert confidence >= 0.5
+    assert food.resolution_mode == "generic_proxy"
+    assert food.source == "openfoodfacts"
+    assert food.brand == candidate.brand
+    assert food.barcode == candidate.barcode
+    assert food.assumption is not None
+    assert candidate.brand in food.assumption
+    assert candidate.barcode in food.assumption
+    assert "Open Food Facts" in food.assumption
+
+
+def test_unsafe_branded_off_match_needs_source_without_cache(repository, monkeypatch):
+    candidate = _off_candidate(
+        "Original spread — Cream Cheese",
+        brand="Cream Cheese",
+        barcode="8000000000093",
+        categories=("en:cream-cheeses",),
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("cream cheese")
+
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["candidate"]["brand"] == "Cream Cheese"
+    assert caught.value.details["candidate"]["barcode"] == "8000000000093"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_branded_off_proxy_requires_category_type_evidence(repository, monkeypatch):
+    candidate = _off_candidate(
+        "Soy protein isolate — Example Sports",
+        brand="Example Sports",
+        barcode="8435611324100",
+        categories=(),
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve("soy protein isolate")
+
+    assert caught.value.code == "food_needs_source"
+    assert caught.value.details["provider_error"]["code"] == "off_low_confidence"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
 
 def test_default_unbranded_usda_fallback_is_explicit_generic_proxy(
@@ -180,6 +290,51 @@ def test_cached_generic_proxy_is_not_reused_for_later_branded_query(
 
     assert caught.value.code == "exact_resolution_required"
     assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
+
+
+def test_cached_branded_generic_proxy_cannot_satisfy_later_brand_query(
+    repository, monkeypatch
+):
+    candidate = _off_candidate(
+        "Menguy's Peanut 100%",
+        brand="Menguy's",
+        barcode="3336970205050",
+        categories=("en:peanuts",),
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+    proxy, _ = repository.resolve("peanuts")
+    assert proxy.resolution_mode == "generic_proxy"
+
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [])
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(candidate.name)
+
+    assert caught.value.code == "food_needs_source"
+    assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
+
+
+def test_old_arbitrary_exact_off_cache_cannot_replay_for_unbranded_lookup(
+    repository, monkeypatch
+):
+    candidate = _off_candidate(
+        "Menguy's Peanut 100%",
+        brand="Menguy's",
+        barcode="3336970205050",
+        categories=("en:peanuts",),
+    )
+    repository._cache_food(
+        replace(candidate, resolution_mode="exact_product"),
+        lookup_query="peanuts",
+    )
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    food, _ = repository.resolve("peanuts")
+
+    assert food.resolution_mode == "generic_proxy"
+    row = repository.user_connection.execute(
+        "SELECT resolution_mode FROM food_cache WHERE barcode = ?", (candidate.barcode,)
+    ).fetchone()
+    assert row["resolution_mode"] == "generic_proxy"
 
 
 def test_repository_does_not_read_bundled_food_resources(user_db, monkeypatch):
@@ -431,17 +586,11 @@ def test_named_sku_can_resolve_only_to_matching_exact_off_product(repository, mo
 def test_unbranded_off_proxy_honors_policy_with_off_provenance(
     repository, monkeypatch, policy, error_code
 ):
-    candidate = Food(
-        "Chickpeas, cooked",
-        164,
-        8.9,
-        2.6,
-        27.4,
-        source="openfoodfacts",
+    candidate = _off_candidate(
+        "Chickpeas, cooked — Acme",
+        brand="Acme",
         barcode="12345678",
         categories=("en:chickpeas",),
-        source_id="12345678",
-        provenance="openfoodfacts",
     )
     monkeypatch.setenv("NOMNOM_GENERIC_PROXY_POLICY", policy)
     monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
@@ -451,13 +600,114 @@ def test_unbranded_off_proxy_honors_policy_with_off_provenance(
 
     assert caught.value.code == error_code
     assert caught.value.details["candidate"] == {
-        "name": "Chickpeas, cooked",
+        "name": "Chickpeas, cooked — Acme",
         "source": "openfoodfacts",
         "source_id": "12345678",
         "resolution_mode": "generic_proxy",
         "confidence": 1.0,
+        "brand": "Acme",
+        "barcode": "12345678",
+        "assumption": (
+            "Brand not specified; used Open Food Facts generic proxy from candidate "
+            "Chickpeas, cooked — Acme (brand: Acme; barcode: 12345678)."
+        ),
     }
     assert repository.user_connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_configured_usda_generic_beats_safe_branded_off_proxy(repository, monkeypatch):
+    off_candidate = _off_candidate(
+        "Menguy's Peanut 100%",
+        brand="Menguy's",
+        barcode="3336970205050",
+        categories=("en:peanuts",),
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [off_candidate])
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *args, **kwargs: _usda_generic_response("Peanuts, raw"),
+    )
+
+    food, _ = repository.resolve("peanuts")
+
+    assert food.source == "usda"
+    assert food.resolution_mode == "generic_proxy"
+    assert food.brand is None
+
+
+@pytest.mark.parametrize(
+    ("literal", "candidate"),
+    [
+        (
+            "milk 3% 625 ml",
+            _off_candidate(
+                "Milk 3% — Example Dairy",
+                brand="Example Dairy",
+                barcode="10000001",
+                categories=("en:milks",),
+            ),
+        ),
+        (
+            "soy protein isolate 30 g",
+            _off_candidate(
+                "Soy protein isolate — Example Sports",
+                brand="Example Sports",
+                barcode="10000002",
+                categories=("en:soy-protein-isolates",),
+            ),
+        ),
+        (
+            "chicken pastrami 150 g",
+            _off_candidate(
+                "Chicken pastrami — Example Deli",
+                brand="Example Deli",
+                barcode="10000003",
+                categories=("en:chicken-pastrami",),
+            ),
+        ),
+        (
+            "whole wheat bread 140 g",
+            _off_candidate(
+                "Whole wheat bread — Example Bakery",
+                brand="Example Bakery",
+                barcode="10000004",
+                categories=("en:whole-wheat-breads",),
+            ),
+        ),
+        (
+            "cream cheese 40 g",
+            _off_candidate(
+                "Cream cheese — Example Dairy",
+                brand="Example Dairy",
+                barcode="10000005",
+                categories=("en:cream-cheeses",),
+            ),
+        ),
+        (
+            "peanuts 55 g",
+            _off_candidate(
+                "Peanuts — Example Foods",
+                brand="Example Foods",
+                barcode="10000006",
+                categories=("en:peanuts",),
+            ),
+        ),
+    ],
+)
+def test_literal_translated_unbranded_components_are_explicit_generic_proxies(
+    repository, monkeypatch, literal, candidate
+):
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [candidate])
+
+    item = parse_free_text(literal, repository)[0].to_dict()
+
+    assert item["resolution_mode"] == "generic_proxy"
+    assert item["source"] == "openfoodfacts"
+    assert item["brand"] == candidate.brand
+    assert item["barcode"] == candidate.barcode
+    assert "Open Food Facts" in item["assumption"]
 
 
 def test_off_category_does_not_replace_name_and_brand_token_overlap(

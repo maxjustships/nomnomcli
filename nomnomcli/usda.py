@@ -202,8 +202,18 @@ class USDAClient:
         self.retry_policy = retry_policy or RetryPolicy()
         self.sleep = sleep
 
-    def _payload(self, query: str, api_key: str, page_size: int) -> dict:
+    def _payload(
+        self,
+        query: str,
+        api_key: str,
+        page_size: int,
+        *,
+        data_types: list[str] | None = None,
+    ) -> dict:
         details = {"food": query}
+        params = {"api_key": api_key, "query": query, "pageSize": page_size}
+        if data_types is not None:
+            params["dataType"] = data_types
         response = request_with_retry(
             provider="usda",
             code="usda_unavailable",
@@ -211,7 +221,7 @@ class USDAClient:
             request_get=self._request_get or requests.get,
             url=USDA_SEARCH_URL,
             request_kwargs={
-                "params": {"api_key": api_key, "query": query, "pageSize": page_size},
+                "params": params,
                 "timeout": 15,
             },
             details=details,
@@ -255,7 +265,12 @@ class USDAClient:
         return True
 
     def resolve(self, query: str, api_key: str) -> tuple[Food, float]:
-        records = self._payload(query, api_key, 10)["foods"]
+        records = self._payload(
+            query,
+            api_key,
+            10,
+            data_types=["Foundation", "SR Legacy"],
+        )["foods"]
         if not records:
             raise NomnomError(
                 "food_not_found",
@@ -296,6 +311,10 @@ class USDAClient:
 
         candidates.sort(
             key=lambda item: (
+                0
+                if item[0].brand is None
+                and item[1].casefold() in {"foundation", "sr legacy"}
+                else 1,
                 -item[2],
                 -_DATA_TYPE_QUALITY.get(item[1].casefold(), 0.5),
                 item[0].name,

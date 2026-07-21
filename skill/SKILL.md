@@ -121,20 +121,18 @@ Aliases are user-database records, never packaged translations. They resolve
 only to exact local cache names and must not invent, approximate, or remotely
 substitute a target.
 
-## Unknown-food workflow: cache/OFF → source request → optional USDA
+## Unknown-food workflow: cache → exact intent / generic proxy → source request
 
-The CLI automatically checks exact user alias, exact cache, cache search, then
-Open Food Facts.
+The CLI automatically checks exact user alias, exact cache, and safe cache search before providers.
 For an unresolved food:
 
-1. Let strict OFF resolution run. A high-confidence unbranded source may be returned truthfully as
-   `generic_proxy`; an identified branded product remains `exact_product`. Always show source id,
-   provenance, assumptions, and alternatives. Never use a generic proxy for brand/SKU input.
-2. Let USDA run only when setup or `NOMNOM_USDA_KEY` has configured it. The default
-   `allow_for_unbranded` policy accepts only unbranded generic records with an FDC id, complete
+1. `exact_product` requires a user barcode, an explicitly matched/confirmed brand or SKU, or an
+   exact local pin/alias. Provider confidence never makes an arbitrary branded result `exact_product`.
+2. For unbranded input, prefer USDA Foundation/SR Legacy when configured. The default
+   `allow_for_unbranded` policy accepts only non-branded records with an FDC id, complete
    validated nutrition, sufficient confidence, and full query-token coverage. Always show returned
-   `assumptions`. Never treat a branded or SKU-like query as a generic proxy. Use the environment
-   only for non-interactive/CI operation.
+   assumptions. A strictly name/type-matching OFF record may instead be a `generic_proxy`; if its
+   source candidate is branded, show that brand, barcode, source, and explicit assumption.
 3. On `generic_proxy_confirmation_required`, show the candidate and ask; do not change policy or
    write anything without the user's choice. On `exact_resolution_required`, ask for the package
    barcode or photo and use the exact capture flow above.

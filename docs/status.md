@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #27 implemented and independently verified
+- Current phase: issue #29 implemented and independently verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Completed issue #29 with intent-aware exact identity, USDA Foundation/SR Legacy preference, strict OFF proxy type matching, branded-proxy provenance, and cache intent isolation.
+- Recorded RED runs for 16 primary regressions plus two cache edges and missing-category evidence, then passed 114 focused tests, 204 full tests, and Ruff.
+- Ran all six literal translated inputs against mocked providers in a fresh temporary data directory; all six were explicit `generic_proxy` rows with source, brand, barcode, and assumption.
 - Completed issue #27 with strict local-date parsing, deterministic local-noon backdating for both log forms, additive timestamp/date JSON, exact date stats, no-write failures, and preserved no-date/today/week behavior.
 - Documented `--date` for remembered meals and that humans/agents must never manipulate SQLite directly.
 - Passed 189 tests, Ruff, diff checks, checkout import proof, and the clean disposable installed-CLI literal smoke.
@@ -24,12 +27,15 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; the feature is ready for the issue #27 pull request.
+- No implementation work pending; issue #29 is verified and committed locally.
 
 ## Next
-- Push the scoped commit and open the requested pull request.
+- Do not push or open a pull request unless the user requests it separately.
 
 ## Decisions Made
+- Issue #29: resolution mode follows user identity intent plus source identity, never candidate confidence alone.
+- Issue #29: generic USDA searches send the documented `dataType` array for Foundation and SR Legacy and rank eligible non-branded provenance ahead of branded payload rows.
+- Issue #29: a branded OFF candidate needs product-name token coverage plus category/type evidence to serve only as a labelled generic proxy.
 - Issue #27: reuse the existing offset-aware `logged_at` field; no migration is needed.
 - Issue #27: explicit dates become local noon and stats use `[local midnight, next local midnight)` boundaries.
 - Issue #23: a healthy no-key install is complete base coverage; USDA is only an optional enhancement for broader no-photo generic/raw-food resolution.
@@ -81,6 +87,8 @@ ruff check .
 | 2026-07-21 | M21–M22 | CLI date tests and `nomnomcli/cli.py` | focused RED then GREEN pytest | 7 expected failures; then 7 pass | M23 |
 | 2026-07-21 | M23 | database/CLI date stats tests and query implementation | focused RED then GREEN pytest | 2 expected failures; then 8 pass | M24 |
 | 2026-07-21 | M24 | README, skill, changed code/tests, disposable installed checkout | focused/full pytest; Ruff; diff check; literal temp-DB smoke | 40/189 pass; clean; smoke 150 kcal | local commit |
+| 2026-07-21 | M25 | resolver/provider regression tests | focused pytest | RED: 16 primary failures; 2 cache failures; 1 category-evidence failure | M26 |
+| 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -100,3 +108,4 @@ ruff check .
 - [x] Setup reports `base_ready/base` without USDA and `connected/enhanced` with the local USDA stub.
 - [x] Safe no-key miss returns `food_needs_source` with photo/barcode/label/cache options and optional USDA.
 - [x] Literal parsed/direct `2026-07-20` logs persist local noon and date stats return only that local day.
+- [x] Issue #29 literal six-item temp-data smoke returns only explicit generic proxies with audited OFF candidate identity.
