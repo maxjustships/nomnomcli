@@ -69,16 +69,15 @@ use `nomnom log --date` for remembered meals and the CLI for all user data opera
 Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words
 are parser syntax. Default `strict` behavior asks for grams when no piece weight exists.
 
+## Read-only semantic resolution plan
+
+When literal food wording cannot resolve, an external agent may propose retrieval candidates before logging. Run `nomnom resolve --food "ORIGINAL" --intent-json JSON --json`. JSON must be intent v1: exact `original`, boolean `brand_intent`, and at most three unique nonempty `candidates`. Each candidate has `query` plus `relation` (`lexical_equivalent`, `same_form`, or `generic_fallback`); fallback also requires a nonempty visible `assumption`.
+
+This command is dry-run only. Require `would_write=false`; show the separate `original` and `retrieval_query`, candidate index/relation/assumption, source identity/type, confidence, alternatives, and `resolution_mode`. The original is tried first. Candidate results may be only `generic_proxy`, never `exact_product`; barcode, SKU, and explicit-brand input still requires exact capture even if `brand_intent` is false. Unsafe candidates return a structured refusal. Do not apply the returned plan to a log, create an alias, change policy/config, or manipulate SQLite. There is no `log --resolution-intents` workflow in this phase.
+
 ## External fuzzy portions
 
-Prefer human scale grams, photo, or barcode. Otherwise an agent may explicitly estimate a diary
-count/fraction/size, but never call it measured, exact, or source-backed. Run `nomnom log --parse
-TEXT --portion-policy estimate --portion-estimates JSON --json`. JSON is `{"items":[...]}` with one
-entry per unresolved fuzzy item and none for explicit grams. Each requires zero-based `item_index`,
-exact trimmed `input`, finite nonnegative central/lower/upper grams (lower <= central <= upper),
-confidence 0..1, `method:"agent_estimate"`, and nonempty `assumption`. Never fuzzy-match or generate
-nutrition ranges. Invalid or incomplete input rejects the whole log. Show returned portion fields
-and correction prompt. `ask` writes nothing; `strict` is default.
+Prefer human scale grams, photo, or barcode. Otherwise an agent may explicitly estimate a diary count/fraction/size, but never call it measured, exact, or source-backed. Run `nomnom log --parse TEXT --portion-policy estimate --portion-estimates JSON --json`. JSON is `{"items":[...]}` with one entry per unresolved fuzzy item and none for explicit grams. Each requires zero-based `item_index`, exact trimmed `input`, finite nonnegative central/lower/upper grams (lower <= central <= upper), confidence 0..1, `method:"agent_estimate"`, and nonempty `assumption`. Never fuzzy-match or generate nutrition ranges. Invalid or incomplete input rejects the whole log. Show returned portion fields and correction prompt. `ask` writes nothing; `strict` is default.
 
 ## Direct food flow
 
@@ -118,16 +117,13 @@ source note, and provenance. Use its exact returned `name` for an alias or later
 
 ## User aliases
 
-When the user wants a durable phrase for an exact food already in their local
-cache:
+When the user wants a durable phrase for an exact food already in their local cache:
 
 ```sh
 nomnom alias add "USER PHRASE" "EXACT CACHED FOOD NAME" --json
 ```
 
-Aliases are user-database records, never packaged translations. They resolve
-only to exact local cache names and must not invent, approximate, or remotely
-substitute a target.
+Aliases are user-database records, never packaged translations. They resolve only to exact local cache names and must not invent, approximate, or remotely substitute a target.
 
 ## Unknown-food workflow: cache → exact intent / generic proxy → source request
 
@@ -162,18 +158,9 @@ human grams always override provider serving data, including per-piece input.
 
 ## Provider contract
 
-OFF free-text uses the official legacy v1 endpoint with `search_terms`, `search_simple=1`,
-`action=process`, JSON, page size, supported fields, and a descriptive User-Agent. API v2 is only
-for structured/product data: never send free text or use unfiltered fallback rows. Retryable
-429/5xx failures use bounded backoff; exhausted v1 raises `openfoodfacts_unavailable`.
+OFF free-text uses the official legacy v1 endpoint with `search_terms`, `search_simple=1`, `action=process`, JSON, page size, supported fields, and a descriptive User-Agent. API v2 is only for structured/product data: never send free text or use unfiltered fallback rows. Retryable 429/5xx failures use bounded backoff; exhausted v1 raises `openfoodfacts_unavailable`.
 
-Use `nomnom doctor --json` when diagnosing resolution. OFF
-`product_lookup_reachable` means only that the v2 product-by-barcode endpoint
-answered. OFF `full_text_search_ready` means the same v1 CGI capability used by
-free-text resolution returned a valid product-list payload. Product reachability
-must never be presented as full-text readiness. `configured` means OFF needs no
-credential; USDA retains `configured`, `reachable`, and `key_source`. Never expose
-a credential value.
+Use `nomnom doctor --json` when diagnosing resolution. OFF `product_lookup_reachable` means only that the v2 product-by-barcode endpoint answered. OFF `full_text_search_ready` means the same v1 CGI capability used by free-text resolution returned a valid product-list payload. Product reachability must never be presented as full-text readiness. `configured` means OFF needs no credential; USDA retains `configured`, `reachable`, and `key_source`. Never expose a credential value.
 
 ## Stats
 

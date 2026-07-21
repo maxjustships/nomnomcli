@@ -203,6 +203,27 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+@contextmanager
+def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
+    """Open user state without creating, migrating, committing, or modifying it."""
+    db_path = Path(path) if path is not None else default_db_path()
+    if db_path.exists():
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+    else:
+        connection = sqlite3.connect(":memory:")
+        for statement in LATEST_SCHEMA:
+            connection.execute(statement)
+        _set_user_version(connection, LATEST_SCHEMA_VERSION)
+        connection.commit()
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        yield connection
+    finally:
+        connection.close()
+
+
 def store_log(
     connection: sqlite3.Connection,
     items: list[dict],

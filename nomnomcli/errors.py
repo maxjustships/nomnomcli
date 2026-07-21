@@ -11,7 +11,7 @@ class NomnomError(Exception):
         error = {"code": self.code, "message": self.message}
         # A small set of resolution fields are part of the public error contract.
         # Keep `details` intact for backwards-compatible machine consumers.
-        for key in ("candidate", "alternatives", "setup"):
+        for key in ("candidate", "alternatives", "setup", "would_write"):
             if key in self.details:
                 error[key] = self.details[key]
         if self.details:

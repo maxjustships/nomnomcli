@@ -1,5 +1,65 @@
 # Plans
 
+## Issue #33 Phase A Source
+- Task: Add read-only semantic resolution planning for bounded external-agent candidates.
+- Canonical input: GitHub issue #33 latest decision-grade plan and the user's Phase A-only contract, benchmark, smoke, commit, and no-push requirements.
+- Repo context: semantic contract validation, resolver/provider safety, CLI JSON, temporary SQLite state, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Assumptions
+- Intent JSON is one object containing `version`, `original`, `brand_intent`, and `candidates`; each candidate contains `query`, `relation`, and an `assumption` only when required by `generic_fallback`.
+- The original query is evaluated first through a dedicated non-persisting resolver; semantic candidates are considered only after the original safely refuses.
+- Provider candidates are collected and ranked across all bounded semantic queries before selection so relation, provider quality, confidence, and normalized query ordering are deterministic.
+- Phase B log application, semantic policy configuration, stored resolution intent/provenance, and embedded semantic knowledge remain out of scope.
+
+## Issue #33 Phase A Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M31 | Freeze intent, safety, ordering, and no-write contracts | M30 | [x] |
+| M32 | Implement semantic planning module, repository path, and CLI | M31 | [x] |
+| M33 | Document, validate, smoke, audit, and commit | M32 | [x] |
+
+## M31. Freeze issue #33 Phase A contracts `[x]`
+### Goal
+- Focused tests specify strict intent v1 validation, original-first resolution, semantic proxy-only safety, deterministic ranking, exact-intent refusal, benchmark routes, and unchanged database counts.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+```
+
+### Known Risks
+- Calling the existing mutating `resolve()` for provider success would violate the dry-run guarantee even if the outer CLI later rolls back.
+
+### Stop-and-Fix Rule
+- Do not wire the CLI until tests prove both successful and refused plans leave cache, logs, aliases, and recipes unchanged.
+
+## M32. Implement semantic planning module, repository path, and CLI `[x]`
+### Goal
+- `nomnom resolve --food TEXT --intent-json JSON --json` returns a structured, deterministic plan or failure with `would_write: false`, without any mutation-capable fallback.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_usda.py tests/test_off.py tests/test_cli.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Any candidate `exact_product`, unsafe OFF/USDA acceptance, original barcode/brand bypass, weak/first-result selection, or database count change blocks documentation.
+
+## M33. Document, validate, smoke, audit, and commit `[x]`
+### Goal
+- README and skill document only the dry-run agent workflow; full tests, Ruff, diff checks, disposable success/refusal smoke, scoped audit, and one conventional local commit pass.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until the full suite and disposable database smoke prove zero cache/log/alias/recipe writes for both success and refusal.
+
 ## Issue #31 Source
 - Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
 - Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.

@@ -1,5 +1,38 @@
 # Test Plan
 
+## Issue #33 Phase A Validation
+- In scope: intent v1 parsing/validation, original-first non-persisting resolution, bounded semantic retrieval, existing provider/identity checks, proxy-only candidate results, deterministic cross-candidate ranking, structured CLI JSON, benchmark cases, README, and agent skill.
+- Out of scope: applying plans to logs, `semantic_policy`, `log --resolution-intents`, schema/config changes, LLM/API integration, embedded food/synonym/translation/weight data, live traffic, and user databases.
+- Fixtures: temporary SQLite databases plus synthetic mocked USDA/OFF foods; no live providers or personal data.
+
+### Issue #33 Phase A Critical Scenarios
+- Raw original safe resolution wins and reports no semantic candidate index.
+- Russian `курица сырокопченая` transparently plans a `generic_fallback` to roasted chicken; `куриная пастрома` follows a safe semantic route.
+- Mixed-meat smoked sausage and unsafe/weak candidates refuse; unbranded roasted chicken breast succeeds as a generic proxy.
+- Barcode, SKU, and explicit-brand originals require exact capture even when the payload says `brand_intent: false`.
+- USDA Foundation/SR Legacy generic quality ranks above a safe OFF proxy after relation priority; confidence and normalized query break later ties deterministically.
+
+### Issue #33 Phase A Negative / Edge Cases
+- Malformed JSON, wrong/missing version, original mismatch, non-boolean brand intent, more than three candidates, duplicate/blank query, invalid relation, or missing/blank fallback assumption returns a structured failure.
+- Semantic candidate provider matches that would be exact products, branded USDA rows, incomplete/weak/unrelated OFF rows, or token/category mismatches are rejected.
+- Success and refusal preserve counts for `food_cache`, `log_entries`, `food_aliases`, and `recipes`.
+
+### Issue #33 Phase A Acceptance Gates
+- [x] Focused semantic/repository/CLI tests pass — 136 passed.
+- [x] Existing issue #29 and #31 regression coverage passes.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 244 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable database CLI success/refusal smoke proves `would_write: false`, unchanged cache/log/alias/recipe counts, and an identical SQLite digest.
+- [x] One scoped conventional commit exists; nothing is pushed and no PR is created.
+
+### Issue #33 Phase A Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_usda.py tests/test_off.py tests/test_cli.py tests/test_db.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.

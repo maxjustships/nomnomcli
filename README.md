@@ -75,6 +75,36 @@ nomnom log --parse "rice 150 g, eggs 2 pieces" --json
 nomnom log --food "chickpeas, cooked" --grams 120 --json
 ```
 
+### Read-only semantic resolution planning
+
+An external agent may propose up to three bounded retrieval queries without logging or caching
+anything:
+
+```sh
+nomnom resolve \
+  --food "курица сырокопченая" \
+  --intent-json '{"version":1,"original":"курица сырокопченая","brand_intent":false,"candidates":[{"query":"chicken pastrami","relation":"same_form"},{"query":"chicken breast roasted","relation":"generic_fallback","assumption":"Roasted chicken loses the smoked and cured preparation."}]}' \
+  --json
+```
+
+Intent v1 requires an exact `original` match, boolean `brand_intent`, and at most three unique,
+nonempty candidates. Relations are `lexical_equivalent`, `same_form`, or `generic_fallback`; every
+fallback requires a visible nonempty assumption. nomnom tries the untouched original first. Only if
+that safely refuses does it validate semantic candidates through the existing provider, identity,
+nutrition, confidence, and category checks. A semantic candidate can return only
+`resolution_mode=generic_proxy`, never `exact_product`.
+
+Candidate plans are ordered by relation, then USDA Foundation/SR Legacy generic quality ahead of a
+safe OFF proxy, confidence, and normalized retrieval query. JSON keeps `original` separate from
+`retrieval_query`, identifies the selected candidate/relation/assumption and provider provenance,
+and always reports `would_write:false`. Barcode, SKU, and explicit-brand originals remain
+exact-capture-only even if an intent payload says `brand_intent:false`.
+
+This command is a dry-run boundary only. It opens existing SQLite state read-only (or uses an
+ephemeral empty database when none exists), never creates or updates cache/log/alias/recipe rows,
+and does not apply the plan to `nomnom log`. There is no embedded LLM, translation table, synonym
+corpus, food record, or weight data; candidate generation stays agent-side.
+
 For a remembered meal from a prior local calendar day, pass an explicit ISO date to either form:
 
 ```sh

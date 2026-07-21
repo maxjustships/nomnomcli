@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: issue #33 Phase A implemented and verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Completed issue #33 Phase A with a strict external intent v1 module, original-first read-only resolution, generic-proxy-only semantic candidates, deterministic relation/provider/confidence/query ordering, and structured JSON plans/refusals.
+- Added a query-only SQLite CLI path and persistence-disabled provider resolution; the mocked success/refusal smoke preserved all mutable table counts and the exact database digest.
+- Passed 136 focused tests, 244 full tests, Ruff, diff checks, and the Russian fallback/mixed-meat disposable CLI smoke.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,12 +33,15 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- No implementation work pending; issue #33 Phase A is ready for the scoped local commit.
 
 ## Next
-- Do not push, merge, or open a pull request unless the user requests it separately.
+- Create the requested conventional local commit, then stop without pushing or opening a pull request.
 
 ## Decisions Made
+- Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
+- Issue #33 Phase A: semantic candidates can produce only `generic_proxy`; original barcode/SKU/explicit-brand intent remains exact-capture-only regardless of supplied `brand_intent`.
+- Issue #33 Phase A: rank across all accepted candidates by relation, generic USDA quality before safe OFF proxy, confidence, then normalized query.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -56,6 +62,7 @@
 - Reuse `scripts/build_mini_db.py --update-existing` for deterministic offline v0.2 data repair without shrinking the tracked USDA corpus.
 
 ## Assumptions In Force
+- Issue #33 intent v1 is external bounded retrieval metadata only; it contains no nutrition, synonyms, translations, weights, model call, or persistence policy.
 - Schema v4 is completed additively from the existing v3-to-v4 boundary and preserves every v3 table and row.
 - Issue #17 tests use only mocked/replay transports and never live OFF traffic.
 - Agent confirmation is an operating pattern, not a pending database transaction in v0.1.
@@ -72,6 +79,8 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M31–M33 | semantic contract/planner/CLI/read-only DB, benchmark, docs | focused/full pytest; Ruff; diff check; digest-preserving temp-DB smoke | 136 focused; 244 full; clean; success/refusal no writes | local commit |
+| 2026-07-21 | Issue #33 preflight | issue comment, resolver/providers/CLI/DB/models/tests, planning docs | `gh issue view 33 --comments`; source/test inspection | Phase A boundary and mutation risk identified | M31 tests |
 | 2026-07-18 | Preflight | `.task-brief.md`, planning docs | repository inspection | pass | M1 |
 | 2026-07-18 | M1–M3 | package, data, tests, docs, skill, installer, CI | `pytest -q`; `ruff check .` | 30 pass; clean | M4 |
 | 2026-07-18 | M4 smoke | isolated user DB and local recipe fixture | CLI acceptance commands; `sh install.sh --dry-run` | pass | commit |
@@ -99,6 +108,7 @@ ruff check .
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
 
 ## Smoke / Demo Checklist
+- [x] Issue #33 Russian fallback succeeds and mixed-meat refusal fails with unchanged cache/log/alias/recipe counts and identical SQLite digest.
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
 - [x] Russian mixed-item log works and persists.
 - [x] Today stats reproduce logged totals.

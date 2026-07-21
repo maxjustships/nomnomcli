@@ -10,7 +10,7 @@ from datetime import date, datetime
 
 from nomnomcli import __version__
 from nomnomcli.config import ProviderConfig
-from nomnomcli.db import connect, get_stats, store_log
+from nomnomcli.db import connect, connect_read_only, get_stats, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
@@ -22,6 +22,7 @@ from nomnomcli.portions import (
     validate_portion_policy,
 )
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
+from nomnomcli.semantic import parse_resolution_intent
 
 
 def _json_output(payload: dict | list) -> str:
@@ -180,6 +181,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     log.add_argument("--date", help="local calendar date in YYYY-MM-DD; stored at local noon")
     log.add_argument("--json", action="store_true", help="machine-readable JSON output")
+
+    resolve = commands.add_parser(
+        "resolve", help="plan read-only semantic food resolution"
+    )
+    resolve.add_argument("--food", required=True, help="exact original food phrase")
+    resolve.add_argument(
+        "--intent-json", required=True, metavar="JSON", help="inline semantic intent v1"
+    )
+    resolve.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     stats = commands.add_parser("stats", help="show nutrition totals")
     stats.add_argument("period", choices=("today", "week", "date"))
@@ -370,6 +380,30 @@ def _run(args: argparse.Namespace) -> int:
                     continue
                 state = "reachable" if status["reachable"] else "unreachable"
                 print(f"{provider}: {state}")
+        return 0
+
+    if args.command == "resolve":
+        if not args.json:
+            raise NomnomError(
+                "json_required",
+                "Semantic resolution planning requires --json",
+                details={
+                    "would_write": False,
+                    "original": args.food,
+                    "action": "Add --json to the resolve command.",
+                },
+            )
+        intent = parse_resolution_intent(
+            args.intent_json,
+            expected_original=args.food,
+        )
+        with connect_read_only() as connection:
+            result = FoodRepository(connection).plan_resolution(
+                args.food,
+                intent=intent,
+                persist=False,
+            )
+        print(_json_output(result))
         return 0
 
     with connect() as connection:
