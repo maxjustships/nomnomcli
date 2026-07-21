@@ -331,18 +331,36 @@ def _snapshot_unstable_path_error() -> NomnomError:
 
 
 def _snapshot_open_capabilities() -> tuple[int, int, int, int]:
+    if not sys.platform.startswith("linux") or not _ofd_locks_supported():
+        raise _snapshot_lock_error(
+            "database_snapshot_lock_unavailable",
+            "A compatible no-write SQLite snapshot lock is unavailable",
+            action="Run resolution on a supported 64-bit Linux filesystem/runtime.",
+        )
+
     noatime = getattr(os, "O_NOATIME", None)
+    if noatime is None:
+        raise _snapshot_noatime_error("")
+
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     path_only = getattr(os, "O_PATH", None)
-    if (
-        not sys.platform.startswith("linux")
-        or noatime is None
-        or nofollow is None
-        or directory is None
-        or path_only is None
-    ):
-        raise _snapshot_noatime_error("")
+    missing = [
+        name
+        for name, value in (
+            ("O_NOFOLLOW", nofollow),
+            ("O_DIRECTORY", directory),
+            ("O_PATH", path_only),
+        )
+        if value is None
+    ]
+    if missing:
+        raise _snapshot_lock_error(
+            "database_snapshot_lock_unavailable",
+            "The runtime cannot safely open a no-write SQLite snapshot",
+            missing_capabilities=missing,
+            action="Run resolution on a supported 64-bit Linux filesystem/runtime.",
+        )
     return noatime, nofollow, directory, path_only
 
 
@@ -375,8 +393,6 @@ def _open_snapshot_directory(
             raise
         if error.errno in {errno.ELOOP, errno.ENOTDIR}:
             raise _snapshot_unsafe_path_error(component, parent=True) from error
-        if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
-            raise _snapshot_noatime_error("", error) from error
         raise _snapshot_lock_error(
             "database_snapshot_unreadable",
             "A database parent directory cannot be opened safely",

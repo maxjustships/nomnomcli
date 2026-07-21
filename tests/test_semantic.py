@@ -1129,6 +1129,94 @@ def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
     assert _directory_file_state(user_db.parent) == before
 
 
+@pytest.mark.parametrize(
+    ("platform", "ofd_supported"),
+    [("darwin", True), ("linux", False)],
+    ids=["non-linux", "missing-ofd-locking"],
+)
+def test_cli_snapshot_platform_lock_capability_is_classified_without_writes(
+    user_db, monkeypatch, capsys, platform, ofd_supported
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(database_module.sys, "platform", platform)
+    monkeypatch.setattr(
+        database_module, "_ofd_locks_supported", lambda: ofd_supported
+    )
+    monkeypatch.setattr(
+        database_module,
+        "_copy_stable_database_snapshot",
+        lambda *args, **kwargs: pytest.fail(
+            "snapshot copy started without platform lock capability"
+        ),
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "database_snapshot_lock_unavailable"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["would_write"] is False
+    assert _directory_file_state(user_db.parent) == before
+
+
+def test_cli_snapshot_missing_linux_noatime_is_classified_without_writes(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(database_module.sys, "platform", "linux")
+    monkeypatch.setattr(database_module, "_ofd_locks_supported", lambda: True)
+    monkeypatch.delattr(database_module.os, "O_NOATIME")
+    monkeypatch.setattr(
+        database_module,
+        "_copy_stable_database_snapshot",
+        lambda *args, **kwargs: pytest.fail(
+            "snapshot copy started without O_NOATIME capability"
+        ),
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "database_snapshot_noatime_unavailable"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["would_write"] is False
+    assert _directory_file_state(user_db.parent) == before
+
+
 def test_cli_fifo_database_is_rejected_without_hanging_or_source_changes(tmp_path):
     database = tmp_path / "fifo-source.sqlite3"
     os.mkfifo(database)
@@ -1947,6 +2035,112 @@ def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
     assert _directory_file_state(tmp_path) == original_files
 
 
+def test_partial_cached_exact_matching_brand_requires_exact_resolution(repository):
+    original = "Acme"
+    partial = Food(
+        name="Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="partial-acme-chicken",
+        provenance="user",
+    )
+    proxy, _ = _generic_food("chicken")
+    proxy = replace(
+        proxy,
+        resolution_mode="generic_proxy",
+        assumption="Used declared semantic food candidate: chicken.",
+    )
+    repository._cache_food(partial, lookup_query=partial.name)
+    repository._cache_food(proxy, lookup_query="chicken")
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": "chicken", "relation": "same_form"}],
+                brand_intent=False,
+            )
+        ),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert caught.value.code == "exact_resolution_required"
+    assert caught.value.details["would_write"] is False
+    assert caught.value.details["original"] == original
+    assert _counts(repository) == before
+
+
+def test_cli_partial_cached_exact_matching_brand_refuses_generic_without_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "Acme"
+    partial = Food(
+        name="Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="partial-acme-chicken",
+        provenance="user",
+    )
+    proxy, _ = _generic_food("chicken")
+    proxy = replace(
+        proxy,
+        resolution_mode="generic_proxy",
+        assumption="Used declared semantic food candidate: chicken.",
+    )
+    with connect(user_db) as connection:
+        repository = FoodRepository(connection)
+        repository._cache_food(partial, lookup_query=partial.name)
+        repository._cache_food(proxy, lookup_query="chicken")
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": "chicken", "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
 @pytest.mark.parametrize(
     ("original", "brand"),
     [("Acme's", "Acme"), ("Campbell", "Campbell’s")],
@@ -2173,6 +2367,57 @@ def test_exact_local_alias_still_returns_raw_plan(repository):
     assert plan["resolution_mode"] == "exact_product"
     assert plan["source_id"] == canonical.source_id
     assert plan["would_write"] is False
+
+
+@pytest.mark.parametrize("use_alias", [False, True], ids=["pin", "alias"])
+def test_cli_valid_exact_pin_or_alias_still_returns_raw_plan_without_writes(
+    user_db, monkeypatch, capsys, use_alias
+):
+    original = "my chicken" if use_alias else "Acme chicken"
+    canonical = Food(
+        name="Pinned Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="pin-acme-cli",
+        provenance="user",
+    )
+    with connect(user_db) as connection:
+        repository = FoodRepository(connection)
+        repository._cache_food(canonical, lookup_query="Acme chicken")
+        if use_alias:
+            repository.add_alias(original, canonical.name)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    plan = _strict_json_loads(captured.out)
+
+    assert code == 0
+    assert captured.err == ""
+    assert plan["retrieval_query"] == original
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["source_id"] == canonical.source_id
+    assert plan["would_write"] is False
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
 
 
 def test_conflicting_partial_pinned_brand_never_returns_raw_exact_plan(repository):

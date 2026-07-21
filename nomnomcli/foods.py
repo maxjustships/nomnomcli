@@ -881,6 +881,10 @@ class FoodRepository:
                 food.resolution_mode == "exact_product"
                 and not self._raw_record_satisfies_exact_intent(original_query, food)
             ):
+                # A partial cache match is not an exact identity, but its brand is
+                # still evidence that the untouched original names a product.
+                # Retain that evidence before discarding the unsafe raw result.
+                evidence.observe_food(original_query, food)
                 raise NomnomError(
                     "exact_resolution_required",
                     f"Exact product identity does not match: {original_query}",
