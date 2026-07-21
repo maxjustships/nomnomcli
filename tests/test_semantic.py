@@ -2755,6 +2755,145 @@ def test_cli_resolve_reuses_exact_captured_barcode_without_provider_or_writes(
     assert _directory_file_state(user_db.parent) == original_files
 
 
+def test_cli_recaptured_barcode_replaces_stale_product_before_readonly_resolve(
+    user_db, monkeypatch, capsys
+):
+    barcode = "0123456789012"
+    unrelated_barcode = "9876543210987"
+    products = iter(
+        (
+            Food(
+                name="Old Fixture Bar — Acme",
+                kcal=250,
+                protein=9,
+                fat=4,
+                carbs=45,
+                source="openfoodfacts",
+                barcode=barcode,
+                brand="Acme",
+            ),
+            Food(
+                name="Current Fixture Bar — Acme",
+                kcal=180,
+                protein=12,
+                fat=6,
+                carbs=20,
+                source="openfoodfacts",
+                barcode=barcode,
+                brand="Acme",
+            ),
+        )
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(
+            Food(
+                name="Unrelated Fixture",
+                kcal=90,
+                protein=2,
+                fat=1,
+                carbs=18,
+                source="openfoodfacts",
+                barcode=unrelated_barcode,
+                brand="Other",
+                resolution_mode="exact_product",
+                source_id=unrelated_barcode,
+                provenance="openfoodfacts",
+            ),
+            lookup_query="Unrelated Fixture Other",
+        )
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.product_by_barcode",
+        lambda self, code: next(products),
+    )
+
+    assert main(["capture", "barcode", barcode, "--json"]) == 0
+    capsys.readouterr()
+    assert main(["capture", "barcode", barcode, "--json"]) == 0
+    latest_capture = _strict_json_loads(capsys.readouterr().out)
+    assert latest_capture["name"] == "Current Fixture Bar — Acme"
+    assert latest_capture["source_id"] == barcode
+    assert latest_capture["kcal_per_100g"] == 180
+    assert latest_capture["protein_per_100g"] == 12
+    assert latest_capture["fat_per_100g"] == 6
+    assert latest_capture["carbs_per_100g"] == 20
+
+    with sqlite3.connect(user_db) as connection:
+        barcode_rows = connection.execute(
+            """SELECT name, kcal, protein, fat, carbs, source_id
+            FROM food_cache WHERE barcode = ?""",
+            (barcode,),
+        ).fetchall()
+        unrelated = connection.execute(
+            "SELECT name, barcode, kcal FROM food_cache WHERE name = 'Unrelated Fixture'"
+        ).fetchone()
+    assert barcode_rows == [
+        ("Current Fixture Bar — Acme", 180, 12, 6, 20, barcode)
+    ]
+    assert unrelated == ("Unrelated Fixture", unrelated_barcode, 90)
+
+    def unexpected_provider_call(*args, **kwargs):
+        pytest.fail("recaptured barcode reached a remote provider")
+
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.product_by_barcode",
+        unexpected_provider_call,
+    )
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.search", unexpected_provider_call
+    )
+    monkeypatch.setattr("nomnomcli.foods.USDAClient.resolve", unexpected_provider_call)
+    resolved_food = {}
+    original_resolution_plan = FoodRepository._resolution_plan
+
+    def observe_resolution_plan(self, *, food, **kwargs):
+        resolved_food.update(
+            name=food.name,
+            kcal=food.kcal,
+            protein=food.protein,
+            fat=food.fat,
+            carbs=food.carbs,
+            source_id=food.source_id,
+        )
+        return original_resolution_plan(self, food=food, **kwargs)
+
+    monkeypatch.setattr(FoodRepository, "_resolution_plan", observe_resolution_plan)
+    monkeypatch.delenv("NOMNOM_OFFLINE", raising=False)
+    monkeypatch.delenv("NOMNOM_DISABLE_OFF", raising=False)
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            barcode,
+            "--intent-json",
+            json.dumps(_intent(barcode, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    plan = _strict_json_loads(captured.out)
+
+    assert code == 0
+    assert captured.err == ""
+    assert plan["source_id"] == barcode
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["would_write"] is False
+    assert resolved_food == {
+        "name": "Current Fixture Bar — Acme",
+        "kcal": 180,
+        "protein": 12,
+        "fat": 6,
+        "carbs": 20,
+        "source_id": barcode,
+    }
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
 @pytest.mark.parametrize(
     "unknown_barcode",
     ["012345678901", "0123456789013"],

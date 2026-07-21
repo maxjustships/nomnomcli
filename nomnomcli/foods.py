@@ -1230,16 +1230,35 @@ class FoodRepository:
 
     def capture_barcode(self, barcode: str) -> Food:
         food = self.off_client.product_by_barcode(barcode)
+        exact_barcode = barcode.strip()
         exact = replace(
             food,
             source="openfoodfacts",
-            barcode=barcode.strip(),
+            barcode=exact_barcode,
             resolution_mode="exact_product",
-            source_id=barcode.strip(),
+            source_id=exact_barcode,
             provenance="openfoodfacts",
             assumption=None,
         )
-        self._cache_food(exact, lookup_query=" ".join(filter(None, (exact.name, exact.brand))))
+        started_transaction = not self.user_connection.in_transaction
+        if started_transaction:
+            self.user_connection.execute("BEGIN")
+        self.user_connection.execute("SAVEPOINT capture_barcode_cache")
+        try:
+            self.user_connection.execute(
+                "DELETE FROM food_cache WHERE barcode = ?", (exact_barcode,)
+            )
+            self._cache_food(
+                exact,
+                lookup_query=" ".join(filter(None, (exact.name, exact.brand))),
+            )
+        except BaseException:
+            self.user_connection.execute("ROLLBACK TO SAVEPOINT capture_barcode_cache")
+            self.user_connection.execute("RELEASE SAVEPOINT capture_barcode_cache")
+            if started_transaction:
+                self.user_connection.rollback()
+            raise
+        self.user_connection.execute("RELEASE SAVEPOINT capture_barcode_cache")
         return exact
 
     def capture_label(
