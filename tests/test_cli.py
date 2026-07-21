@@ -13,6 +13,13 @@ from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
 
 
+def _strict_json_loads(value: str) -> dict:
+    def reject_constant(constant: str) -> None:
+        pytest.fail(f"Non-finite constant in JSON output: {constant}")
+
+    return json.loads(value, parse_constant=reject_constant)
+
+
 def test_cli_mocked_off_egg_dish_uses_runtime_serving_weight(
     user_db, monkeypatch, capsys, food_fixtures
 ):
@@ -276,6 +283,58 @@ def test_cli_direct_requires_grams(user_db, monkeypatch, capsys):
     error = json.loads(capsys.readouterr().err)
     assert code == 2
     assert error["error"]["code"] == "grams_required"
+
+
+def test_cli_direct_rejects_non_finite_grams_before_any_write(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "missing" / "user.sqlite3"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+
+    code = main(["log", "--food", "borscht", "--grams", "1e309", "--json"])
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "invalid_quantity"
+    assert error["details"]["would_write"] is False
+    assert not database.parent.exists()
+    assert not database.exists()
+
+
+def test_cli_stats_rejects_persisted_non_finite_result_with_strict_json_error(
+    user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    with connect(user_db) as connection:
+        store_log(
+            connection,
+            [
+                {
+                    "name": "legacy food",
+                    "grams": 100.0,
+                    "kcal": 55.0,
+                    "protein": 2.5,
+                    "fat": 2.1,
+                    "carbs": 6.4,
+                    "match_confidence": 1.0,
+                }
+            ],
+            {"kcal": 55.0, "protein": 2.5, "fat": 2.1, "carbs": 6.4},
+        )
+        connection.execute("UPDATE log_entries SET kcal = ?", (float("inf"),))
+
+    code = main(["stats", "today", "--json"])
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "non_finite_result"
+    assert error["details"]["would_write"] is False
 
 
 def test_cli_search_json(seeded_user_db, monkeypatch, capsys):

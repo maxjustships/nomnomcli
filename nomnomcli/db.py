@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nomnomcli.errors import NomnomError
+from nomnomcli.errors import NomnomError, require_finite_numbers
 
 try:
     import fcntl as _fcntl
@@ -331,6 +331,8 @@ def _open_snapshot_directory(
             dir_fd=directory_descriptor,
         )
     except OSError as error:
+        if error.errno == errno.ENOENT:
+            raise
         if error.errno in {errno.ELOOP, errno.ENOTDIR}:
             raise _snapshot_unsafe_path_error(component, parent=True) from error
         if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
@@ -368,9 +370,23 @@ class _SnapshotSource:
             finally:
                 os.close(descriptor)
 
+    def validate_absent_child(self, component: str) -> None:
+        """Confirm absence relative to the retained parent around chain validation."""
+        self.validate_parent_chain()
+        try:
+            descriptor = _open_snapshot_directory(
+                component, directory_descriptor=self.directory_descriptor
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            os.close(descriptor)
+            raise _snapshot_unstable_path_error()
+        self.validate_parent_chain()
+
 
 @contextmanager
-def _open_snapshot_source_path(source_path: Path) -> Iterator[_SnapshotSource]:
+def _open_snapshot_source_path(source_path: Path) -> Iterator[_SnapshotSource | None]:
     """Walk a Linux path without following or touching symlink metadata."""
     _snapshot_open_capabilities()
     components = list(source_path.parts)
@@ -388,9 +404,19 @@ def _open_snapshot_source_path(source_path: Path) -> Iterator[_SnapshotSource]:
         for component in components:
             if component in {"", "."}:
                 continue
-            child_descriptor = _open_snapshot_directory(
-                component, directory_descriptor=current_descriptor
-            )
+            try:
+                child_descriptor = _open_snapshot_directory(
+                    component, directory_descriptor=current_descriptor
+                )
+            except FileNotFoundError:
+                absent_source = _SnapshotSource(
+                    directory_descriptor=current_descriptor,
+                    filename=filename,
+                    parent_chain=tuple(parent_chain),
+                )
+                absent_source.validate_absent_child(component)
+                yield None
+                return
             stack.callback(os.close, child_descriptor)
             parent_chain.append(
                 (current_descriptor, component, _descriptor_identity(child_descriptor))
@@ -667,8 +693,10 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
                 prefix="nomnomcli-read-only-"
             ) as temporary_directory,
         ):
-            private_path = _copy_stable_database_snapshot(
-                source_path, Path(temporary_directory)
+            private_path = (
+                _copy_stable_database_snapshot(source_path, Path(temporary_directory))
+                if source_path is not None
+                else None
             )
             if private_path is not None:
                 source = sqlite3.connect(private_path)
@@ -698,6 +726,7 @@ def store_log(
     logged_at: datetime | None = None,
 ) -> int:
     timestamp = (logged_at or datetime.now().astimezone()).isoformat(timespec="seconds")
+    require_finite_numbers((items, totals))
     cursor = connection.execute(
         """INSERT INTO log_entries
         (logged_at, kind, label, items_json, kcal, protein, fat, carbs)
@@ -706,7 +735,7 @@ def store_log(
             timestamp,
             kind,
             label,
-            json.dumps(items, ensure_ascii=False, sort_keys=True),
+            json.dumps(items, ensure_ascii=False, sort_keys=True, allow_nan=False),
             totals["kcal"],
             totals["protein"],
             totals["fat"],
@@ -765,6 +794,7 @@ def get_stats(
         for key, value in meal_totals.items():
             totals[key] += value
         items = json.loads(row["items_json"])
+        require_finite_numbers((meal_totals, items))
         meals.append(
             {
                 "id": row["id"],
@@ -786,4 +816,5 @@ def get_stats(
     if end is not None:
         result["to"] = end.isoformat(timespec="seconds")
         result["local_date"] = local_date.isoformat()
+    require_finite_numbers(result)
     return result

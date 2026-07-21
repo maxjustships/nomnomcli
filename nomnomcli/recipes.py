@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import datetime
 from html import unescape
@@ -9,7 +10,7 @@ from html.parser import HTMLParser
 import requests
 
 from nomnomcli import __version__
-from nomnomcli.errors import NomnomError
+from nomnomcli.errors import NomnomError, require_finite_numbers
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import NUTRIENT_KEYS, round_nutrition, total_items
 from nomnomcli.parser import parse_recipe_ingredient
@@ -91,8 +92,10 @@ def build_recipe(
     if not name or not isinstance(raw_ingredients, list) or not raw_ingredients:
         raise NomnomError("invalid_recipe", "Recipe needs a name and recipeIngredient list")
     servings = servings_override or _servings_from_schema(schema.get("recipeYield"))
-    if servings <= 0:
-        raise NomnomError("invalid_servings", "Servings must be greater than zero")
+    if not math.isfinite(servings) or servings <= 0:
+        raise NomnomError(
+            "invalid_servings", "Servings must be finite and greater than zero"
+        )
     ingredients = [parse_recipe_ingredient(str(item), repository) for item in raw_ingredients]
     totals = total_items(ingredients)
     per_serving = {key: round_nutrition(totals[key] / servings) for key in NUTRIENT_KEYS}
@@ -129,6 +132,7 @@ def fetch_recipe(
 
 
 def save_recipe(connection: sqlite3.Connection, recipe: dict) -> None:
+    require_finite_numbers(recipe)
     values = [recipe["per_serving"][key] for key in NUTRIENT_KEYS]
     connection.execute(
         """INSERT INTO recipes
@@ -148,7 +152,12 @@ def save_recipe(connection: sqlite3.Connection, recipe: dict) -> None:
             recipe["name"],
             recipe["source_url"],
             recipe["servings"],
-            json.dumps(recipe["ingredients"], ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                recipe["ingredients"],
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            ),
             *values,
             datetime.now().astimezone().isoformat(timespec="seconds"),
         ),
@@ -156,8 +165,10 @@ def save_recipe(connection: sqlite3.Connection, recipe: dict) -> None:
 
 
 def recipe_portion(connection: sqlite3.Connection, name: str, portions: float) -> dict:
-    if portions <= 0:
-        raise NomnomError("invalid_portions", "Portions must be greater than zero")
+    if not math.isfinite(portions) or portions <= 0:
+        raise NomnomError(
+            "invalid_portions", "Portions must be finite and greater than zero"
+        )
     row = connection.execute(
         "SELECT * FROM recipes WHERE name = ? COLLATE NOCASE", (name,)
     ).fetchone()

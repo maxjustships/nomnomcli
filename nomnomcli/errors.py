@@ -1,3 +1,6 @@
+import math
+
+
 class NomnomError(Exception):
     """A user-correctable error with stable machine-readable details."""
 
@@ -38,3 +41,25 @@ class ProviderUnavailableError(NomnomError):
         )
         self.provider = provider
         self.retryable = retryable
+
+
+def require_finite_numbers(value: object) -> None:
+    """Reject non-finite values before persistence or strict JSON output."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise NomnomError(
+                "non_finite_result",
+                "Command result contains a non-finite numeric value",
+                details={
+                    "would_write": False,
+                    "action": "Repair or remove non-finite persisted nutrition values and retry.",
+                },
+            )
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            require_finite_numbers(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            require_finite_numbers(item)

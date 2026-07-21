@@ -11,7 +11,7 @@ from datetime import date, datetime
 from nomnomcli import __version__
 from nomnomcli.config import ProviderConfig
 from nomnomcli.db import connect, connect_read_only, get_stats, store_log
-from nomnomcli.errors import NomnomError
+from nomnomcli.errors import NomnomError, require_finite_numbers
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
 from nomnomcli.onboarding import doctor_report, setup_providers, setup_status_report
@@ -26,13 +26,107 @@ from nomnomcli.semantic import parse_resolution_intent
 
 
 def _json_output(payload: dict | list) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        indent=2,
-        allow_nan=False,
-    )
+    require_finite_numbers(payload)
+    try:
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise NomnomError(
+            "invalid_json_result",
+            "Command result cannot be represented as strict JSON",
+            details={"would_write": False},
+        ) from error
+
+
+def _json_error_output(error: NomnomError) -> str:
+    try:
+        return _json_output(error.as_dict())
+    except NomnomError as serialization_error:
+        return json.dumps(
+            serialization_error.as_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+
+
+def _validate_numeric_arguments(args: argparse.Namespace) -> None:
+    no_write = {"would_write": False}
+    if (
+        args.command == "log"
+        and args.grams is not None
+        and not math.isfinite(args.grams)
+    ):
+        raise NomnomError(
+            "invalid_quantity",
+            "Grams must be finite and greater than zero",
+            details=no_write,
+        )
+    if args.command == "log" and args.food and args.grams is not None and args.grams <= 0:
+        raise NomnomError(
+            "invalid_quantity",
+            "Grams must be finite and greater than zero",
+            details=no_write,
+        )
+    if args.command == "add":
+        nutrients = (args.kcal, args.protein, args.fat, args.carbs)
+        if any(not math.isfinite(value) or value < 0 for value in nutrients):
+            raise NomnomError(
+                "invalid_nutrition",
+                "Nutrition values must be finite and non-negative",
+                details=no_write,
+            )
+        if args.piece_grams is not None and (
+            not math.isfinite(args.piece_grams) or args.piece_grams <= 0
+        ):
+            raise NomnomError(
+                "invalid_piece_grams",
+                "Piece grams must be finite and greater than zero",
+                details=no_write,
+            )
+    if args.command == "capture" and args.capture_command == "label":
+        nutrients = (args.kcal, args.protein, args.fat, args.carbs)
+        if any(not math.isfinite(value) or value < 0 for value in nutrients):
+            raise NomnomError(
+                "invalid_nutrition",
+                "Nutrition values must be finite and non-negative",
+                details=no_write,
+            )
+        if args.serving_grams is not None and (
+            not math.isfinite(args.serving_grams) or args.serving_grams <= 0
+        ):
+            raise NomnomError(
+                "invalid_serving_grams",
+                "Serving grams must be finite and greater than zero",
+                details=no_write,
+            )
+    if (
+        args.command == "recipe"
+        and args.recipe_command == "add"
+        and args.servings is not None
+        and (not math.isfinite(args.servings) or args.servings <= 0)
+    ):
+        raise NomnomError(
+            "invalid_servings",
+            "Servings must be finite and greater than zero",
+            details=no_write,
+        )
+    if (
+        args.command == "recipe"
+        and args.recipe_command == "log"
+        and (not math.isfinite(args.portions) or args.portions <= 0)
+    ):
+        raise NomnomError(
+            "invalid_portions",
+            "Portions must be finite and greater than zero",
+            details=no_write,
+        )
 
 
 def _local_now() -> datetime:
@@ -269,6 +363,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    _validate_numeric_arguments(args)
     portion_policy = None
     portion_estimates = None
     if args.command == "log":
@@ -464,19 +559,8 @@ def _run(args: argparse.Namespace) -> int:
             return 0
 
         if args.command == "add":
-            nutrients = (args.kcal, args.protein, args.fat, args.carbs)
             if not args.name.strip() or not args.brand.strip():
                 raise NomnomError("invalid_product", "Name and brand must not be empty")
-            if any(not math.isfinite(value) or value < 0 for value in nutrients):
-                raise NomnomError(
-                    "invalid_nutrition", "Nutrition values must be finite and non-negative"
-                )
-            if args.piece_grams is not None and (
-                not math.isfinite(args.piece_grams) or args.piece_grams <= 0
-            ):
-                raise NomnomError(
-                    "invalid_piece_grams", "Piece grams must be finite and greater than zero"
-                )
             food = repository.add_food(
                 name=args.name,
                 brand=args.brand,
@@ -506,8 +590,6 @@ def _run(args: argparse.Namespace) -> int:
             if args.food:
                 if args.grams is None:
                     raise NomnomError("grams_required", "--grams is required with --food")
-                if args.grams <= 0:
-                    raise NomnomError("invalid_quantity", "Grams must be greater than zero")
                 food, confidence = repository.resolve(args.food)
                 resolved = [scale_food(food, args.grams, confidence)]
             else:
@@ -568,8 +650,6 @@ def _run(args: argparse.Namespace) -> int:
             return 0
 
         if args.recipe_command == "add":
-            if args.servings is not None and args.servings <= 0:
-                raise NomnomError("invalid_servings", "Servings must be greater than zero")
             result = fetch_recipe(args.url, repository, args.servings)
             save_recipe(connection, result)
             if args.json:
@@ -599,7 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _run(args)
     except NomnomError as exc:
-        print(_json_output(exc.as_dict()), file=sys.stderr)
+        print(_json_error_output(exc), file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         error = {"error": {"code": "interrupted", "message": "Interrupted"}}

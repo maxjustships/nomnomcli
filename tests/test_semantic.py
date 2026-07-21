@@ -241,6 +241,83 @@ def test_cli_rejects_non_finite_intent_constants_with_strict_json_error(
     assert not database.exists()
 
 
+def test_cli_resolve_missing_nested_database_uses_empty_snapshot_without_creating_source(
+    tmp_path, monkeypatch, capsys
+):
+    missing_parent = tmp_path / "fresh" / "nested"
+    database = missing_parent / "nomnom.sqlite3"
+    original = "fresh install chicken"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "semantic_resolution_not_found"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert not missing_parent.exists()
+    assert not database.exists()
+
+
+def test_cli_resolve_fails_closed_if_missing_parent_appears_during_confirmation(
+    tmp_path, monkeypatch, capsys
+):
+    appearing_parent = tmp_path / "appearing-parent"
+    database = appearing_parent / "nested" / "nomnom.sqlite3"
+    original = "raced fresh install chicken"
+    real_open_directory = database_module._open_snapshot_directory
+    target_open_count = 0
+
+    def open_directory_with_race(component, *, directory_descriptor=None):
+        nonlocal target_open_count
+        if component == appearing_parent.name:
+            target_open_count += 1
+            if target_open_count == 2:
+                appearing_parent.mkdir()
+        return real_open_directory(component, directory_descriptor=directory_descriptor)
+
+    monkeypatch.setattr(
+        database_module, "_open_snapshot_directory", open_directory_with_race
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "database_snapshot_unstable"
+    assert error["would_write"] is False
+    assert target_open_count == 2
+    assert not database.exists()
+
+
 @pytest.mark.parametrize(
     "confidence",
     [float("nan"), float("inf"), float("-inf")],
