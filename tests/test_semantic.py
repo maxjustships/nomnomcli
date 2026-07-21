@@ -767,6 +767,83 @@ def test_russian_smoked_chicken_uses_visible_roasted_generic_fallback(
     assert _counts(repository) == before
 
 
+def test_semantic_candidate_with_conflicting_species_is_structured_no_write_refusal(
+    repository, user_db, monkeypatch
+):
+    original = "курица сырокопченая"
+    semantic_query = "smoked chicken"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "same_form"}],
+            )
+        ),
+        expected_original=original,
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+
+    def resolve(query, api_key):
+        if query == semantic_query:
+            return _generic_food("Chicken, beef and pork smoked sausage")
+        raise NomnomError("food_not_found", f"No safe food for {query}")
+
+    monkeypatch.setattr(repository.usda_client, "resolve", resolve)
+    before_counts = _counts(repository)
+    before_state = _database_state(user_db)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.plan_resolution(original, intent=intent)
+
+    error = caught.value.as_dict()["error"]
+    failure = error["details"]["failures"][0]["error"]
+    assert error["code"] == "semantic_resolution_not_found"
+    assert error["would_write"] is False
+    assert failure["code"] == "semantic_species_conflict"
+    assert failure["details"] == {
+        "requested_species": ["chicken"],
+        "candidate_species": ["beef", "chicken", "pork"],
+        "conflicting_species": ["beef", "pork"],
+    }
+    assert _counts(repository) == before_counts
+    assert _database_state(user_db) == before_state
+
+
+def test_semantic_species_guard_preserves_chicken_descriptors_and_preparations(
+    repository, monkeypatch
+):
+    original = "курица сырокопченая"
+    semantic_query = "smoked chicken"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "same_form"}],
+            )
+        ),
+        expected_original=original,
+    )
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+
+    def resolve(query, api_key):
+        if query == semantic_query:
+            return _generic_food("Chicken breast, roasted and smoked")
+        raise NomnomError("food_not_found", f"No safe food for {query}")
+
+    monkeypatch.setattr(repository.usda_client, "resolve", resolve)
+    before = _counts(repository)
+
+    plan = repository.plan_resolution(original, intent=intent)
+
+    assert plan["retrieval_query"] == semantic_query
+    assert plan["source_id"] == "171477"
+    assert plan["resolution_mode"] == "generic_proxy"
+    assert plan["would_write"] is False
+    assert _counts(repository) == before
+
+
 def test_chicken_pastrami_same_form_route_is_safe_off_proxy(repository, monkeypatch):
     original = "куриная пастрома"
     intent = parse_resolution_intent(
@@ -842,6 +919,49 @@ def test_relation_then_provider_quality_order_semantic_plans(repository, monkeyp
     assert plan["candidate_index"] == 1
     assert plan["source"] == "usda"
     assert plan["confidence"] == 0.81
+
+
+def test_off_tie_is_deterministic_when_provider_order_reverses(repository, monkeypatch):
+    original = "неизвестная курица"
+    semantic_query = "chicken"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "same_form"}],
+            )
+        ),
+        expected_original=original,
+    )
+    breast, _ = _generic_food(
+        "Chicken breast",
+        source="openfoodfacts",
+        source_id="20000002",
+    )
+    thigh, _ = _generic_food(
+        "Chicken thigh",
+        source="openfoodfacts",
+        source_id="10000001",
+    )
+    breast = replace(breast, categories=("chicken",))
+    thigh = replace(thigh, categories=("chicken",))
+    provider_order = [thigh, breast]
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda query, page_size=5: list(provider_order) if query == semantic_query else [],
+    )
+
+    first = repository.plan_resolution(original, intent=intent)
+    provider_order.reverse()
+    second = repository.plan_resolution(original, intent=intent)
+
+    assert first == second
+    assert first["source_id"] == "20000002"
+    assert first["alternatives"] == [
+        {"name": "Chicken thigh", "barcode": "10000001"}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -2490,6 +2610,8 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
         "курица SKU#ABC123",
         "курица SKU(ABC/123)",
         "курица SKU_АБВ123",
+        "курица SKU: 1000 g",
+        "курица SKU 2000 ккал",
         "курица ABC-12345",
         "курица ABC_12345",
         "курица ABC12345",
@@ -2549,6 +2671,20 @@ def test_alphanumeric_sku_variants_require_exact_resolution(
         ("рацион 2000ккал", "daily food"),
         ("meal 1000grams", "prepared food"),
         ("яйца 1000штук", "eggs"),
+        ("chicken 1000 g", "poultry"),
+        ("курица 1000 г", "poultry"),
+        ("milk 1000 ml", "dairy drink"),
+        ("supplement 5000 mg", "nutrient powder"),
+        ("olive oil 1200 kJ", "lipid food"),
+        ("vitamin D 5000 IU", "cholecalciferol"),
+        ("кефир 1000 мл", "fermented dairy"),
+        ("рацион 2000 ккал", "daily food"),
+        ("meal 2000 kcal", "prepared food"),
+        ("рацион 5000 кДж", "daily food"),
+        ("eggs 1000 pcs", "ova"),
+        ("eggs 1000 count", "ova"),
+        ("яйца 1000 шт", "eggs"),
+        ("яйца 1000 единиц", "eggs"),
     ],
 )
 def test_ordinary_food_expression_is_not_treated_as_sku(

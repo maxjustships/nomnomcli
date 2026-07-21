@@ -29,8 +29,13 @@ _QUANTITY_UNIT_SUFFIXES = frozenset(
     {
         "cal",
         "cl",
+        "count",
+        "counts",
         "cup",
+        "ct",
         "dl",
+        "ea",
+        "each",
         "floz",
         "g",
         "gr",
@@ -68,9 +73,13 @@ _QUANTITY_UNIT_SUFFIXES = frozenset(
         "pieces",
         "portion",
         "portions",
+        "serving",
+        "servings",
         "tbsp",
         "tsp",
         "ug",
+        "unit",
+        "units",
         "μg",
         "г",
         "гр",
@@ -78,6 +87,9 @@ _QUANTITY_UNIT_SUFFIXES = frozenset(
         "грамма",
         "граммов",
         "ед",
+        "единиц",
+        "единица",
+        "единицы",
         "кал",
         "кг",
         "килограмм",
@@ -104,6 +116,23 @@ _QUANTITY_UNIT_SUFFIXES = frozenset(
         "штуки",
     }
 )
+_QUANTITY_UNIT_PATTERN = "|".join(
+    sorted((re.escape(unit) for unit in _QUANTITY_UNIT_SUFFIXES), key=len, reverse=True)
+)
+
+# A deliberately small safety taxonomy for detecting mixed-species provider results.
+# This is not a food vocabulary: descriptors and preparations remain unrestricted.
+_ANIMAL_SPECIES_TOKENS = {
+    "beef": frozenset({"beef", "cattle", "cow", "veal"}),
+    "chicken": frozenset({"chicken", "hen", "rooster"}),
+    "duck": frozenset({"duck"}),
+    "goat": frozenset({"goat"}),
+    "goose": frozenset({"goose", "geese"}),
+    "lamb": frozenset({"lamb", "mutton", "sheep"}),
+    "pork": frozenset({"pig", "pork"}),
+    "rabbit": frozenset({"rabbit"}),
+    "turkey": frozenset({"turkey"}),
+}
 
 
 def normalize_name(value: str) -> str:
@@ -216,7 +245,11 @@ class _ResolutionEvidence:
 
 def _query_has_sku(query: str) -> bool:
     normalized = normalize_name(query)
-    if re.search(r"(?<!\w)\d{4,}(?!\w)", normalized):
+    if re.search(
+        rf"(?<!\w)\d{{4,}}(?!\d)(?!\s*(?:{_QUANTITY_UNIT_PATTERN})(?![^\W\d_]))"
+        r"(?!\w)",
+        normalized,
+    ):
         return True
     separated_sku = re.search(
         r"(?<!\w)sku(?:(?:\s*(?:[^\w\s]|_)+\s*)|\s+)"
@@ -316,6 +349,41 @@ def _off_candidate_query_is_safe(query: str, food: Food, *, exact_intent: bool) 
             query, food
         )
     return _off_generic_candidate_query_is_safe(query, food)
+
+
+def _animal_species(value: str) -> set[str]:
+    tokens = _name_tokens(value)
+    return {
+        species
+        for species, species_tokens in _ANIMAL_SPECIES_TOKENS.items()
+        if tokens & species_tokens
+    }
+
+
+def _semantic_species_conflicts(query: str, food: Food) -> tuple[str, ...]:
+    requested_species = _animal_species(query)
+    if not requested_species:
+        return ()
+    candidate_species = _animal_species(" ".join((food.name, *food.categories)))
+    return tuple(sorted(candidate_species - requested_species))
+
+
+def _off_candidate_sort_key(match: tuple[Food, float]) -> tuple:
+    food, confidence = match
+    return (
+        -confidence,
+        normalize_name(food.name),
+        str(food.source_id or ""),
+        str(food.barcode or ""),
+        normalize_name(food.brand or ""),
+        normalize_name(" ".join(food.categories)),
+        food.source,
+        food.provenance or "",
+        food.kcal,
+        food.protein,
+        food.fat,
+        food.carbs,
+    )
 
 
 def _generic_proxy_candidate(food: Food, confidence: float) -> dict:
@@ -691,7 +759,10 @@ class FoodRepository:
                         matching_brand,
                         *(food for food in off_matches if food is not matching_brand),
                     ]
-                scored = [(food, _off_confidence(query, food)) for food in off_matches]
+                scored = sorted(
+                    ((food, _off_confidence(query, food)) for food in off_matches),
+                    key=_off_candidate_sort_key,
+                )
                 accepted = [
                     match
                     for match in scored
@@ -762,7 +833,7 @@ class FoodRepository:
                     return food, confidence
 
         if accepted:
-            accepted.sort(key=lambda match: -match[1])
+            accepted.sort(key=_off_candidate_sort_key)
             selected, confidence = accepted[0]
             alternatives = tuple(
                 {
@@ -774,7 +845,7 @@ class FoodRepository:
                     }.items()
                     if value is not None
                 }
-                for alternative in off_matches
+                for alternative, _score in scored
                 if alternative is not selected
             )
             if exact_intent:
@@ -1036,6 +1107,19 @@ class FoodRepository:
                         "semantic_candidate_not_generic",
                         "Semantic candidates may resolve only to a generic proxy",
                         details={"resolution_mode": food.resolution_mode},
+                    )
+                species_conflicts = _semantic_species_conflicts(candidate.query, food)
+                if species_conflicts:
+                    raise NomnomError(
+                        "semantic_species_conflict",
+                        "Semantic candidate contains conflicting animal species",
+                        details={
+                            "requested_species": sorted(_animal_species(candidate.query)),
+                            "candidate_species": sorted(
+                                _animal_species(" ".join((food.name, *food.categories)))
+                            ),
+                            "conflicting_species": list(species_conflicts),
+                        },
                     )
             except NomnomError as exc:
                 if exc.code in {"invalid_nutrition", "provider_confidence_invalid"}:

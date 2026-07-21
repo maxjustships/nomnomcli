@@ -945,10 +945,10 @@ def test_off_result_is_cached_with_alternatives(repository, monkeypatch):
 
     monkeypatch.setattr(repository.off_client, "search", search)
     food, confidence = repository.resolve("Acme bread")
-    assert food.name == "Whole Grain Bread — Acme"
+    assert food.name == "Seeded Bread — Acme"
     assert confidence == 1.0
     assert food.alternatives == (
-        {"name": "Seeded Bread — Acme", "brand": "Acme", "barcode": "2"},
+        {"name": "Whole Grain Bread — Acme", "brand": "Acme", "barcode": "1"},
     )
 
     monkeypatch.setattr(
