@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nomnomcli.errors import NomnomError
+from nomnomcli.portions import DEFAULT_PORTION_POLICY, validate_portion_policy
 
 USDA_ENV_VAR = "NOMNOM_USDA_KEY"
 GENERIC_PROXY_POLICY_ENV_VAR = "NOMNOM_GENERIC_PROXY_POLICY"
@@ -19,6 +20,7 @@ GENERIC_PROXY_POLICIES = (
     "exact_only",
 )
 DEFAULT_GENERIC_PROXY_POLICY = "allow_for_unbranded"
+PORTION_POLICY_ENV_VAR = "NOMNOM_PORTION_POLICY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,25 @@ class ProviderConfig:
                 details={"path": str(self.path), "allowed": list(GENERIC_PROXY_POLICIES)},
             )
         return self._validate_generic_proxy_policy(stored_policy, "user_config")
+
+    def portion_policy(self) -> str:
+        environment_policy = self._environ.get(PORTION_POLICY_ENV_VAR, "").strip()
+        if environment_policy:
+            return validate_portion_policy(environment_policy, source="environment")
+        payload = self._stored_payload()
+        try:
+            stored_policy = payload.get("resolution", {}).get("portion_policy")
+        except AttributeError as exc:
+            raise self._invalid_config_error() from exc
+        if stored_policy is None:
+            return DEFAULT_PORTION_POLICY
+        if not isinstance(stored_policy, str):
+            raise NomnomError(
+                "portion_policy_invalid",
+                "portion_policy in provider configuration must be a string",
+                details={"path": str(self.path)},
+            )
+        return validate_portion_policy(stored_policy, source="user_config")
 
     def _validate_generic_proxy_policy(self, value: str, source: str) -> str:
         policy = value.strip()
@@ -131,6 +152,7 @@ class ProviderConfig:
         payload = self._stored_payload()
         try:
             stored_policy = payload.get("resolution", {}).get("generic_proxy_policy")
+            stored_portion_policy = payload.get("resolution", {}).get("portion_policy")
         except AttributeError as exc:
             raise self._invalid_config_error() from exc
         if stored_policy is not None and not isinstance(stored_policy, str):
@@ -144,6 +166,17 @@ class ProviderConfig:
             if stored_policy is not None
             else None
         )
+        if stored_portion_policy is not None and not isinstance(stored_portion_policy, str):
+            raise NomnomError(
+                "portion_policy_invalid",
+                "portion_policy in provider configuration must be a string",
+                details={"path": str(self.path)},
+            )
+        portion_policy = (
+            validate_portion_policy(stored_portion_policy, source="user_config")
+            if stored_portion_policy is not None
+            else None
+        )
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with suppress(OSError):
             destination.parent.chmod(0o700)
@@ -153,6 +186,10 @@ class ProviderConfig:
                 "\n[resolution]\n"
                 f"generic_proxy_policy = {json.dumps(policy, ensure_ascii=False)}\n"
             )
+        if portion_policy is not None:
+            if policy is None:
+                content += "\n[resolution]\n"
+            content += f"portion_policy = {json.dumps(portion_policy, ensure_ascii=False)}\n"
         temporary_name: str | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(

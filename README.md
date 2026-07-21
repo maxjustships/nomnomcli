@@ -254,10 +254,11 @@ The agent must not translate by inventing nutrition values or silently substitut
 
 The parser accepts kilograms, grams, millilitres, pieces, fractions, and explicit per-piece grams.
 English and Russian size words such as `small` and `небольшой` remain valid syntax, but a size word
-does not supply a packaged estimate. Piece grams come only from explicit user input or serving data
-on the resolved cached/pinned/API food record. Assumptions identify the provider, source field, and
-returned value. When serving data is absent, structured `piece_weight_unknown` asks for exact
-grams. Explicit grams always win, including `3 pieces FOOD at 38g` → `114g`.
+does not make nomnom guess a weight. By default, piece grams come only from explicit user input or
+serving data on the resolved cached/pinned/API food record. Assumptions identify the provider,
+source field, and returned value. When serving data is absent, the default `strict` portion policy
+keeps the existing `piece_weight_unknown` response and writes no log. Explicit grams always win,
+including `3 pieces FOOD at 38g` → `114g`.
 
 ```sh
 nomnom log --parse "bread 2 pieces at 40g" --json
@@ -267,6 +268,57 @@ nomnom log --parse "яичница из 3 небольших яиц" --json
 Supported dish prefixes split only the ingredients the user stated. nomnom never silently adds oil
 or another ingredient. Millilitres use a resolved density when available and otherwise retain the
 documented 1 g/ml conversion.
+
+### Opt-in external portion estimates
+
+An external agent may supply masses for unresolved counts, fractions, and size descriptions. This
+is opt-in: use `--portion-policy estimate` together with inline `--portion-estimates` JSON. nomnom
+does not contain an LLM, generate a mass, bundle portion weights, or treat the supplied mass as
+measured or source-backed. It uses each supplied central `grams` value in the existing deterministic
+nutrition calculator; the lower/upper range is provenance only and is not used to calculate a
+nutrition interval.
+
+The payload has exactly one top-level `items` array. Every entry has exactly these fields:
+
+- `item_index`: zero-based position after nomnom splits the original `--parse` text;
+- `input`: the exact trimmed item phrase from that text, matched byte-for-byte;
+- `grams`, `lower_grams`, `upper_grams`: finite nonnegative numbers satisfying
+  `lower_grams <= grams <= upper_grams`;
+- `confidence`: finite number from 0 through 1;
+- `method`: the literal string `agent_estimate`;
+- `assumption`: a nonempty human-readable explanation.
+
+For example:
+
+```sh
+nomnom log --parse \
+  "3 small fried eggs, half small tomato, half small onion, whole wheat bread 180 g, milk 110 g, 15 dates" \
+  --portion-policy estimate \
+  --portion-estimates '{"items":[
+    {"item_index":0,"input":"3 small fried eggs","grams":135,"lower_grams":120,"upper_grams":150,"confidence":0.72,"method":"agent_estimate","assumption":"Three small fried eggs estimated at 45 g each."},
+    {"item_index":1,"input":"half small tomato","grams":35,"lower_grams":25,"upper_grams":45,"confidence":0.65,"method":"agent_estimate","assumption":"Half of a small tomato estimated at 35 g."},
+    {"item_index":2,"input":"half small onion","grams":30,"lower_grams":20,"upper_grams":40,"confidence":0.63,"method":"agent_estimate","assumption":"Half of a small onion estimated at 30 g."},
+    {"item_index":5,"input":"15 dates","grams":120,"lower_grams":90,"upper_grams":150,"confidence":0.58,"method":"agent_estimate","assumption":"Fifteen dates estimated at 8 g each."}
+  ]}' --json
+```
+
+Every unresolved fuzzy item must have exactly one matching entry. Missing, extra, duplicate, or
+non-exact mappings and malformed/invalid values reject the complete meal without a log write;
+entries for explicit gram items are also rejected. Only inline JSON is supported. `ask` returns a
+structured `portion_estimate_required` response with the exact index/input and writes nothing.
+`strict` remains the default. Set a persistent default in user config or override it in the
+environment:
+
+```toml
+[resolution]
+portion_policy = "ask" # or "estimate"; default is "strict"
+```
+
+`NOMNOM_PORTION_POLICY` accepts `strict`, `ask`, or `estimate`; the CLI flag has highest precedence.
+Estimated log items persist `approximate=true`, `portion_provenance=agent_estimate`, and the full
+`portion_estimate` object next to food-resolution provenance. Log JSON and date stats expose these
+fields. Human output gives one correction prompt toward scale grams, a photo, or a barcode. Existing
+logs without these additive fields remain readable.
 
 ### Adding a new language
 
@@ -300,6 +352,10 @@ an `error` object and exit with status 2. Important codes include:
 - `invalid_source_note` / `invalid_nutrition`: correct the extracted label facts; failed captures
   write nothing.
 - `piece_weight_unknown`: ask for grams or add a verified `--piece-grams` value.
+- `portion_estimate_required` / `portion_estimate_missing`: supply exactly matched external estimate
+  metadata or use explicit grams; nothing is partially logged.
+- `portion_estimates_malformed` / `portion_estimate_invalid` /
+  `portion_estimate_mismatch`: correct the complete inline payload and retry.
 - `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
 

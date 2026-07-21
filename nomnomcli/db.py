@@ -279,14 +279,16 @@ def get_stats(
         meal_totals = {key: round(float(row[key]), 2) for key in totals}
         for key, value in meal_totals.items():
             totals[key] += value
+        items = json.loads(row["items_json"])
         meals.append(
             {
                 "id": row["id"],
                 "logged_at": row["logged_at"],
                 "kind": row["kind"],
                 "label": row["label"],
-                "items": json.loads(row["items_json"]),
+                "items": items,
                 "totals": meal_totals,
+                "approximate": any(item.get("approximate") is True for item in items),
             }
         )
     result = {
@@ -294,6 +296,7 @@ def get_stats(
         "from": start.isoformat(timespec="seconds"),
         "totals": {key: round(value, 2) for key, value in totals.items()},
         "meals": meals,
+        "approximate": any(meal["approximate"] for meal in meals),
     }
     if end is not None:
         result["to"] = end.isoformat(timespec="seconds")

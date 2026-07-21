@@ -48,8 +48,11 @@ class ResolvedItem:
     source_id: str | None = None
     source_note: str | None = None
     provenance: str | None = None
+    approximate: bool | None = None
+    portion_provenance: str | None = None
+    portion_estimate: dict | None = None
 
-    def to_dict(self) -> dict[str, str | float | bool]:
+    def to_dict(self) -> dict:
         return {key: value for key, value in asdict(self).items() if value is not None}
 
 
@@ -67,6 +70,7 @@ def scale_food(
     *,
     assumed: bool | None = None,
     assumption: str | None = None,
+    portion_estimate: dict | None = None,
 ) -> ResolvedItem:
     factor = grams / 100.0
     assumptions = [value for value in (food.assumption, assumption) if value]
@@ -89,6 +93,11 @@ def scale_food(
         source_id=food.source_id,
         source_note=food.source_note,
         provenance=food.provenance,
+        approximate=True if portion_estimate is not None else None,
+        portion_provenance=(
+            str(portion_estimate["method"]) if portion_estimate is not None else None
+        ),
+        portion_estimate=portion_estimate,
     )
 
 

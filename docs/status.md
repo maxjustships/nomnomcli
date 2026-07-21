@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #29 implemented and independently verified
+- Current phase: issue #31 implemented and verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
+- Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
+- Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
 - Completed issue #29 with intent-aware exact identity, USDA Foundation/SR Legacy preference, strict OFF proxy type matching, branded-proxy provenance, and cache intent isolation.
 - Recorded RED runs for 16 primary regressions plus two cache edges and missing-category evidence, then passed 114 focused tests, 204 full tests, and Ruff.
 - Ran all six literal translated inputs against mocked providers in a fresh temporary data directory; all six were explicit `generic_proxy` rows with source, brand, barcode, and assumption.
@@ -27,12 +30,15 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #29 is verified and committed locally.
+- No implementation work pending; issue #31 is ready for the scoped local commit.
 
 ## Next
-- Do not push or open a pull request unless the user requests it separately.
+- Do not push, merge, or open a pull request unless the user requests it separately.
 
 ## Decisions Made
+- Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
+- Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
+- Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
 - Issue #29: resolution mode follows user identity intent plus source identity, never candidate confidence alone.
 - Issue #29: generic USDA searches send the documented `dataType` array for Foundation and SR Legacy and rank eligible non-branded provenance ahead of branded payload rows.
 - Issue #29: a branded OFF candidate needs product-name token coverage plus category/type evidence to serve only as a labelled generic proxy.
@@ -89,6 +95,8 @@ ruff check .
 | 2026-07-21 | M24 | README, skill, changed code/tests, disposable installed checkout | focused/full pytest; Ruff; diff check; literal temp-DB smoke | 40/189 pass; clean; smoke 150 kcal | local commit |
 | 2026-07-21 | M25 | resolver/provider regression tests | focused pytest | RED: 16 primary failures; 2 cache failures; 1 category-evidence failure | M26 |
 | 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
+| 2026-07-21 | M28 | issue #31 tests and planning records | targeted pytest before production edits | RED: 16 expected failures; 1 strict-path pass | M29 |
+| 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -109,3 +117,5 @@ ruff check .
 - [x] Safe no-key miss returns `food_needs_source` with photo/barcode/label/cache options and optional USDA.
 - [x] Literal parsed/direct `2026-07-20` logs persist local noon and date stats return only that local day.
 - [x] Issue #29 literal six-item temp-data smoke returns only explicit generic proxies with audited OFF candidate identity.
+- [x] Issue #31 exact breakfast logs atomically with four explicit agent estimates and two unflagged explicit-gram items.
+- [x] Issue #31 date stats preserve the four portion provenance objects and one concise correction route.

@@ -9,12 +9,18 @@ from collections.abc import Sequence
 from datetime import date, datetime
 
 from nomnomcli import __version__
+from nomnomcli.config import ProviderConfig
 from nomnomcli.db import connect, get_stats, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
 from nomnomcli.onboarding import doctor_report, setup_providers, setup_status_report
 from nomnomcli.parser import parse_free_text
+from nomnomcli.portions import (
+    PORTION_CORRECTION,
+    parse_portion_estimates,
+    validate_portion_policy,
+)
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
 
 
@@ -100,12 +106,25 @@ def _print_log(result: dict, as_json: bool) -> None:
         return
     print("Logged:")
     for item in result["items"]:
-        print(f"  {item['name']:<38} {item['grams']:>8.2f} g  {item['kcal']:>8.2f} kcal")
+        marker = " (approx.)" if item.get("approximate") else ""
+        print(
+            f"  {item['name'] + marker:<38} "
+            f"{item['grams']:>8.2f} g  {item['kcal']:>8.2f} kcal"
+        )
+        estimate = item.get("portion_estimate")
+        if estimate:
+            print(
+                f"    portion: {item['portion_provenance']} | "
+                f"range {estimate['lower_grams']:.2f}-{estimate['upper_grams']:.2f} g | "
+                f"confidence {estimate['confidence']:.2f}"
+            )
     if result.get("assumptions"):
         print("Assumptions:")
         for assumption in result["assumptions"]:
             print(f"  - {assumption}")
     print(f"Total: {_nutrition_line(result['totals'])}")
+    if result.get("approximate"):
+        print(PORTION_CORRECTION)
 
 
 def _print_stats(result: dict, as_json: bool) -> None:
@@ -117,8 +136,14 @@ def _print_stats(result: dict, as_json: bool) -> None:
         print("  No meals logged.")
     for meal in result["meals"]:
         label = meal["label"] or ", ".join(item["name"] for item in meal["items"])
-        print(f"  {meal['logged_at']}  {label}  {_nutrition_line(meal['totals'])}")
+        marker = " (approx.)" if meal.get("approximate") else ""
+        print(
+            f"  {meal['logged_at']}  {label}{marker}  "
+            f"{_nutrition_line(meal['totals'])}"
+        )
     print(f"Total: {_nutrition_line(result['totals'])}")
+    if result.get("approximate"):
+        print(PORTION_CORRECTION)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -144,6 +169,15 @@ def _build_parser() -> argparse.ArgumentParser:
     form.add_argument("--parse", metavar="TEXT", help="comma-separated food phrases")
     form.add_argument("--food", metavar="NAME", help="food name for direct logging")
     log.add_argument("--grams", type=float, help="grams for --food")
+    log.add_argument(
+        "--portion-policy",
+        help="fuzzy portion policy: strict, ask, or estimate (default: config or strict)",
+    )
+    log.add_argument(
+        "--portion-estimates",
+        metavar="JSON",
+        help="inline JSON estimates exactly matched by item_index and input",
+    )
     log.add_argument("--date", help="local calendar date in YYYY-MM-DD; stored at local noon")
     log.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
@@ -219,6 +253,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    portion_policy = None
+    portion_estimates = None
+    if args.command == "log":
+        if args.food and (args.portion_policy is not None or args.portion_estimates is not None):
+            raise NomnomError(
+                "invalid_arguments",
+                "Portion policy and estimates are available only with --parse",
+                details={"action": "Use --food --grams for direct measured input."},
+            )
+        if args.parse:
+            portion_policy = (
+                validate_portion_policy(args.portion_policy, source="command_line")
+                if args.portion_policy is not None
+                else ProviderConfig().portion_policy()
+            )
+            if args.portion_estimates is not None:
+                if portion_policy != "estimate":
+                    raise NomnomError(
+                        "portion_policy_required",
+                        "External portion estimates require the explicit estimate policy",
+                        details={
+                            "policy": portion_policy,
+                            "action": "Use --portion-policy estimate or omit --portion-estimates.",
+                        },
+                    )
+                portion_estimates = parse_portion_estimates(args.portion_estimates)
     log_time = _effective_log_time(args.date) if args.command == "log" else None
     stats_date = None
     if args.command == "stats":
@@ -413,7 +473,12 @@ def _run(args: argparse.Namespace) -> int:
             else:
                 if args.grams is not None:
                     raise NomnomError("invalid_arguments", "--grams can only be used with --food")
-                resolved = parse_free_text(args.parse, repository)
+                resolved = parse_free_text(
+                    args.parse,
+                    repository,
+                    portion_policy=portion_policy,
+                    portion_estimates=portion_estimates,
+                )
             items = [item.to_dict() for item in resolved]
             totals = total_items(resolved)
             log_id = store_log(connection, items, totals, logged_at=log_time)
@@ -428,13 +493,17 @@ def _run(args: argparse.Namespace) -> int:
             assumptions = [item["assumption"] for item in items if item.get("assumption")]
             if assumptions:
                 result["assumptions"] = assumptions
+            if any(item.get("approximate") for item in items):
+                result["approximate"] = True
+                result["portion_correction"] = PORTION_CORRECTION
             _print_log(result, args.json)
             return 0
 
         if args.command == "stats":
-            _print_stats(
-                get_stats(connection, args.period, local_date=stats_date), args.json
-            )
+            result = get_stats(connection, args.period, local_date=stats_date)
+            if result.get("approximate"):
+                result["portion_correction"] = PORTION_CORRECTION
+            _print_stats(result, args.json)
             return 0
 
         if args.command == "search":

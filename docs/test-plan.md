@@ -1,5 +1,33 @@
 # Test Plan
 
+## Issue #31 Validation
+- In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
+- Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.
+- Exact acceptance literal: `3 small fried eggs, half small tomato, half small onion, whole wheat bread 180 g, milk 110 g, 15 dates`.
+- Every fuzzy estimate entry must contain exact `item_index` and `input`, finite nonnegative `grams`, `lower_grams`, `upper_grams`, confidence in `0..1`, `method: agent_estimate`, and a nonempty assumption.
+
+### Issue #31 Negative / Edge Cases
+- Default strict behavior remains `piece_weight_unknown` and produces no log write.
+- Malformed JSON, missing/extra/duplicate/mismatched entries, fuzzy estimate attached to explicit grams, invalid method/assumption, non-finite/negative values, invalid range ordering, and confidence outside `0..1` all fail atomically.
+- `ask` exposes exact unresolved phrase identifiers and correction routes without applying estimates.
+- Explicit grams and per-piece grams stay non-fuzzy; legacy item JSON without portion fields remains readable.
+
+### Issue #31 Acceptance Gates
+- [x] Focused tests observed RED before production changes — 16 expected failures, 1 pass.
+- [x] Focused parser/config/CLI/database tests pass — 114 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 224 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable exact-breakfast CLI smoke passes with four estimated items and two explicit-gram items.
+- [x] One scoped conventional commit exists; base remains `055e3d2`; nothing is pushed.
+
+### Issue #31 Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_portions.py tests/test_parser.py tests/test_cli.py tests/test_config.py tests/test_db.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #29 Validation
 - In scope: resolver intent, OFF safe generic proxy semantics, USDA request/ranking provenance, exact barcode/brand/pin/alias paths, cache isolation, generic policy writes, CLI/API JSON, and literal translated inputs.
 - Fixtures: mocked OFF and USDA payloads only, temporary SQLite user databases, no live traffic or personal data.

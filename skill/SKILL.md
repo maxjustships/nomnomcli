@@ -7,8 +7,8 @@ description: >-
 
 # nomnomcli
 
-Use `nomnom` as the only source of nutrition numbers. Never estimate calories,
-macros, weights, or serving conversions in the agent context.
+Use `nomnom` as the only source of nutrition numbers. Never estimate calories, macros, or food
+composition. Portion mass may be externally estimated only through the contract below.
 
 ## Mandatory install protocol
 
@@ -55,21 +55,30 @@ Follow this exact sequence:
 ## Log free text
 
 1. Preserve every food and quantity the user supplied.
-2. Translate each item to the language-agnostic contract: food name + quantity +
-   unit + optional modifiers. Translate language, not nutrition.
+2. Translate each item to food name + quantity + unit + optional modifiers; translate language,
+   not nutrition.
 3. Run `nomnom log --parse "FOOD QUANTITY UNIT, FOOD QUANTITY UNIT" --json`.
    For a remembered prior local day, append `--date YYYY-MM-DD`; never infer a date or time.
-4. Show returned canonical names, grams, confidence, totals, `alternatives`, and
-   every `assumptions` entry, plus `logged_at` and `local_date`.
+4. Show returned names, grams, confidence, totals, alternatives, assumptions, and date fields.
 5. Ask the user to confirm the resolution before relying on it.
 
 Successful logs are stored immediately. Do not silently correct or rerun one;
 tell the user before creating a replacement entry. Never read, edit, or manipulate SQLite directly;
 use `nomnom log --date` for remembered meals and the CLI for all user data operations.
 
-Supported dish prefixes split only named ingredients. Never add oil or another
-missing ingredient. Size words are parser syntax; piece grams must come from the
-resolved food record. If the record has no piece weight, ask for grams.
+Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words
+are parser syntax. Default `strict` behavior asks for grams when no piece weight exists.
+
+## External fuzzy portions
+
+Prefer human scale grams, photo, or barcode. Otherwise an agent may explicitly estimate a diary
+count/fraction/size, but never call it measured, exact, or source-backed. Run `nomnom log --parse
+TEXT --portion-policy estimate --portion-estimates JSON --json`. JSON is `{"items":[...]}` with one
+entry per unresolved fuzzy item and none for explicit grams. Each requires zero-based `item_index`,
+exact trimmed `input`, finite nonnegative central/lower/upper grams (lower <= central <= upper),
+confidence 0..1, `method:"agent_estimate"`, and nonempty `assumption`. Never fuzzy-match or generate
+nutrition ranges. Invalid or incomplete input rejects the whole log. Show returned portion fields
+and correction prompt. `ask` writes nothing; `strict` is default.
 
 ## Direct food flow
 
@@ -83,9 +92,8 @@ Always use the human's weight.
 
 ## Exact package capture
 
-When an exact packaged food is needed, do not substitute a generic food or ask the human to look up
-label numbers manually. Ask for the barcode first, or request a clear package photo when the barcode
-is unavailable or incomplete in Open Food Facts.
+For an exact packaged food, do not substitute or ask the human to look up label numbers. Ask for the
+barcode first, or request a clear package photo when it is unavailable/incomplete in OFF.
 
 ```sh
 nomnom capture barcode "BARCODE" --json
@@ -143,7 +151,7 @@ For an unresolved food:
 Other error handling:
 
 - `quantity_required`: ask for grams, millilitres, or a supported piece count.
-- `piece_weight_unknown`: ask for grams, then retry with `--food --grams`.
+- `piece_weight_unknown`: ask for grams, or use the explicit external fuzzy-portion flow.
 - `usda_low_confidence` / `usda_invalid_nutrition`: show the structured details,
   ask for a more specific name or verified label, and never accept/cache the weak result.
 - Nested `openfoodfacts_unavailable` or direct `usda_unavailable`: say that nothing was estimated;
@@ -154,14 +162,10 @@ human grams always override provider serving data, including per-piece input.
 
 ## Provider contract
 
-OFF free-text search intentionally uses direct `requests` calls to the official
-legacy v1 endpoint `https://world.openfoodfacts.org/cgi/search.pl` with
-`search_terms`, `search_simple=1`, `action=process`, `json=1`, `page_size`,
-supported response fields, and a descriptive User-Agent. API v2 is only for
-structured filters or product/barcode data: never send it free-text
-`search_terms`, and never use its unfiltered rows as fallback results. Retryable
-429/5xx failures use bounded backoff, including bounded numeric `Retry-After`;
-exhausted v1 failures are retryable `openfoodfacts_unavailable` errors.
+OFF free-text uses the official legacy v1 endpoint with `search_terms`, `search_simple=1`,
+`action=process`, JSON, page size, supported fields, and a descriptive User-Agent. API v2 is only
+for structured/product data: never send free text or use unfiltered fallback rows. Retryable
+429/5xx failures use bounded backoff; exhausted v1 raises `openfoodfacts_unavailable`.
 
 Use `nomnom doctor --json` when diagnosing resolution. OFF
 `product_lookup_reachable` means only that the v2 product-by-barcode endpoint
@@ -193,5 +197,4 @@ clarification; never complete recipe math yourself.
 
 ## Hard rule
 
-If `nomnom` cannot produce a nutrition value, say it is unresolved. Never
-estimate nutrition in the agent context.
+If `nomnom` cannot produce nutrition, say it is unresolved; never estimate it in agent context.
