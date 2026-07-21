@@ -1246,6 +1246,14 @@ class FoodRepository:
         self.user_connection.execute("SAVEPOINT capture_barcode_cache")
         try:
             self.user_connection.execute(
+                """UPDATE food_aliases
+                SET canonical_name = ?
+                WHERE canonical_name IN (
+                    SELECT name FROM food_cache WHERE barcode = ?
+                )""",
+                (exact.name, exact_barcode),
+            )
+            self.user_connection.execute(
                 "DELETE FROM food_cache WHERE barcode = ?", (exact_barcode,)
             )
             self._cache_food(

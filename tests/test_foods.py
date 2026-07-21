@@ -1070,3 +1070,50 @@ def test_dangling_alias_fails_without_remote_fallback(repository, monkeypatch):
 
     assert caught.value.code == "alias_target_not_found"
     assert caught.value.details["canonical_food_name"] == target.name
+
+
+def test_barcode_recapture_failure_rolls_back_alias_retargeting(repository, monkeypatch):
+    barcode = "0123456789012"
+    old = Food(
+        "Old Fixture Bar — Acme",
+        250,
+        9,
+        4,
+        45,
+        source="openfoodfacts",
+        barcode=barcode,
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id=barcode,
+        provenance="openfoodfacts",
+    )
+    unrelated = repository.add_food(
+        name="Unrelated Fixture",
+        brand="Other",
+        kcal=90,
+        protein=2,
+        fat=1,
+        carbs=18,
+    )
+    repository._cache_food(old, lookup_query=old.name)
+    repository.add_alias("fixture favorite", old.name)
+    repository.add_alias("other favorite", unrelated.name)
+    original_aliases = repository.list_aliases()
+
+    monkeypatch.setattr(
+        repository.off_client,
+        "product_by_barcode",
+        lambda code: replace(old, name="Current Fixture Bar — Acme", kcal=180),
+    )
+
+    def fail_cache(*args, **kwargs):
+        raise RuntimeError("forced cache failure")
+
+    monkeypatch.setattr(repository, "_cache_food", fail_cache)
+
+    with pytest.raises(RuntimeError, match="forced cache failure"):
+        repository.capture_barcode(barcode)
+
+    assert repository.list_aliases() == original_aliases
+    assert repository.resolve("fixture favorite", allow_remote=False) == (old, 1.0)
+    assert repository.resolve("other favorite", allow_remote=False) == (unrelated, 1.0)

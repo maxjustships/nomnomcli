@@ -2809,6 +2809,21 @@ def test_cli_recaptured_barcode_replaces_stale_product_before_readonly_resolve(
 
     assert main(["capture", "barcode", barcode, "--json"]) == 0
     capsys.readouterr()
+    assert (
+        main(
+            [
+                "alias",
+                "add",
+                "fixture favorite",
+                "Old Fixture Bar — Acme",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    with connect(user_db) as connection:
+        FoodRepository(connection).add_alias("other favorite", "Unrelated Fixture")
     assert main(["capture", "barcode", barcode, "--json"]) == 0
     latest_capture = _strict_json_loads(capsys.readouterr().out)
     assert latest_capture["name"] == "Current Fixture Bar — Acme"
@@ -2827,10 +2842,33 @@ def test_cli_recaptured_barcode_replaces_stale_product_before_readonly_resolve(
         unrelated = connection.execute(
             "SELECT name, barcode, kcal FROM food_cache WHERE name = 'Unrelated Fixture'"
         ).fetchone()
+        aliases = connection.execute(
+            """SELECT phrase, canonical_name FROM food_aliases
+            ORDER BY normalized_phrase"""
+        ).fetchall()
+        dangling_aliases = connection.execute(
+            """SELECT count(*) FROM food_aliases AS alias
+            LEFT JOIN food_cache AS food ON food.name = alias.canonical_name
+            WHERE food.name IS NULL"""
+        ).fetchone()[0]
     assert barcode_rows == [
         ("Current Fixture Bar — Acme", 180, 12, 6, 20, barcode)
     ]
     assert unrelated == ("Unrelated Fixture", unrelated_barcode, 90)
+    assert aliases == [
+        ("fixture favorite", "Current Fixture Bar — Acme"),
+        ("other favorite", "Unrelated Fixture"),
+    ]
+    assert dangling_aliases == 0
+
+    with connect(user_db) as connection:
+        aliased, confidence = FoodRepository(connection).resolve(
+            "fixture favorite", allow_remote=False
+        )
+    assert aliased.name == "Current Fixture Bar — Acme"
+    assert aliased.kcal == 180
+    assert aliased.source_id == barcode
+    assert confidence == 1.0
 
     def unexpected_provider_call(*args, **kwargs):
         pytest.fail("recaptured barcode reached a remote provider")
