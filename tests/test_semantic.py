@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -56,6 +57,52 @@ def _counts(repository: FoodRepository) -> dict[str, int]:
         ).fetchone()[0]
         for table in ("food_cache", "log_entries", "food_aliases", "recipes")
     }
+
+
+def _database_state(path) -> tuple[bytes, int, tuple, dict[str, int]]:
+    with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        schema = tuple(
+            connection.execute(
+                """SELECT type, name, tbl_name, sql FROM sqlite_master
+                WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"""
+            ).fetchall()
+        )
+        tables = [row[1] for row in schema if row[0] == "table"]
+        counts = {
+            table: connection.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+            for table in tables
+        }
+    return path.read_bytes(), version, schema, counts
+
+
+def _create_legacy_database(path, version: int) -> None:
+    extra_columns = (
+        """, barcode TEXT, brand TEXT, lookup_query TEXT, alternatives_json TEXT"""
+        if version == 2
+        else ""
+    )
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            f"""
+            PRAGMA user_version = {version};
+            CREATE TABLE food_cache (
+                name TEXT PRIMARY KEY COLLATE NOCASE,
+                kcal REAL NOT NULL,
+                protein REAL NOT NULL,
+                fat REAL NOT NULL,
+                carbs REAL NOT NULL,
+                piece_grams REAL,
+                density_g_ml REAL,
+                source TEXT NOT NULL,
+                fdc_id INTEGER
+                {extra_columns}
+            );
+            INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source)
+            VALUES ('legacy oats', 71, 2.54, 1.52, 12, 'legacy fixture');
+            """
+        )
 
 
 @pytest.mark.parametrize(
@@ -457,3 +504,164 @@ def test_cli_resolve_outputs_plan_and_never_changes_database(
             for table in ("food_cache", "log_entries", "food_aliases", "recipes")
         }
     assert after == before
+
+
+@pytest.mark.parametrize("database_kind", ["empty", "v1", "v2"])
+def test_cli_resolve_uses_isolated_migrated_copy_for_existing_databases(
+    tmp_path, monkeypatch, capsys, database_kind
+):
+    database = tmp_path / f"{database_kind}.sqlite3"
+    if database_kind == "empty":
+        database.touch()
+    else:
+        _create_legacy_database(database, int(database_kind[1:]))
+    original_state = _database_state(database)
+    original = "chicken breast roasted"
+    payload = _intent(original, [])
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(
+        "nomnomcli.usda.USDAClient.resolve",
+        lambda client, query, api_key: _generic_food(query),
+    )
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(payload),
+            "--json",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert output["would_write"] is False
+    assert output["original"] == original
+    assert _database_state(database) == original_state
+
+
+def test_explicit_brand_is_protected_without_off_response(repository, monkeypatch):
+    original = "Acme chicken"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": "chicken", "relation": "same_form"}],
+                brand_intent=False,
+            )
+        ),
+        expected_original=original,
+    )
+    cached, _ = _generic_food("chicken")
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    repository._cache_food(cached, lookup_query="chicken")
+    repository.user_connection.commit()
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    before = _counts(repository)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.plan_resolution(original, intent=intent)
+
+    assert caught.value.code == "exact_resolution_required"
+    assert caught.value.details["would_write"] is False
+    assert _counts(repository) == before
+
+
+def test_reopened_cached_usda_proxy_ranks_before_safe_off_same_relation(
+    user_db, monkeypatch
+):
+    cached, _ = _generic_food("chicken breast roasted", confidence=0.81)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken breast roasted.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query="chicken breast roasted")
+
+    original = "описание курицы"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [
+                    {"query": "chicken pastrami", "relation": "same_form"},
+                    {"query": "chicken breast roasted", "relation": "same_form"},
+                ],
+            )
+        ),
+        expected_original=original,
+    )
+    off_food, _ = _generic_food(
+        "Chicken pastrami",
+        source="openfoodfacts",
+        source_id="10000003",
+    )
+    off_food = replace(off_food, categories=("chicken pastrami",))
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+
+    with connect(user_db) as connection:
+        repository = FoodRepository(connection)
+        reopened = repository._find_exact("chicken breast roasted")
+        assert reopened is not None
+        assert reopened.provider_data_type is None
+        monkeypatch.setattr(
+            repository.off_client,
+            "search",
+            lambda query, page_size=5: [off_food] if query == "chicken pastrami" else [],
+        )
+
+        plan = repository.plan_resolution(original, intent=intent)
+
+    assert plan["candidate_index"] == 1
+    assert plan["source"] == "usda"
+    assert plan["resolution_mode"] == "generic_proxy"
+
+
+def test_cli_rejects_whitespace_original_before_opening_cache(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db) as connection:
+        pinned = Food(
+            name="Unrelated pinned product",
+            kcal=100,
+            protein=1,
+            fat=1,
+            carbs=1,
+            source="user",
+            resolution_mode="exact_product",
+            source_id="pin-1",
+        )
+        FoodRepository(connection)._cache_food(pinned, lookup_query="unrelated")
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli.connect_read_only",
+        lambda: pytest.fail("whitespace intent reached the cache connection"),
+    )
+    original = "   \t"
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "invalid_resolution_intent"
+    with connect(user_db) as connection:
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1

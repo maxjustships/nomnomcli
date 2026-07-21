@@ -1,5 +1,32 @@
 # Test Plan
 
+## Issue #33 Phase A Review-Fix Validation
+- In scope: existing empty and supported v1/v2 database compatibility without source mutation, provider-independent explicit-brand protection, reopened safe USDA proxy ordering, whitespace-original validation before cache access, existing raw-first/proxy-only/#29 protections, and disposable CLI smoke.
+- Out of scope: semantic plan application, semantic policy/config, schema changes to user databases, static brand/synonym/translation datasets, live provider traffic, and PR/push operations.
+- Fixtures: byte-audited temporary SQLite sources, representative legacy rows, synthetic cached USDA/OFF proxies, and monkeypatched providers only.
+
+### Critical Scenarios
+- Existing empty and v1/v2 sources produce a structured plan or structured Nomnom error without uncaught SQLite failures; source bytes, schema, version, and row counts remain identical.
+- `Acme chicken` with `brand_intent: false`, OFF disabled/unavailable, and candidate `chicken` refuses with `exact_resolution_required`, no generic plan, and no writes.
+- A persisted/reopened safe USDA generic proxy ranks before a safe OFF proxy for the same relation even though `provider_data_type` is not stored.
+- Whitespace-only `--food` and intent `original` fail as `invalid_resolution_intent` before a pinned unrelated cache row can be queried or planned.
+
+### Acceptance Gates
+- [x] Focused regressions observed RED before production changes — 6 expected failures.
+- [x] Focused semantic/database/food/CLI tests pass — 114 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 250 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable CLI success/refusal smoke preserves database bytes/schema/counts and creates no side files.
+- [x] One conventional follow-up commit exists; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Validation
 - In scope: intent v1 parsing/validation, original-first non-persisting resolution, bounded semantic retrieval, existing provider/identity checks, proxy-only candidate results, deterministic cross-candidate ranking, structured CLI JSON, benchmark cases, README, and agent skill.
 - Out of scope: applying plans to logs, `semantic_policy`, `log --resolution-intents`, schema/config changes, LLM/API integration, embedded food/synonym/translation/weight data, live traffic, and user databases.

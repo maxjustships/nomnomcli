@@ -11,7 +11,12 @@ from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
-from nomnomcli.semantic import ResolutionIntent, ResolutionPlan, SemanticRelation
+from nomnomcli.semantic import (
+    ResolutionCandidate,
+    ResolutionIntent,
+    ResolutionPlan,
+    SemanticRelation,
+)
 from nomnomcli.usda import USDA_CONFIDENCE_FLOOR, USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
@@ -85,6 +90,19 @@ def _brand_matches_query(food: Food, query: str) -> bool:
 
 def _query_has_sku(query: str) -> bool:
     return bool(re.search(r"(?<!\w)\d{4,}(?!\w)", normalize_name(query)))
+
+
+def _semantic_rewrite_drops_original_tokens(
+    original: str, candidates: tuple[ResolutionCandidate, ...]
+) -> bool:
+    """Conservatively preserve same-language specificity without a brand corpus."""
+    original_tokens = _name_tokens(original)
+    return any(
+        (candidate_tokens := _name_tokens(candidate.query))
+        and bool(original_tokens & candidate_tokens)
+        and bool(original_tokens - candidate_tokens)
+        for candidate in candidates
+    )
 
 
 def _off_product_tokens(food: Food) -> set[str]:
@@ -623,6 +641,28 @@ class FoodRepository:
         return "generic"
 
     @staticmethod
+    def _semantic_provider_priority(food: Food) -> int:
+        provider_type = (food.provider_data_type or "").casefold()
+        if food.source == "usda" and provider_type == "foundation":
+            return 0
+        if food.source == "usda" and provider_type == "sr legacy":
+            return 1
+        cached_safe_usda = (
+            food.source == "usda"
+            and food.provider_data_type is None
+            and food.resolution_mode == "generic_proxy"
+            and food.fdc_id is not None
+            and food.source_id == str(food.fdc_id)
+            and food.brand is None
+            and food.provenance == "usda"
+        )
+        if cached_safe_usda:
+            return 1
+        if food.source == "openfoodfacts":
+            return 2
+        return 3
+
+    @staticmethod
     def _error_reveals_brand_intent(query: str, error: NomnomError) -> bool:
         candidate = error.details.get("candidate")
         if not isinstance(candidate, dict):
@@ -721,6 +761,9 @@ class FoodRepository:
             intent.brand_intent
             or _query_has_sku(original_query)
             or self._error_reveals_brand_intent(original_query, original_error)
+            or _semantic_rewrite_drops_original_tokens(
+                original_query, intent.candidates
+            )
         )
         if exact_intent:
             raise NomnomError(
@@ -766,17 +809,7 @@ class FoodRepository:
                     }
                 )
                 continue
-            provider_priority = (
-                0
-                if food.source == "usda"
-                and (food.provider_data_type or "").casefold() == "foundation"
-                else 1
-                if food.source == "usda"
-                and (food.provider_data_type or "").casefold() == "sr legacy"
-                else 2
-                if food.source == "openfoodfacts"
-                else 3
-            )
+            provider_priority = self._semantic_provider_priority(food)
             accepted.append(
                 (
                     relation_priority[candidate.relation],

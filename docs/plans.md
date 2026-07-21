@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Review-Fix Source
+- Task: Resolve all blocking independent-review findings in the current Phase A semantic-resolution diff.
+- Canonical input: User-supplied P1/P2 findings and required regressions, verification, smoke, local commit, and no-push constraints.
+- Repo context: read-only database preparation, intent validation, exact-intent protection, cached-provider ranking, semantic tests, and Phase A documentation.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Review-Fix Assumptions
+- Supported legacy databases are the existing v1/v2 migration inputs; dry-run planning may migrate only an isolated in-memory copy and must leave the source bytes and logical contents untouched.
+- With no embedded brand/synonym dataset, conservative lexical generic detection may approve semantic fallback only when every normalized original token remains represented by the candidate; token-dropping rewrites such as `Acme chicken` to `chicken` require exact resolution.
+- A cached USDA `generic_proxy` with USDA provenance/FDC identity was safety-checked before persistence; when its transient data type is unavailable after reopen, it retains safe USDA-generic priority ahead of OFF but below a live Foundation result.
+
+## Issue #33 Phase A Review-Fix Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M34 | Reproduce all blocking review findings | M33 | [x] |
+| M35 | Implement non-mutating compatibility and semantic guards | M34 | [x] |
+| M36 | Run full gates, disposable smoke, audit, and commit | M35 | [x] |
+
+## M34. Reproduce blocking review findings `[x]`
+### Goal
+- Focused regressions fail for empty/legacy existing databases, offline explicit-brand bypass, reopened cached-USDA ordering, and whitespace intent before any cache access.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'empty or legacy or explicit_brand or reopened or whitespace'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until each review finding has a focused failing assertion.
+
+## M35. Implement review fixes `[x]`
+### Goal
+- Dry-run resolution uses an isolated migrated database view, rejects invalid originals before repository access, conservatively protects dropped-token exact intent without provider evidence, and ranks safe reopened USDA proxies ahead of OFF.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any source database mutation, exact-intent bypass, unsafe semantic product acceptance, or issue #29 regression blocks final verification.
+
+## M36. Verify and commit review fixes `[x]`
+### Goal
+- Full pytest, Ruff, diff checks, and disposable success/refusal/no-write CLI smoke pass before one conventional local follow-up commit.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates and byte/count/schema-preserving smoke checks pass.
+
 ## Issue #33 Phase A Source
 - Task: Add read-only semantic resolution planning for bounded external-agent candidates.
 - Canonical input: GitHub issue #33 latest decision-grade plan and the user's Phase A-only contract, benchmark, smoke, commit, and no-push requirements.

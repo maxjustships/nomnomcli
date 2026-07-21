@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A implemented and verified
+- Current phase: issue #33 Phase A review fixes completed and locally committed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Resolved all independent Phase A blocking findings with an isolated in-memory migrated read-only snapshot, early whitespace-original validation, provider-independent conservative specificity protection, and safe reopened-USDA priority recovery.
+- Added six focused regressions covering zero-byte/v1/v2 source preservation, offline explicit-brand refusal, persisted cache reopen ordering, and pre-cache whitespace rejection; recorded all six RED before implementation.
+- Passed 114 focused tests, 250 full tests, Ruff, diff checks, and disposable subprocess CLI success/refusal smoke with identical database SHA-256, schema, counts, and no side files.
 - Completed issue #33 Phase A with a strict external intent v1 module, original-first read-only resolution, generic-proxy-only semantic candidates, deterministic relation/provider/confidence/query ordering, and structured JSON plans/refusals.
 - Added a query-only SQLite CLI path and persistence-disabled provider resolution; the mocked success/refusal smoke preserved all mutable table counts and the exact database digest.
 - Passed 136 focused tests, 244 full tests, Ruff, diff checks, and the Russian fallback/mixed-meat disposable CLI smoke.
@@ -33,10 +36,10 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #33 Phase A is ready for the scoped local commit.
+- No implementation work pending.
 
 ## Next
-- Create the requested conventional local commit, then stop without pushing or opening a pull request.
+- None; stop without pushing or opening a pull request.
 
 ## Decisions Made
 - Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
@@ -79,6 +82,7 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M34–M36 review fixes | read-only DB snapshot, semantic guards/ranking, regressions, docs | focused RED/GREEN; 114 focused; 250 full; Ruff; diff check; subprocess smoke | pass; exact DB digest/schema/counts unchanged | local commit |
 | 2026-07-21 | M31–M33 | semantic contract/planner/CLI/read-only DB, benchmark, docs | focused/full pytest; Ruff; diff check; digest-preserving temp-DB smoke | 136 focused; 244 full; clean; success/refusal no writes | local commit |
 | 2026-07-21 | Issue #33 preflight | issue comment, resolver/providers/CLI/DB/models/tests, planning docs | `gh issue view 33 --comments`; source/test inspection | Phase A boundary and mutation risk identified | M31 tests |
 | 2026-07-18 | Preflight | `.task-brief.md`, planning docs | repository inspection | pass | M1 |
@@ -108,6 +112,7 @@ ruff check .
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
 
 ## Smoke / Demo Checklist
+- [x] Review-fix success and offline explicit-brand refusal subprocesses preserve exact SQLite digest/schema/counts and create no side files.
 - [x] Issue #33 Russian fallback succeeds and mixed-meat refusal fails with unchanged cache/log/alias/recipe counts and identical SQLite digest.
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
 - [x] Russian mixed-item log works and persists.

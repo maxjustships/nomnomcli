@@ -75,6 +75,11 @@ def _candidate_key(value: str) -> str:
 
 
 def parse_resolution_intent(raw_json: str, *, expected_original: str) -> ResolutionIntent:
+    if not isinstance(expected_original, str) or not expected_original.strip():
+        _intent_error(
+            "--food must contain non-whitespace text",
+            expected_original=expected_original,
+        )
     try:
         payload = json.loads(raw_json)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -103,9 +108,9 @@ def parse_resolution_intent(raw_json: str, *, expected_original: str) -> Resolut
             expected_original=expected_original,
             details={"version": payload["version"]},
         )
-    if not isinstance(payload["original"], str) or not payload["original"]:
+    if not isinstance(payload["original"], str) or not payload["original"].strip():
         _intent_error(
-            "Resolution intent original must be a nonempty string",
+            "Resolution intent original must contain non-whitespace text",
             expected_original=expected_original,
         )
     if payload["original"] != expected_original:

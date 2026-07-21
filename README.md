@@ -100,8 +100,15 @@ safe OFF proxy, confidence, and normalized retrieval query. JSON keeps `original
 and always reports `would_write:false`. Barcode, SKU, and explicit-brand originals remain
 exact-capture-only even if an intent payload says `brand_intent:false`.
 
-This command is a dry-run boundary only. It opens existing SQLite state read-only (or uses an
-ephemeral empty database when none exists), never creates or updates cache/log/alias/recipe rows,
+nomnom has no static brand or synonym corpus. After the untouched original refuses, a same-language
+candidate that shares tokens while dropping any original token is therefore treated conservatively
+as possible brand/product specificity and requires exact capture. This can refuse a legitimate
+same-language simplification; cross-language brand detection has no comparable lexical signal, so
+agents must still set `brand_intent:true` and users should capture the exact package identity.
+
+This command is a dry-run boundary only. It opens existing SQLite state read-only, clones it into an
+isolated in-memory snapshot, and validates/migrates only that snapshot (or initializes an ephemeral
+snapshot when no database exists). It never creates or updates source cache/log/alias/recipe rows
 and does not apply the plan to `nomnom log`. There is no embedded LLM, translation table, synonym
 corpus, food record, or weight data; candidate generation stays agent-side.
 

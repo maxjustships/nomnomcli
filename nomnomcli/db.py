@@ -205,19 +205,21 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
 
 @contextmanager
 def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
-    """Open user state without creating, migrating, committing, or modifying it."""
+    """Open an isolated, migrated snapshot without modifying user state."""
     db_path = Path(path) if path is not None else default_db_path()
+    connection = sqlite3.connect(":memory:")
     if db_path.exists():
         uri = f"{db_path.resolve().as_uri()}?mode=ro"
-        connection = sqlite3.connect(uri, uri=True)
-    else:
-        connection = sqlite3.connect(":memory:")
-        for statement in LATEST_SCHEMA:
-            connection.execute(statement)
-        _set_user_version(connection, LATEST_SCHEMA_VERSION)
-        connection.commit()
+        source = sqlite3.connect(uri, uri=True)
+        try:
+            source.backup(connection)
+        finally:
+            source.close()
     try:
         connection.row_factory = sqlite3.Row
+        # Validate and migrate only the private snapshot. The source was opened
+        # mode=ro and is already closed, so dry-run compatibility cannot write it.
+        _initialize_database(connection)
         connection.execute("PRAGMA query_only = ON")
         yield connection
     finally:
