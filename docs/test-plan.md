@@ -1,5 +1,39 @@
 # Test Plan
 
+## Issue #27 Source
+- Task: Validate safe backdated logging and local-date-scoped stats.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-21
+
+## Issue #27 Validation Scope
+- In scope: parsed/direct `--date`, strict ISO calendar-date validation, future rejection, deterministic local noon, additive log JSON fields, exact local-day stats, old today/week and no-date compatibility, docs, skill, and checkout CLI smoke.
+- Out of scope: implicit date/time text parsing, schema changes, editing user data/aliases, recipe backdating, live providers, or personal data.
+
+## Issue #27 Environment / Fixtures
+- Use temporary databases with synthetic cached food only.
+- Set `TZ=Asia/Almaty` and use `time.tzset()` where practical so expected `2026-07-20T12:00:00+05:00` and day boundaries are deterministic.
+- Use injected `now` values for database tests and a non-future literal date for CLI tests.
+
+## Issue #27 Test Levels
+
+### Unit / Integration
+- Parse exact `YYYY-MM-DD`; reject malformed, impossible, and future dates with structured actionable errors and zero log writes.
+- Persist parsed and direct logs at local noon and return effective `logged_at` and `local_date`.
+- Query a half-open local-day interval that excludes both adjacent local days.
+- Preserve default no-date timestamp behavior and today/week stats.
+
+### End-to-End / Smoke
+- Exercise the checkout-installed `nomnom` command against a disposable database using the exact literal parsed log, direct log, and date stats forms.
+
+## Issue #27 Acceptance Gates
+- [x] Focused behavior tests witnessed RED before implementation.
+- [x] Focused tests pass under controlled TZ — 40 passed.
+- [x] `PYTHONPATH=. pytest -q` passes — 189 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Checkout import/executable proof and disposable literal CLI smoke pass.
+- [x] Scoped diff/status audit passed; ready for the scoped commit and pull request.
+
 ## Issue #23 Source
 - Task: Validate safe no-key base mode and optional USDA enhancement UX.
 - Plan file: `docs/plans.md`

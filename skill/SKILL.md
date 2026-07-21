@@ -58,12 +58,14 @@ Follow this exact sequence:
 2. Translate each item to the language-agnostic contract: food name + quantity +
    unit + optional modifiers. Translate language, not nutrition.
 3. Run `nomnom log --parse "FOOD QUANTITY UNIT, FOOD QUANTITY UNIT" --json`.
+   For a remembered prior local day, append `--date YYYY-MM-DD`; never infer a date or time.
 4. Show returned canonical names, grams, confidence, totals, `alternatives`, and
-   every `assumptions` entry.
+   every `assumptions` entry, plus `logged_at` and `local_date`.
 5. Ask the user to confirm the resolution before relying on it.
 
 Successful logs are stored immediately. Do not silently correct or rerun one;
-tell the user before creating a replacement entry.
+tell the user before creating a replacement entry. Never read, edit, or manipulate SQLite directly;
+use `nomnom log --date` for remembered meals and the CLI for all user data operations.
 
 Supported dish prefixes split only named ingredients. Never add oil or another
 missing ingredient. Size words are parser syntax; piece grams must come from the
@@ -176,6 +178,7 @@ a credential value.
 ```sh
 nomnom stats today --json
 nomnom stats week --json
+nomnom stats date YYYY-MM-DD --json
 ```
 
 Summarize only returned values.

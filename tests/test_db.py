@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -399,6 +399,45 @@ def test_empty_stats(user_db):
         result = get_stats(connection, "today", now)
     assert result["meals"] == []
     assert result["totals"]["kcal"] == 0
+
+
+def test_date_stats_use_exact_local_day_boundaries(user_db, almaty_timezone):
+    with connect(user_db) as connection:
+        store_log(
+            connection,
+            [ITEM],
+            TOTALS,
+            logged_at=datetime.fromisoformat("2026-07-19T23:59:59+05:00"),
+        )
+        store_log(
+            connection,
+            [ITEM],
+            TOTALS,
+            logged_at=datetime.fromisoformat("2026-07-20T00:00:00+05:00"),
+        )
+        store_log(
+            connection,
+            [ITEM],
+            TOTALS,
+            logged_at=datetime.fromisoformat("2026-07-20T23:59:59+05:00"),
+        )
+        store_log(
+            connection,
+            [ITEM],
+            TOTALS,
+            logged_at=datetime.fromisoformat("2026-07-21T00:00:00+05:00"),
+        )
+
+        result = get_stats(connection, "date", local_date=date(2026, 7, 20))
+
+    assert result["local_date"] == "2026-07-20"
+    assert result["from"] == "2026-07-20T00:00:00+05:00"
+    assert result["to"] == "2026-07-21T00:00:00+05:00"
+    assert result["totals"]["kcal"] == 110
+    assert [meal["logged_at"] for meal in result["meals"]] == [
+        "2026-07-20T00:00:00+05:00",
+        "2026-07-20T23:59:59+05:00",
+    ]
 
 
 def test_connect_migrates_v01_food_cache(user_db):

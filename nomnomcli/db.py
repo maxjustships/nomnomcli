@@ -5,7 +5,7 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 LATEST_SCHEMA_VERSION = 4
@@ -241,12 +241,38 @@ def period_start(period: str, now: datetime | None = None) -> datetime:
     raise ValueError(f"unsupported period: {period}")
 
 
-def get_stats(connection: sqlite3.Connection, period: str, now: datetime | None = None) -> dict:
-    start = period_start(period, now)
-    rows = connection.execute(
-        "SELECT * FROM log_entries WHERE logged_at >= ? ORDER BY logged_at, id",
-        (start.isoformat(timespec="seconds"),),
-    ).fetchall()
+def local_day_bounds(local_date: date) -> tuple[datetime, datetime]:
+    next_date = local_date + timedelta(days=1)
+    start = datetime(local_date.year, local_date.month, local_date.day).astimezone()
+    end = datetime(next_date.year, next_date.month, next_date.day).astimezone()
+    return start, end
+
+
+def get_stats(
+    connection: sqlite3.Connection,
+    period: str,
+    now: datetime | None = None,
+    *,
+    local_date: date | None = None,
+) -> dict:
+    end = None
+    if period == "date":
+        if local_date is None:
+            raise ValueError("local_date is required for the date period")
+        start, end = local_day_bounds(local_date)
+        rows = connection.execute(
+            """SELECT * FROM log_entries
+            WHERE julianday(logged_at) >= julianday(?)
+              AND julianday(logged_at) < julianday(?)
+            ORDER BY logged_at, id""",
+            (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")),
+        ).fetchall()
+    else:
+        start = period_start(period, now)
+        rows = connection.execute(
+            "SELECT * FROM log_entries WHERE logged_at >= ? ORDER BY logged_at, id",
+            (start.isoformat(timespec="seconds"),),
+        ).fetchall()
     meals = []
     totals = {key: 0.0 for key in ("kcal", "protein", "fat", "carbs")}
     for row in rows:
@@ -263,9 +289,13 @@ def get_stats(connection: sqlite3.Connection, period: str, now: datetime | None 
                 "totals": meal_totals,
             }
         )
-    return {
+    result = {
         "period": period,
         "from": start.isoformat(timespec="seconds"),
         "totals": {key: round(value, 2) for key, value in totals.items()},
         "meals": meals,
     }
+    if end is not None:
+        result["to"] = end.isoformat(timespec="seconds")
+        result["local_date"] = local_date.isoformat()
+    return result

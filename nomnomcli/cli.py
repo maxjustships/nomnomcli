@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from collections.abc import Sequence
+from datetime import date, datetime
 
 from nomnomcli import __version__
 from nomnomcli.db import connect, get_stats, store_log
@@ -18,6 +20,53 @@ from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
 
 def _json_output(payload: dict | list) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _parse_local_date(value: str) -> date:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise NomnomError(
+            "invalid_date",
+            "Date must be a valid local calendar date in YYYY-MM-DD format",
+            details={
+                "value": value,
+                "expected_format": "YYYY-MM-DD",
+                "action": "Use a date such as 2026-07-20; times are not accepted.",
+            },
+        )
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise NomnomError(
+            "invalid_date",
+            "Date must be a valid local calendar date in YYYY-MM-DD format",
+            details={
+                "value": value,
+                "expected_format": "YYYY-MM-DD",
+                "action": "Correct the impossible calendar date and try again.",
+            },
+        ) from exc
+    if parsed > _local_now().date():
+        raise NomnomError(
+            "future_date",
+            "Future dates are not allowed",
+            details={
+                "value": value,
+                "expected_format": "YYYY-MM-DD",
+                "action": "Use today's local date or an earlier local calendar date.",
+            },
+        )
+    return parsed
+
+
+def _effective_log_time(value: str | None) -> datetime:
+    if value is None:
+        return _local_now()
+    local_date = _parse_local_date(value)
+    return datetime(local_date.year, local_date.month, local_date.day, 12).astimezone()
 
 
 def _nutrition_line(totals: dict) -> str:
@@ -95,10 +144,12 @@ def _build_parser() -> argparse.ArgumentParser:
     form.add_argument("--parse", metavar="TEXT", help="comma-separated food phrases")
     form.add_argument("--food", metavar="NAME", help="food name for direct logging")
     log.add_argument("--grams", type=float, help="grams for --food")
+    log.add_argument("--date", help="local calendar date in YYYY-MM-DD; stored at local noon")
     log.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     stats = commands.add_parser("stats", help="show nutrition totals")
-    stats.add_argument("period", choices=("today", "week"))
+    stats.add_argument("period", choices=("today", "week", "date"))
+    stats.add_argument("date", nargs="?", help="local YYYY-MM-DD when period is date")
     stats.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     search = commands.add_parser("search", help="search the user food cache")
@@ -168,6 +219,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    log_time = _effective_log_time(args.date) if args.command == "log" else None
+    stats_date = None
+    if args.command == "stats":
+        if args.period == "date":
+            if args.date is None:
+                raise NomnomError(
+                    "date_required",
+                    "A local calendar date is required for date-scoped stats",
+                    details={
+                        "expected_format": "YYYY-MM-DD",
+                        "action": "Run nomnom stats date YYYY-MM-DD.",
+                    },
+                )
+            stats_date = _parse_local_date(args.date)
+        elif args.date is not None:
+            raise NomnomError(
+                "invalid_arguments",
+                "A calendar date can only be used with the date stats period",
+                details={"action": "Use nomnom stats date YYYY-MM-DD."},
+            )
+
     if args.command == "setup":
         if args.status:
             result = setup_status_report()
@@ -344,8 +416,15 @@ def _run(args: argparse.Namespace) -> int:
                 resolved = parse_free_text(args.parse, repository)
             items = [item.to_dict() for item in resolved]
             totals = total_items(resolved)
-            log_id = store_log(connection, items, totals)
-            result = {"items": items, "totals": totals, "log_id": log_id}
+            log_id = store_log(connection, items, totals, logged_at=log_time)
+            logged_at = log_time.isoformat(timespec="seconds")
+            result = {
+                "items": items,
+                "totals": totals,
+                "log_id": log_id,
+                "logged_at": logged_at,
+                "local_date": log_time.date().isoformat(),
+            }
             assumptions = [item["assumption"] for item in items if item.get("assumption")]
             if assumptions:
                 result["assumptions"] = assumptions
@@ -353,7 +432,9 @@ def _run(args: argparse.Namespace) -> int:
             return 0
 
         if args.command == "stats":
-            _print_stats(get_stats(connection, args.period), args.json)
+            _print_stats(
+                get_stats(connection, args.period, local_date=stats_date), args.json
+            )
             return 0
 
         if args.command == "search":

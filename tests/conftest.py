@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,23 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "foods.json"
 @pytest.fixture(autouse=True)
 def isolate_user_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
+@pytest.fixture
+def almaty_timezone(monkeypatch: pytest.MonkeyPatch):
+    if not hasattr(time, "tzset"):
+        pytest.skip("controlled process timezones require time.tzset")
+    original = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Almaty")
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
 
 
 @pytest.fixture

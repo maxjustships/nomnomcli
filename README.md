@@ -75,6 +75,20 @@ nomnom log --parse "rice 150 g, eggs 2 pieces" --json
 nomnom log --food "chickpeas, cooked" --grams 120 --json
 ```
 
+For a remembered meal from a prior local calendar day, pass an explicit ISO date to either form:
+
+```sh
+nomnom log --parse "rice 150 g, eggs 2 pieces" --date 2026-07-20 --json
+nomnom log --food "chickpeas, cooked" --grams 120 --date 2026-07-20 --json
+```
+
+`--date` accepts only `YYYY-MM-DD`; it never parses a time or a date from the food text. The date
+is interpreted in the user's local timezone and stored deterministically at local noon on that
+day. Successful log JSON includes the effective offset-aware `logged_at` and `local_date`, whether
+or not `--date` was supplied. Without `--date`, logging keeps its existing current-local-time
+behavior. Malformed, impossible, and future dates are rejected without a database write; today is
+allowed. Use this CLI path for remembered meals—never edit the SQLite database directly.
+
 Resolution is deterministic and ordered:
 
 1. exact phrase in the user's alias table, pointing to an exact local cache name;
@@ -301,9 +315,14 @@ alternatives, and assumptions before treating the resolution as confirmed.
 ```sh
 nomnom stats today --json
 nomnom stats week --json
+nomnom stats date 2026-07-20 --json
 nomnom recipe add "https://example.com/recipe" --servings 4 --json
 nomnom recipe log "Recipe name" --portions 1.5 --json
 ```
+
+`stats date` uses the same user-local calendar-day boundary as `log --date`: local midnight is
+inclusive and the next local midnight is exclusive. Existing `today` and `week` behavior is
+unchanged.
 
 Recipe ingredients use the same runtime resolver. An unresolved ingredient fails the whole import
 instead of storing partial nutrition.
