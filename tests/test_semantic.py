@@ -1021,14 +1021,15 @@ def test_cli_unreadable_snapshot_sidecar_is_structured_without_source_writes(
     sidecar = Path(f"{user_db}{suffix}")
     sidecar.write_bytes(b"existing SQLite sidecar")
     before = _directory_file_state(user_db.parent)
-    real_copyfile = database_module.shutil.copyfile
+    real_open = database_module.os.open
 
-    def refuse_sidecar_read(source, destination):
-        if Path(source) == sidecar:
-            raise PermissionError(errno.EACCES, "sidecar is unreadable", source)
-        return real_copyfile(source, destination)
+    def refuse_sidecar_read(path, flags, *args, **kwargs):
+        if Path(path) == sidecar:
+            assert flags & database_module.os.O_NOATIME
+            raise PermissionError(errno.EACCES, "sidecar is unreadable", path)
+        return real_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(database_module.shutil, "copyfile", refuse_sidecar_read)
+    monkeypatch.setattr(database_module.os, "open", refuse_sidecar_read)
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
@@ -1052,6 +1053,150 @@ def test_cli_unreadable_snapshot_sidecar_is_structured_without_source_writes(
     assert error["error"]["would_write"] is False
     assert error["error"]["details"]["snapshot_target"] == suffix.removeprefix("-")
     assert error["error"]["details"]["os_error"] == errno.EACCES
+    assert _directory_file_state(user_db.parent) == before
+
+
+def test_cli_resolve_preserves_stale_source_atime_mtime_and_content(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "no-atime-source.sqlite3"
+    original = "No-atime chicken"
+    with connect(database):
+        pass
+
+    writer = sqlite3.connect(database)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+        writer.execute(
+            "INSERT INTO food_cache "
+            "(name, kcal, protein, fat, carbs, source, lookup_query, "
+            "resolution_mode, source_id, provenance) "
+            "VALUES (?, 165, 31, 3.6, 1, 'user', ?, "
+            "'exact_product', 'no-atime-pin', 'user')",
+            (original, original),
+        )
+        writer.commit()
+
+        source_paths = [database, Path(f"{database}-wal"), Path(f"{database}-shm")]
+        assert all(path.exists() for path in source_paths)
+        noatime = getattr(database_module.os, "O_NOATIME", None)
+        if noatime is None:
+            pytest.skip("runtime does not expose Linux O_NOATIME")
+        for path in source_paths:
+            try:
+                descriptor = database_module.os.open(
+                    path,
+                    database_module.os.O_RDONLY | noatime,
+                )
+            except OSError as error:
+                if error.errno in {
+                    errno.EPERM,
+                    errno.EINVAL,
+                    errno.EOPNOTSUPP,
+                    errno.ENOTSUP,
+                }:
+                    pytest.skip(f"filesystem does not support O_NOATIME: {error}")
+                raise
+            else:
+                database_module.os.close(descriptor)
+
+        original_content = {path: path.read_bytes() for path in source_paths}
+        stale_atime_ns = 946_684_800_000_000_000
+        for path in source_paths:
+            stat = path.stat()
+            assert stale_atime_ns < stat.st_mtime_ns
+            database_module.os.utime(
+                path,
+                ns=(stale_atime_ns, stat.st_mtime_ns),
+            )
+        original_metadata = {
+            path: (path.stat().st_atime_ns, path.stat().st_mtime_ns)
+            for path in source_paths
+        }
+
+        monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+        monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+        code = main(
+            [
+                "resolve",
+                "--food",
+                original,
+                "--intent-json",
+                json.dumps(_intent(original, [])),
+                "--json",
+            ]
+        )
+        output = _strict_json_loads(capsys.readouterr().out)
+
+        assert code == 0
+        assert output["would_write"] is False
+        assert output["source_id"] == "no-atime-pin"
+        assert {
+            path: (path.stat().st_atime_ns, path.stat().st_mtime_ns)
+            for path in source_paths
+        } == original_metadata
+        assert {path: path.read_bytes() for path in source_paths} == original_content
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize(
+    ("suffix", "snapshot_target"),
+    [("", "main"), ("-wal", "wal")],
+)
+@pytest.mark.parametrize("open_errno", [errno.EPERM, errno.EOPNOTSUPP])
+def test_cli_snapshot_noatime_unavailable_is_structured_and_does_not_copy(
+    user_db, monkeypatch, capsys, open_errno, suffix, snapshot_target
+):
+    with connect(user_db):
+        pass
+    denied_path = Path(f"{user_db}{suffix}")
+    if suffix:
+        denied_path.write_bytes(b"existing SQLite sidecar")
+    before = _directory_file_state(user_db.parent)
+    real_open = database_module.os.open
+    source_open_flags = []
+
+    def refuse_noatime(path, flags, *args, **kwargs):
+        if Path(path) == denied_path:
+            source_open_flags.append(flags)
+            if flags & getattr(database_module.os, "O_NOATIME", 0):
+                raise OSError(open_errno, "O_NOATIME unavailable", path)
+        return real_open(path, flags, *args, **kwargs)
+
+    def reject_copy(*args, **kwargs):
+        pytest.fail("snapshot copy started after O_NOATIME refusal")
+
+    monkeypatch.setattr(database_module.os, "open", refuse_noatime)
+    monkeypatch.setattr(database_module, "_copy_open_file", reject_copy)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "database_snapshot_noatime_unavailable"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["snapshot_target"] == snapshot_target
+    assert error["error"]["details"]["os_error"] == open_errno
+    assert "owner" in error["error"]["details"]["action"]
+    assert source_open_flags
+    assert all(
+        flags & database_module.os.O_NOATIME for flags in source_open_flags
+    )
     assert _directory_file_state(user_db.parent) == before
 
 

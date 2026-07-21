@@ -9,7 +9,7 @@ import struct
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +30,14 @@ _SQLITE_SHM_LOCK_OFFSET = 120
 _SQLITE_SHM_LOCK_COUNT = 8
 _LINUX_F_OFD_SETLK = 37
 _LINUX_FLOCK = struct.Struct("@hh4xqqi4x")
+_NOATIME_UNAVAILABLE_ERRNOS = frozenset(
+    {
+        errno.EPERM,
+        errno.EINVAL,
+        errno.EOPNOTSUPP,
+        errno.ENOTSUP,
+    }
+)
 
 LATEST_SCHEMA = (
     """CREATE TABLE food_cache (
@@ -263,6 +271,25 @@ def _snapshot_read_error(suffix: str, error: OSError) -> NomnomError:
     )
 
 
+def _snapshot_noatime_error(suffix: str, error: OSError | None = None) -> NomnomError:
+    target = suffix.removeprefix("-") or "main"
+    details: dict[str, object] = {
+        "snapshot_target": target,
+        "action": (
+            "Run resolution as the owner of every SQLite source file, or copy the "
+            "database and its sidecars to a Linux filesystem you own that supports "
+            "O_NOATIME."
+        ),
+    }
+    if error is not None:
+        details["os_error"] = error.errno
+    return _snapshot_lock_error(
+        "database_snapshot_noatime_unavailable",
+        "A SQLite source file cannot be read without updating its access time",
+        **details,
+    )
+
+
 def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target: str) -> None:
     """Take a nonblocking Linux OFD lock that conflicts with SQLite POSIX writes."""
     if not _ofd_locks_supported():
@@ -293,11 +320,20 @@ def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target
         ) from error
 
 
-def _open_snapshot_source(path: Path) -> int:
+def _open_snapshot_source(path: Path, suffix: str) -> int:
+    noatime = getattr(os, "O_NOATIME", None)
+    if not sys.platform.startswith("linux") or noatime is None:
+        raise _snapshot_noatime_error(suffix)
     flags = os.O_RDONLY
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    return os.open(path, flags)
+    flags |= noatime
+    try:
+        return os.open(path, flags)
+    except OSError as error:
+        if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
+            raise _snapshot_noatime_error(suffix, error) from error
+        raise
 
 
 @contextmanager
@@ -311,7 +347,7 @@ def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | No
     checkpoints, and recovery. Other platforms fail closed before any copy.
     """
     try:
-        main_descriptor = _open_snapshot_source(source_path)
+        main_descriptor = _open_snapshot_source(source_path, "")
     except FileNotFoundError:
         yield None
         return
@@ -332,7 +368,9 @@ def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | No
             "main",
         )
         try:
-            shm_descriptor = _open_snapshot_source(Path(f"{source_path}-shm"))
+            shm_descriptor = _open_snapshot_source(
+                Path(f"{source_path}-shm"), "-shm"
+            )
         except FileNotFoundError:
             pass
         except OSError as error:
@@ -369,6 +407,57 @@ def _copy_open_file(file_descriptor: int, destination: Path) -> None:
             output.write(chunk)
 
 
+@contextmanager
+def _open_snapshot_file_set(
+    source_path: Path,
+    fingerprint: dict[str, tuple[int, int, int, int] | None],
+    locked_descriptors: tuple[int, int | None],
+) -> Iterator[dict[str, int] | None]:
+    """Open every fingerprinted source inode before accepting any source bytes."""
+    main_descriptor, shm_descriptor = locked_descriptors
+    descriptors = {"": main_descriptor}
+    if shm_descriptor is not None:
+        descriptors["-shm"] = shm_descriptor
+
+    with ExitStack() as stack:
+        for suffix in ("-journal", "-wal"):
+            if fingerprint[suffix] is None:
+                continue
+            try:
+                descriptor = _open_snapshot_source(
+                    Path(f"{source_path}{suffix}"), suffix
+                )
+            except FileNotFoundError:
+                yield None
+                return
+            except OSError as error:
+                raise _snapshot_read_error(suffix, error) from error
+            stack.callback(os.close, descriptor)
+            descriptors[suffix] = descriptor
+        yield descriptors
+
+
+def _snapshot_descriptors_match(
+    fingerprint: dict[str, tuple[int, int, int, int] | None],
+    descriptors: dict[str, int],
+) -> bool:
+    for suffix, expected in fingerprint.items():
+        descriptor = descriptors.get(suffix)
+        if expected is None:
+            if descriptor is not None:
+                return False
+        elif descriptor is None:
+            return False
+        else:
+            try:
+                actual = _descriptor_fingerprint(descriptor)
+            except OSError as error:
+                raise _snapshot_read_error(suffix, error) from error
+            if expected != actual:
+                return False
+    return True
+
+
 def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Path | None:
     """Copy a locked SQLite file set that remains unchanged across the complete copy."""
     for attempt in range(1, _SNAPSHOT_COPY_ATTEMPTS + 1):
@@ -383,27 +472,23 @@ def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Pat
                 if descriptors is None:
                     copy_succeeded = before[""] is None
                 else:
-                    main_descriptor, shm_descriptor = descriptors
-                    if before[""] != _descriptor_fingerprint(main_descriptor):
-                        copy_succeeded = False
-                    else:
-                        _copy_open_file(main_descriptor, private_path)
-                    for suffix in ("-journal", "-wal"):
-                        copied_suffix = suffix
-                        if before[suffix] is not None:
-                            shutil.copyfile(
-                                Path(f"{source_path}{suffix}"),
-                                Path(f"{private_path}{suffix}"),
-                            )
-                    copied_suffix = "-shm"
-                    if before["-shm"] is not None:
-                        if (
-                            shm_descriptor is None
-                            or before["-shm"] != _descriptor_fingerprint(shm_descriptor)
-                        ):
-                            copy_succeeded = False
-                        else:
-                            _copy_open_file(shm_descriptor, Path(f"{private_path}-shm"))
+                    with _open_snapshot_file_set(
+                        source_path, before, descriptors
+                    ) as source_descriptors:
+                        copy_succeeded = (
+                            source_descriptors is not None
+                            and _snapshot_descriptors_match(before, source_descriptors)
+                        )
+                        if copy_succeeded:
+                            for suffix in _SNAPSHOT_SUFFIXES:
+                                descriptor = source_descriptors.get(suffix)
+                                if descriptor is None:
+                                    continue
+                                copied_suffix = suffix
+                                _copy_open_file(
+                                    descriptor,
+                                    Path(f"{private_path}{suffix}"),
+                                )
             except FileNotFoundError:
                 copy_succeeded = False
             except OSError as error:
