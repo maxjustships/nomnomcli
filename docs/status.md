@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A WAL-safe snapshot completed
+- Current phase: issue #33 Phase A final safety findings completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Copied matching hot DELETE-mode rollback journals into private snapshot storage before SQLite opens the copy, so recovery restores committed state without touching source main/journal bytes or directory entries.
+- Recognized provider-evidenced brand-token equality, including brand-only `Acme`, as exact intent without a static brand corpus; preserved unmatched non-brand semantic behavior.
+- Recorded both requested RED failures, then passed 122 targeted tests, 258 full tests, repository-wide Ruff, diff checks, existing pending-WAL regressions, and a disposable hot-journal subprocess CLI smoke with exact source hashes/names unchanged.
 - Replaced source SQLite opening with byte-copy-first main/WAL/SHM isolation in a uniquely owned temporary directory; all SQLite open, backup, sidecar, and migration behavior is now private.
 - Added absent-SHM and existing-SHM pending-WAL regressions under a `0555` source directory, proving pending data remains visible while source sibling names and bytes remain exactly unchanged.
 - Passed 70 targeted tests, 255 full tests, repository-wide Ruff, diff checks, and a disposable installed-CLI WAL smoke with no source SHM creation.
@@ -45,9 +48,11 @@
 - No implementation work pending.
 
 ## Next
-- None; this local conventional commit completes the requested work, with no push or pull request.
+- None; create the requested local conventional commit, with no push or pull request.
 
 ## Decisions Made
+- Final safety findings: treat existing `-journal` as inseparable SQLite snapshot input and permit recovery only beside the private copy.
+- Final safety findings: infer brand-only exact intent only from provider-returned candidate evidence whose normalized brand tokens are contained in the original; do not introduce static brand data.
 - WAL-safe snapshot: never pass the source path to `sqlite3.connect`; copy the main file plus already-existing WAL/SHM siblings into one private temporary directory first.
 - WAL-safe snapshot: allow all SQLite open/backup/migration side effects only inside that owned directory, then remove it through scoped context cleanup.
 - Final P2: enforce exact intent once at the raw planning boundary so alias, exact/cache/search, and provider returns share the same protection.
@@ -92,6 +97,9 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M45 final safety findings | scoped production/test/docs diff | 258 full pytest; full Ruff; diff check; disposable hot-journal CLI smoke | pass; committed row recovered and exact source main/journal hashes and entries unchanged | local commit |
+| 2026-07-21 | M44 final safety findings | `nomnomcli/db.py`, `nomnomcli/foods.py`, regressions, docs | 122 targeted pytest; focused Ruff; pending-WAL regression | pass; rollback recovery and brand-only exact refusal green; non-brand control green | M45 |
+| 2026-07-21 | M43 final safety findings | semantic rollback/brand regressions and execution docs | focused pytest | RED: private snapshot exposed spilled uncommitted row; brand-only input returned semantic plan | M44 |
 | 2026-07-21 | M42 WAL-safe snapshot | scoped production/test/docs diff | 255 full pytest; full Ruff; diff check; installed-CLI pending-WAL smoke | pass; source main/WAL bytes and names identical, no SHM, `would_write: false` | local commit |
 | 2026-07-21 | M41 WAL-safe snapshot | `nomnomcli/db.py`, semantic WAL regression | focused WAL plus semantic/database/CLI pytest; scoped Ruff; diff check | GREEN: 2 WAL variants and 70 targeted tests pass; source main/WAL/SHM state unchanged | M42 |
 | 2026-07-21 | M40 WAL-safe snapshot | semantic WAL regression and execution docs | focused pytest | RED: uncaught `sqlite3.OperationalError` opening pending WAL without SHM in read-only source directory | M41 |

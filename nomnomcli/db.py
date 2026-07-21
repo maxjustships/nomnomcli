@@ -218,7 +218,7 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
             ) as temporary_directory:
                 private_path = Path(temporary_directory) / "snapshot.sqlite3"
                 shutil.copyfile(source_path, private_path)
-                for suffix in ("-wal", "-shm"):
+                for suffix in ("-journal", "-wal", "-shm"):
                     with suppress(FileNotFoundError):
                         shutil.copyfile(
                             Path(f"{source_path}{suffix}"),
@@ -233,7 +233,8 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
 
         connection.row_factory = sqlite3.Row
         # Validate and migrate only the in-memory snapshot. SQLite opened only
-        # the private file copy, so source-side WAL/SHM files cannot be created.
+        # the private file copy, so source-side journal/WAL/SHM files cannot be
+        # recovered, created, or otherwise modified.
         _initialize_database(connection)
         connection.execute("PRAGMA query_only = ON")
         yield connection

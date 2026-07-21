@@ -664,6 +664,7 @@ class FoodRepository:
 
     @staticmethod
     def _error_reveals_brand_intent(query: str, error: NomnomError) -> bool:
+        """Use provider-returned brand evidence without maintaining a brand corpus."""
         candidate = error.details.get("candidate")
         if not isinstance(candidate, dict):
             return False
@@ -672,7 +673,7 @@ class FoodRepository:
             return False
         brand_tokens = _name_tokens(brand)
         query_tokens = _name_tokens(query)
-        return bool(brand_tokens and brand_tokens <= query_tokens and query_tokens - brand_tokens)
+        return bool(brand_tokens and brand_tokens <= query_tokens)
 
     def _raw_record_satisfies_exact_intent(self, query: str, food: Food) -> bool:
         if food.resolution_mode != "exact_product":

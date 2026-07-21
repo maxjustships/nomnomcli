@@ -1,5 +1,33 @@
 # Test Plan
 
+## Issue #33 Phase A Final Safety Findings Validation
+- In scope: hot DELETE-mode rollback journal recovery in a private snapshot, byte/name preservation of source main/journal state, existing WAL no-side-file behavior, provider-evidenced brand-only exact intent, non-brand behavior, and Phase A no-write guarantees.
+- Out of scope: Phase B plan/log application, schema or policy changes, static brand/synonym datasets, live providers, push, or PR operations.
+- Fixtures: an abruptly exited DELETE-mode writer with a small cache and enough dirty updates to prove an uncommitted page spilled into the main file; synthetic OFF brand evidence plus a disjoint cached semantic generic candidate.
+
+### Critical Scenarios
+- The immutable source main file visibly contains an uncommitted dirty marker while a hot matching `-journal` exists; `nomnom resolve` opens only copied files, recovers the committed row, and leaves all source bytes and entries identical.
+- Existing pending-WAL variants still expose committed WAL state without creating or changing source side files.
+- Original `Acme`, payload `brand_intent:false`, OFF candidate brand `Acme`, and semantic candidate `chicken` refuses as `exact_resolution_required` with `would_write:false` and no source mutation.
+- A provider candidate brand not contained in an ordinary non-brand original does not independently set exact intent; existing semantic refusal/selection behavior remains unchanged.
+
+### Acceptance Gates
+- [x] Both focused regressions observed RED before production changes — rollback returned the spilled uncommitted row and brand-only input returned a semantic plan.
+- [x] Targeted semantic/database/food/CLI tests pass — 122 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 258 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Disposable source-state smoke preserves exact main/journal hashes and directory entries; both existing pending-WAL variants pass without source side-file changes.
+- [x] One conventional local commit contains only the scoped fixes; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'rollback_journal or brand_only or pending_wal'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A WAL-Safe Snapshot Validation
 - In scope: byte-copy-first source isolation, pending WAL visibility without source SHM creation, exact source-directory preservation, read-only-directory behavior, empty/v1/v2 compatibility, in-memory migration, and private temporary cleanup.
 - Out of scope: Phase B plan application, schema or semantic-policy changes, live providers, concurrent-write consistency guarantees beyond an already committed pending WAL, push, or PR operations.

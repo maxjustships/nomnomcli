@@ -1,5 +1,62 @@
 # Plans
 
+## Issue #33 Phase A Final Safety Findings Source
+- Task: Preserve hot DELETE-mode rollback recovery in private read-only snapshots and recognize provider-evidenced brand-only originals as exact intent.
+- Canonical input: Two final independent-review P2 findings plus the user's regression, full validation, disposable no-write smoke, local commit, and no-push requirements.
+- Repo context: `connect_read_only`, provider-error exact-intent inference, semantic CLI regressions, documentation, and Phase A execution records.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Final Safety Findings Assumptions
+- A matching existing `-journal` is part of the SQLite source state just like an existing `-wal`/`-shm`; SQLite may recover or delete only the private copy.
+- The rollback regression must prove dirty pages reached the source main file before the writer exited, while inspection of source state remains immutable and byte based.
+- Brand-only inference uses the returned provider candidate's brand tokens as runtime evidence; it does not add a static brand corpus or change nonmatching non-brand behavior.
+
+## Issue #33 Phase A Final Safety Findings Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M43 | Reproduce hot-journal loss and brand-only bypass | M42 | [x] |
+| M44 | Preserve rollback recovery and exact brand intent | M43 | [x] |
+| M45 | Run full gates, disposable no-write smoke, audit, and commit | M44 | [x] |
+
+## M43. Reproduce both final safety findings `[x]`
+### Goal
+- Focused regressions demonstrate that omitting a hot rollback journal exposes dirty uncommitted source pages and that a provider candidate whose brand exactly matches the original can otherwise fall through to a disjoint semantic generic candidate.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'rollback_journal or brand_only'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until both focused tests fail for the reviewed reasons and the rollback fixture proves a dirty page was spilled to the main database.
+
+## M44. Copy rollback journals and protect brand-only originals `[x]`
+### Goal
+- `connect_read_only` copies an existing matching `-journal` into private storage before SQLite opens the copy, and provider-evidenced brand-token equality sets exact intent without static brand data.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_db.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any lost committed state, source byte/name mutation, WAL side-file regression, non-brand false positive, or Phase A semantic application blocks M45.
+
+## M45. Verify and commit final safety fixes `[x]`
+### Goal
+- Targeted and full pytest, Ruff, diff checks, a disposable source-state no-write smoke, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass and the disposable smoke proves exact source main/journal bytes and directory entries remain unchanged.
+
 ## Issue #33 Phase A WAL-Safe Snapshot Source
 - Task: Ensure read-only semantic resolution never opens the source SQLite database or creates source WAL/SHM side files while preserving valid WAL state.
 - Canonical input: Final-review P2 plus the user's WAL regression, read-only-directory, compatibility, verification, smoke, local-commit, and no-push requirements.

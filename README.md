@@ -102,9 +102,11 @@ exact-capture-only even if an intent payload says `brand_intent:false`.
 
 nomnom has no static brand or synonym corpus. After the untouched original refuses, a same-language
 candidate that shares tokens while dropping any original token is therefore treated conservatively
-as possible brand/product specificity and requires exact capture. This can refuse a legitimate
-same-language simplification; cross-language brand detection has no comparable lexical signal, so
-agents must still set `brand_intent:true` and users should capture the exact package identity.
+as possible brand/product specificity and requires exact capture. A provider-returned candidate
+whose brand tokens match the full original, including a brand-only original such as `Acme`, is also
+runtime evidence of exact intent. This can refuse a legitimate same-language simplification;
+cross-language brand detection has no comparable lexical signal, so agents must still set
+`brand_intent:true` and users should capture the exact package identity.
 
 This command is a dry-run boundary only. It opens existing SQLite state read-only, clones it into an
 isolated in-memory snapshot, and validates/migrates only that snapshot (or initializes an ephemeral

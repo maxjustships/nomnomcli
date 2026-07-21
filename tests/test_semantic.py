@@ -669,6 +669,109 @@ os._exit(0)
         tmp_path.chmod(original_directory_mode)
 
 
+def test_cli_resolve_recovers_hot_rollback_journal_only_in_private_snapshot(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "rollback-source.sqlite3"
+    original = "Committed rollback chicken"
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA page_size = 512")
+        connection.execute("VACUUM")
+    with connect(database) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, lookup_query,
+             resolution_mode, source_id, provenance)
+            VALUES (?, 165, 31, 3.6, 1, 'user', ?,
+                    'exact_product', 'committed-rollback-pin', 'user')""",
+            (original, original),
+        )
+        connection.execute(
+            "CREATE TABLE rollback_spill (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO rollback_spill (id, payload) VALUES (?, ?)",
+            ((index, f"committed-{index:04d}-" + "c" * 1800) for index in range(300)),
+        )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import os
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+assert connection.execute("PRAGMA journal_mode = DELETE").fetchone()[0] == "delete"
+connection.execute("PRAGMA synchronous = FULL")
+connection.execute("PRAGMA cache_size = 5")
+connection.execute("PRAGMA cache_spill = ON")
+connection.execute("BEGIN IMMEDIATE")
+connection.execute(
+    "UPDATE food_cache SET source_id = 'uncommitted-rollback-pin' WHERE name = ?",
+    (sys.argv[2],),
+)
+connection.execute(
+    "UPDATE rollback_spill SET payload = ? || printf('%04d', id)",
+    ("dirty-" + "d" * 1800,),
+)
+assert connection.in_transaction
+os._exit(0)
+""",
+            str(database),
+            original,
+        ],
+        check=True,
+    )
+
+    journal_path = tmp_path / f"{database.name}-journal"
+    assert journal_path.exists()
+    journal_bytes = journal_path.read_bytes()
+    assert len(journal_bytes) > 512
+    assert any(journal_bytes[:28])
+    with sqlite3.connect(
+        f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True
+    ) as dirty_main:
+        assert (
+            dirty_main.execute(
+                "SELECT source_id FROM food_cache WHERE name = ?", (original,)
+            ).fetchone()[0]
+            == "uncommitted-rollback-pin"
+        )
+
+    original_files = _directory_file_state(tmp_path)
+    original_entries = sorted(path.name for path in tmp_path.iterdir())
+    original_directory_mode = tmp_path.stat().st_mode
+    try:
+        tmp_path.chmod(0o555)
+        monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+        monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+        code = main(
+            [
+                "resolve",
+                "--food",
+                original,
+                "--intent-json",
+                json.dumps(_intent(original, [])),
+                "--json",
+            ]
+        )
+        output = json.loads(capsys.readouterr().out)
+
+        assert code == 0
+        assert output["would_write"] is False
+        assert output["retrieval_query"] == original
+        assert output["source_id"] == "committed-rollback-pin"
+        assert output["resolution_mode"] == "exact_product"
+        assert sorted(path.name for path in tmp_path.iterdir()) == original_entries
+        assert _directory_file_state(tmp_path) == original_files
+    finally:
+        tmp_path.chmod(original_directory_mode)
+
+
 def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     tmp_path, monkeypatch, capsys
 ):
@@ -781,6 +884,101 @@ def test_explicit_brand_is_protected_without_off_response(repository, monkeypatc
 
     assert caught.value.code == "exact_resolution_required"
     assert caught.value.details["would_write"] is False
+    assert _counts(repository) == before
+
+
+def test_cli_brand_only_provider_match_requires_exact_resolution_without_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "Acme"
+    semantic_query = "chicken"
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query=semantic_query)
+
+    branded, _ = _generic_food(
+        "Acme chicken",
+        source="openfoodfacts",
+        source_id="10000010",
+    )
+    branded = replace(branded, brand="Acme", categories=("chicken",))
+    monkeypatch.setattr(
+        "nomnomcli.off.OpenFoodFactsClient.search",
+        lambda client, query, page_size=5: [branded] if query == original else [],
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": semantic_query, "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+def test_non_brand_original_does_not_infer_unmatched_provider_brand(
+    repository, monkeypatch
+):
+    original = "mystery poultry"
+    semantic_query = "chicken"
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "same_form"}],
+            )
+        ),
+        expected_original=original,
+    )
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    repository._cache_food(cached, lookup_query=semantic_query)
+    repository.user_connection.commit()
+    branded, _ = _generic_food(
+        "Acme chicken",
+        source="openfoodfacts",
+        source_id="10000011",
+    )
+    branded = replace(branded, brand="Acme", categories=("chicken",))
+    monkeypatch.setattr(repository.off_client, "search", lambda *args, **kwargs: [branded])
+    monkeypatch.delenv("NOMNOM_USDA_KEY", raising=False)
+    before = _counts(repository)
+
+    plan = repository.plan_resolution(original, intent=intent)
+
+    assert plan["retrieval_query"] == semantic_query
+    assert plan["resolution_mode"] == "generic_proxy"
+    assert plan["would_write"] is False
     assert _counts(repository) == before
 
 
