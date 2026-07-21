@@ -226,10 +226,21 @@ def _validate_current_schema(connection: sqlite3.Connection) -> None:
 
 
 def _ensure_required_current_indexes(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_log_entries_logged_at "
-        "ON log_entries(logged_at)"
-    )
+    for index, (table, required_columns) in _REQUIRED_CURRENT_SCHEMA_INDEXES.items():
+        existing = connection.execute(
+            "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?",
+            (index,),
+        ).fetchone()
+        if existing is not None:
+            columns = tuple(
+                str(row[2])
+                for row in connection.execute(f"PRAGMA index_info({index})")
+            )
+            if str(existing[0]) == table and columns == required_columns:
+                continue
+            connection.execute(f"DROP INDEX {index}")
+        columns_sql = ", ".join(required_columns)
+        connection.execute(f"CREATE INDEX {index} ON {table}({columns_sql})")
 
 
 def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
@@ -310,6 +321,10 @@ def _initialize_database(
             )
 
         if reject_incomplete_current and version == LATEST_SCHEMA_VERSION:
+            # A legacy v3-to-v4 migration could set user_version before creating
+            # this known index. Read-only callers operate on an isolated copy, so
+            # repair only known indexes there before applying strict validation.
+            _ensure_required_current_indexes(connection)
             _validate_current_schema(connection)
 
         if version == 0 and _table_names(connection) & V1_TABLES:

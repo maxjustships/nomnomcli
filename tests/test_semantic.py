@@ -72,6 +72,41 @@ def _counts(repository: FoodRepository) -> dict[str, int]:
     }
 
 
+def _cache_ambiguous_barcode(repository: FoodRepository, barcode: str) -> None:
+    repository._cache_food(
+        Food(
+            name="Current Fixture Bar — Acme",
+            kcal=180,
+            protein=12,
+            fat=6,
+            carbs=20,
+            source="openfoodfacts",
+            barcode=barcode,
+            brand="Acme",
+            resolution_mode="exact_product",
+            source_id=barcode,
+            provenance="openfoodfacts",
+        ),
+        lookup_query="Current Fixture Bar Acme",
+    )
+    repository._cache_food(
+        Food(
+            name="Stale Generic Fixture Bar",
+            kcal=250,
+            protein=9,
+            fat=4,
+            carbs=45,
+            source="openfoodfacts",
+            barcode=barcode,
+            resolution_mode="generic_proxy",
+            source_id=barcode,
+            provenance="openfoodfacts",
+            assumption="Legacy unsafe generic capture.",
+        ),
+        lookup_query="Stale Generic Fixture Bar",
+    )
+
+
 def _database_state(path) -> tuple[bytes, int, tuple, dict[str, int]]:
     with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -1977,17 +2012,71 @@ def test_cli_invalid_regular_database_is_structured_without_source_changes(tmp_p
     assert {child.name for child in tmp_path.iterdir()} == {database.name}
 
 
-@pytest.mark.parametrize(
-    "damage",
-    ["DROP TABLE food_aliases", "DROP INDEX idx_log_entries_logged_at"],
-    ids=["missing-food-aliases", "missing-required-index"],
-)
-def test_cli_incomplete_current_schema_is_structured_without_source_changes(
-    tmp_path, damage
-):
+def test_cli_missing_legacy_v4_index_is_repaired_only_in_private_snapshot(tmp_path):
+    database = tmp_path / "missing-index-v4.sqlite3"
+    exact_food = Food(
+        name="Legacy Indexed Chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        resolution_mode="exact_product",
+        source_id="legacy-index-pin",
+        provenance="user",
+    )
+    with connect(database) as connection:
+        FoodRepository(connection)._cache_food(
+            exact_food, lookup_query=exact_food.name
+        )
+        connection.execute("DROP INDEX idx_log_entries_logged_at")
+    before = _database_state(database)
+    before_files = _directory_file_state(tmp_path)
+    initial = database.stat()
+    stale_atime_ns = 946_684_800_000_000_000
+    os.utime(database, ns=(stale_atime_ns, initial.st_mtime_ns))
+    before_metadata = database.stat()
+
+    completed = _run_resolve_cli(database, exact_food.name)
+    after_metadata = database.stat()
+    plan = _strict_json_loads(completed.stdout)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert plan["source_id"] == exact_food.source_id
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["would_write"] is False
+    assert (
+        after_metadata.st_dev,
+        after_metadata.st_ino,
+        after_metadata.st_mode,
+        after_metadata.st_nlink,
+        after_metadata.st_uid,
+        after_metadata.st_gid,
+        after_metadata.st_size,
+        after_metadata.st_atime_ns,
+        after_metadata.st_mtime_ns,
+        after_metadata.st_ctime_ns,
+    ) == (
+        before_metadata.st_dev,
+        before_metadata.st_ino,
+        before_metadata.st_mode,
+        before_metadata.st_nlink,
+        before_metadata.st_uid,
+        before_metadata.st_gid,
+        before_metadata.st_size,
+        before_metadata.st_atime_ns,
+        before_metadata.st_mtime_ns,
+        before_metadata.st_ctime_ns,
+    )
+    assert _database_state(database) == before
+    assert _directory_file_state(tmp_path) == before_files
+
+
+def test_cli_missing_food_aliases_is_structured_without_source_changes(tmp_path):
     database = tmp_path / "incomplete-v4.sqlite3"
     with connect(database) as connection:
-        connection.execute(damage)
+        connection.execute("DROP TABLE food_aliases")
     before = _database_state(database)
     before_files = _directory_file_state(tmp_path)
 
@@ -3259,6 +3348,99 @@ def test_cli_resolve_reuses_exact_captured_barcode_without_provider_or_writes(
     assert plan["source_id"] == barcode
     assert plan["resolution_mode"] == "exact_product"
     assert plan["would_write"] is False
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+def test_direct_resolve_refuses_ambiguous_legacy_barcode_without_provider_or_write(
+    repository, monkeypatch
+):
+    barcode = "0123456789012"
+    _cache_ambiguous_barcode(repository, barcode)
+    repository.user_connection.commit()
+
+    def unexpected_provider_call(*args, **kwargs):
+        pytest.fail("ambiguous cached barcode reached a remote provider")
+
+    monkeypatch.setattr(repository.off_client, "search", unexpected_provider_call)
+    monkeypatch.setattr(repository.usda_client, "resolve", unexpected_provider_call)
+    before = _counts(repository)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(barcode, allow_remote=True)
+
+    assert caught.value.code == "barcode_cache_ambiguous"
+    assert caught.value.details == {
+        "would_write": False,
+        "barcode": barcode,
+        "matches": [
+            {
+                "name": "Current Fixture Bar — Acme",
+                "source": "openfoodfacts",
+                "source_id": barcode,
+                "resolution_mode": "exact_product",
+            },
+            {
+                "name": "Stale Generic Fixture Bar",
+                "source": "openfoodfacts",
+                "source_id": barcode,
+                "resolution_mode": "generic_proxy",
+            },
+        ],
+        "action": f"Recapture {barcode} to replace stale cached products safely",
+    }
+    assert _counts(repository) == before
+
+
+def test_cli_semantic_resolve_refuses_ambiguous_legacy_barcode_without_plan_or_write(
+    user_db, monkeypatch, capsys
+):
+    barcode = "0123456789012"
+    with connect(user_db) as connection:
+        _cache_ambiguous_barcode(FoodRepository(connection), barcode)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+
+    def unexpected_call(*args, **kwargs):
+        pytest.fail("ambiguous cached barcode continued into planning or a provider")
+
+    monkeypatch.setattr(
+        "nomnomcli.foods.OpenFoodFactsClient.search", unexpected_call
+    )
+    monkeypatch.setattr("nomnomcli.foods.USDAClient.resolve", unexpected_call)
+    monkeypatch.setattr(FoodRepository, "_resolution_plan", unexpected_call)
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            barcode,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    barcode,
+                    [
+                        {
+                            "query": "nutrition bar",
+                            "relation": "generic_fallback",
+                            "assumption": "Use a generic bar only if exact lookup misses.",
+                        }
+                    ],
+                )
+            ),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    assert code == 2
+    assert captured.out == ""
+    assert error["error"]["code"] == "barcode_cache_ambiguous"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["barcode"] == barcode
     assert _database_state(user_db) == original_state
     assert _directory_file_state(user_db.parent) == original_files
 

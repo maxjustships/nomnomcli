@@ -21,6 +21,10 @@ from nomnomcli.usda import USDA_CONFIDENCE_FLOOR, USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
 GENERIC_USDA_DATA_TYPES = frozenset({"foundation", "sr legacy"})
+_RAW_BARCODE_LENGTHS = frozenset({8, 12, 13, 14})
+_TERMINAL_PLAN_ERROR_CODES = frozenset(
+    {"invalid_nutrition", "provider_confidence_invalid", "barcode_cache_ambiguous"}
+)
 EXACT_CAPTURE_ACTION = (
     "Provide the package barcode or photo so the agent can run nomnom capture "
     "barcode or nomnom capture label"
@@ -277,6 +281,10 @@ def _query_has_sku(query: str) -> bool:
         ):
             return True
     return False
+
+
+def _is_raw_barcode(query: str) -> bool:
+    return query.isdigit() and len(query) in _RAW_BARCODE_LENGTHS
 
 
 def _semantic_rewrite_drops_original_tokens(
@@ -648,6 +656,47 @@ class FoodRepository:
             return food
         return None
 
+    def _find_exact_barcode(self, query: str) -> Food | None:
+        if not _is_raw_barcode(query):
+            return None
+        rows = self.user_connection.execute(
+            """SELECT * FROM food_cache WHERE barcode = ?
+            ORDER BY name COLLATE NOCASE, name""",
+            (query,),
+        ).fetchall()
+        if len(rows) > 1:
+            matches = []
+            for row in rows:
+                match = {
+                    "name": str(row["name"]),
+                    "source": str(row["source"]),
+                    "source_id": (
+                        str(row["source_id"])
+                        if row["source_id"] is not None
+                        else None
+                    ),
+                    "resolution_mode": str(row["resolution_mode"]),
+                }
+                matches.append(
+                    {key: value for key, value in match.items() if value is not None}
+                )
+            raise NomnomError(
+                "barcode_cache_ambiguous",
+                f"Multiple cached products share barcode: {query}",
+                details={
+                    "would_write": False,
+                    "barcode": query,
+                    "matches": matches,
+                    "action": f"Recapture {query} to replace stale cached products safely",
+                },
+            )
+        if not rows:
+            return None
+        food = self._row_to_food(rows[0])
+        if not _cached_food_query_is_safe(query, food):
+            return None
+        return food
+
     def _find_name_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
             "SELECT * FROM food_cache WHERE name = ? COLLATE NOCASE LIMIT 1",
@@ -706,6 +755,10 @@ class FoodRepository:
             return food, confidence
 
         normalized = normalize_name(query)
+        barcode_exact = self._find_exact_barcode(normalized)
+        if barcode_exact is not None:
+            return apply_policy(barcode_exact, 1.0)
+
         alias = self._alias_target(normalized)
         if alias is not None:
             return apply_policy(alias, 1.0)
@@ -1063,7 +1116,7 @@ class FoodRepository:
                     },
                 )
         except NomnomError as exc:
-            if exc.code in {"invalid_nutrition", "provider_confidence_invalid"}:
+            if exc.code in _TERMINAL_PLAN_ERROR_CODES:
                 raise
             original_error = exc
         else:
@@ -1122,7 +1175,7 @@ class FoodRepository:
                         },
                     )
             except NomnomError as exc:
-                if exc.code in {"invalid_nutrition", "provider_confidence_invalid"}:
+                if exc.code in _TERMINAL_PLAN_ERROR_CODES:
                     raise
                 failures.append(
                     {
