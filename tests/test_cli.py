@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 import requests
 
 from nomnomcli.cli import main
-from nomnomcli.db import connect
+from nomnomcli.db import connect, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
@@ -101,6 +102,161 @@ def test_cli_log_and_stats_json(seeded_user_db, monkeypatch, capsys):
     stats = json.loads(capsys.readouterr().out)
     assert code == 0
     assert stats["totals"] == logged["totals"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--parse", "борщ 100 г"],
+        ["--food", "borscht", "--grams", "100"],
+    ],
+    ids=("parsed", "direct"),
+)
+def test_cli_backdated_log_uses_local_noon_and_returns_effective_date(
+    seeded_user_db, monkeypatch, capsys, almaty_timezone, arguments
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli._local_now",
+        lambda: datetime.fromisoformat("2026-07-21T08:30:00+05:00"),
+        raising=False,
+    )
+
+    code = main(["log", *arguments, "--date", "2026-07-20", "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert result["logged_at"] == "2026-07-20T12:00:00+05:00"
+    assert result["local_date"] == "2026-07-20"
+    with connect(seeded_user_db) as connection:
+        row = connection.execute("SELECT logged_at FROM log_entries").fetchone()
+    assert row["logged_at"] == result["logged_at"]
+
+
+def test_cli_log_without_date_keeps_current_time_behavior_and_returns_effective_date(
+    seeded_user_db, monkeypatch, capsys, almaty_timezone
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli._local_now",
+        lambda: datetime.fromisoformat("2026-07-21T08:34:56+05:00"),
+        raising=False,
+    )
+
+    assert main(["log", "--food", "borscht", "--grams", "100", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["logged_at"] == "2026-07-21T08:34:56+05:00"
+    assert result["local_date"] == "2026-07-21"
+
+
+def test_cli_explicit_today_is_allowed(
+    seeded_user_db, monkeypatch, capsys, almaty_timezone
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(seeded_user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli._local_now",
+        lambda: datetime.fromisoformat("2026-07-21T08:34:56+05:00"),
+        raising=False,
+    )
+
+    assert (
+        main(
+            [
+                "log",
+                "--food",
+                "borscht",
+                "--grams",
+                "100",
+                "--date",
+                "2026-07-21",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["logged_at"] == "2026-07-21T12:00:00+05:00"
+    assert result["local_date"] == "2026-07-21"
+
+
+@pytest.mark.parametrize(
+    ("value", "error_code"),
+    [
+        ("20-07-2026", "invalid_date"),
+        ("2026-07-20T10:30:00", "invalid_date"),
+        ("2026-02-30", "invalid_date"),
+        ("2026-07-22", "future_date"),
+    ],
+)
+def test_cli_invalid_or_future_log_date_is_actionable_and_makes_no_write(
+    user_db, monkeypatch, capsys, almaty_timezone, value, error_code
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli._local_now",
+        lambda: datetime.fromisoformat("2026-07-21T08:30:00+05:00"),
+        raising=False,
+    )
+
+    code = main(
+        ["log", "--food", "anything", "--grams", "100", "--date", value, "--json"]
+    )
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert error["code"] == error_code
+    assert error["details"]["value"] == value
+    assert error["details"]["expected_format"] == "YYYY-MM-DD"
+    assert error["details"]["action"]
+    assert not user_db.exists()
+
+
+def test_cli_stats_date_returns_only_requested_local_day(
+    user_db, monkeypatch, capsys, almaty_timezone
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        "nomnomcli.cli._local_now",
+        lambda: datetime.fromisoformat("2026-07-21T08:30:00+05:00"),
+        raising=False,
+    )
+    item = {
+        "name": "test food",
+        "grams": 100.0,
+        "kcal": 55.0,
+        "protein": 2.5,
+        "fat": 2.1,
+        "carbs": 6.4,
+        "match_confidence": 1.0,
+    }
+    totals = {"kcal": 55.0, "protein": 2.5, "fat": 2.1, "carbs": 6.4}
+    with connect(user_db) as connection:
+        store_log(
+            connection,
+            [item],
+            totals,
+            logged_at=datetime.fromisoformat("2026-07-20T12:00:00+05:00"),
+        )
+        store_log(
+            connection,
+            [item],
+            totals,
+            logged_at=datetime.fromisoformat("2026-07-21T00:00:00+05:00"),
+        )
+
+    code = main(["stats", "date", "2026-07-20", "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert result["local_date"] == "2026-07-20"
+    assert result["totals"]["kcal"] == 55
+    assert [meal["logged_at"] for meal in result["meals"]] == [
+        "2026-07-20T12:00:00+05:00"
+    ]
 
 
 def test_cli_unknown_food_json_error(user_db, monkeypatch, capsys):

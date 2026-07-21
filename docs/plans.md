@@ -1,5 +1,85 @@
 # Plans
 
+## Issue #27 Source
+- Task: Add safe backdated meal logging and local-date-scoped stats.
+- Canonical input: GitHub issue #27 and the user's strict TDD, smoke, commit, and no-push requirements.
+- Repo context: CLI argument contracts, local-time timestamp handling, SQLite log queries, tests, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #27 Assumptions
+- The process local timezone is the user local timezone; tests set `TZ` and call `time.tzset()` where available.
+- A supplied date maps to local 12:00:00 with the offset active on that calendar day; it is persisted as the existing ISO-8601 `logged_at` field, so no schema migration is required.
+- Date-scoped stats use a half-open interval from local midnight on the requested date to local midnight on the next date.
+- `today` and `week`, existing rows, food cache, aliases, and recipes retain their current contracts.
+
+## Issue #27 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M21 | Freeze date parsing, timestamp, and no-write contracts | M20 | [x] |
+| M22 | Implement backdated parsed/direct logging | M21 | [x] |
+| M23 | Implement date-scoped stats and preserve old periods | M22 | [x] |
+| M24 | Update guidance, validate, smoke, audit, and commit | M23 | [x] |
+
+## M21. Freeze date parsing, timestamp, and no-write contracts `[x]`
+### Goal
+- Controlled-timezone tests specify literal `2026-07-20`, deterministic local noon, malformed/impossible/future errors, and unchanged default behavior before production changes.
+
+### Tasks
+- [x] Add CLI and database behavior tests.
+- [x] Witness the focused tests fail for the expected missing behavior.
+
+### Definition of Done
+- Tests cover both parsed and direct log forms, JSON date fields, adjacent-day exclusion, no-write failures, and no-date compatibility.
+
+### Validation
+```sh
+TZ=Asia/Almaty PYTHONPATH=. pytest -q tests/test_cli.py tests/test_db.py
+```
+
+### Known Risks
+- Offset-aware ISO strings sort correctly only when query bounds use the same local timezone contract; DST boundaries require constructing each local midnight independently.
+
+### Stop-and-Fix Rule
+- Do not modify production date behavior until the new focused tests are observed RED.
+
+## M22. Implement backdated parsed/direct logging `[x]`
+### Goal
+- `--date YYYY-MM-DD` safely stores local noon and returns effective `logged_at` plus `local_date` for either log form.
+
+### Validation
+```sh
+TZ=Asia/Almaty PYTHONPATH=. pytest -q tests/test_cli.py -k 'date or backdated'
+```
+
+### Stop-and-Fix Rule
+- Any invalid/future input write or default-log regression blocks M23.
+
+## M23. Implement date-scoped stats and preserve old periods `[x]`
+### Goal
+- `stats date YYYY-MM-DD` returns only entries in the requested local calendar day while `today` and `week` remain compatible.
+
+### Validation
+```sh
+TZ=Asia/Almaty PYTHONPATH=. pytest -q tests/test_db.py tests/test_cli.py -k 'stats or date'
+```
+
+### Stop-and-Fix Rule
+- Adjacent local-day leakage or a changed existing period contract blocks M24.
+
+## M24. Update guidance, validate, smoke, audit, and commit `[x]`
+### Goal
+- Humans and agents use the CLI rather than SQLite; all requested gates and literal disposable CLI commands pass before one local commit.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until full tests, Ruff, checkout-import proof, clean disposable smoke, and diff/status audit pass.
+
 ## Issue #23 Source
 - Task: Make no-key base mode a successful safe product and USDA an optional coverage enhancement.
 - Canonical input: GitHub issue #23 and the user's strict TDD, smoke, commit, and no-push requirements.

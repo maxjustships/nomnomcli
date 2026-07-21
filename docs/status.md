@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #23 complete
+- Current phase: issue #27 implemented and independently verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Completed issue #27 with strict local-date parsing, deterministic local-noon backdating for both log forms, additive timestamp/date JSON, exact date stats, no-write failures, and preserved no-date/today/week behavior.
+- Documented `--date` for remembered meals and that humans/agents must never manipulate SQLite directly.
+- Passed 189 tests, Ruff, diff checks, checkout import proof, and the clean disposable installed-CLI literal smoke.
 - Fixed issue #17 with OFF v1-only full-text search, independent product/full-text probes, typed bounded 503 handling, deterministic contract coverage, and updated provider docs.
 - Built the complete package, 431-food database, 258-entry Russian synonym layer, CLI, recipes, installer, skill, docs, CI, and tests.
 - Passed 30 pytest tests and Ruff with no issues.
@@ -21,12 +24,14 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- None.
+- No implementation work pending; the feature is ready for the issue #27 pull request.
 
 ## Next
-- None; issue #23 is complete and ready for the requested local commit.
+- Push the scoped commit and open the requested pull request.
 
 ## Decisions Made
+- Issue #27: reuse the existing offset-aware `logged_at` field; no migration is needed.
+- Issue #27: explicit dates become local noon and stats use `[local midnight, next local midnight)` boundaries.
 - Issue #23: a healthy no-key install is complete base coverage; USDA is only an optional enhancement for broader no-photo generic/raw-food resolution.
 - Issue #23: PATH repair outranks base/enhanced installer completion status, but output must still describe the available coverage.
 - Default generic policy is `allow_for_unbranded`; this explicit user decision supersedes issue #19's older `ask` default.
@@ -52,9 +57,6 @@ pytest -q
 ruff check .
 ```
 
-## Current Blockers
-- None.
-
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
@@ -75,6 +77,10 @@ ruff check .
 | 2026-07-21 | M18 | installer statuses, capability JSON/human output, issue #22 isolation | focused RED/GREEN pytest | 10 installer tests pass before docs additions | M19 |
 | 2026-07-21 | M19 | OFF identity/provenance and no-key source error | focused RED/GREEN pytest | 79 resolver/OFF/CLI/capture tests pass | M20 |
 | 2026-07-21 | M20 | docs, import isolation, full suite, lint, disposable install | `pytest -q`; `ruff check .`; local offline installer smoke | 177 pass; clean; smoke pass | local commit |
+| 2026-07-21 | issue #27 preflight | CLI, database, tests, docs, skill, planning records | baseline `pytest -q`; checkout import/executable inspection | 179 pass; clean baseline | M21 |
+| 2026-07-21 | M21–M22 | CLI date tests and `nomnomcli/cli.py` | focused RED then GREEN pytest | 7 expected failures; then 7 pass | M23 |
+| 2026-07-21 | M23 | database/CLI date stats tests and query implementation | focused RED then GREEN pytest | 2 expected failures; then 8 pass | M24 |
+| 2026-07-21 | M24 | README, skill, changed code/tests, disposable installed checkout | focused/full pytest; Ruff; diff check; literal temp-DB smoke | 40/189 pass; clean; smoke 150 kcal | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -93,3 +99,4 @@ ruff check .
 - [x] Fresh no-token checkout install reports `installed_base_ready` with base coverage.
 - [x] Setup reports `base_ready/base` without USDA and `connected/enhanced` with the local USDA stub.
 - [x] Safe no-key miss returns `food_needs_source` with photo/barcode/label/cache options and optional USDA.
+- [x] Literal parsed/direct `2026-07-20` logs persist local noon and date stats return only that local day.
