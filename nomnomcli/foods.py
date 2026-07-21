@@ -674,6 +674,17 @@ class FoodRepository:
         query_tokens = _name_tokens(query)
         return bool(brand_tokens and brand_tokens <= query_tokens and query_tokens - brand_tokens)
 
+    def _raw_record_satisfies_exact_intent(self, query: str, food: Food) -> bool:
+        if food.resolution_mode != "exact_product":
+            return False
+        if _exact_product_intent(query, food):
+            return True
+        alias = self._alias_target(query)
+        if alias is not None:
+            return alias == food
+        pinned = self._find_exact(query)
+        return pinned == food
+
     def _resolution_plan(
         self,
         *,
@@ -730,6 +741,7 @@ class FoodRepository:
                 },
             )
 
+        raw_exact_intent = intent.brand_intent or _query_has_sku(original_query)
         original_error = None
         try:
             food, confidence = self._resolve(
@@ -742,7 +754,9 @@ class FoodRepository:
         except NomnomError as exc:
             original_error = exc
         else:
-            if intent.brand_intent and food.resolution_mode != "exact_product":
+            if raw_exact_intent and not self._raw_record_satisfies_exact_intent(
+                original_query, food
+            ):
                 original_error = NomnomError(
                     "exact_resolution_required",
                     f"Exact product resolution is required for: {original_query}",
@@ -758,8 +772,7 @@ class FoodRepository:
                 )
 
         exact_intent = (
-            intent.brand_intent
-            or _query_has_sku(original_query)
+            raw_exact_intent
             or self._error_reveals_brand_intent(original_query, original_error)
             or _semantic_rewrite_drops_original_tokens(
                 original_query, intent.candidates

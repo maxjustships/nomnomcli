@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A review fixes completed and locally committed
+- Current phase: issue #33 Phase A final P2 completed and ready for local commit
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Fixed the final P2 by applying one exact-intent validation boundary to every raw alias/exact/cache/search/provider result before returning a plan.
+- Added a migrated v2 legacy SKU cache CLI regression proving structured `exact_resolution_required`, `would_write: false`, and byte/schema/count/log/side-file immutability; preserved exact local barcode/pin and non-SKU raw-first behavior.
+- Recorded the regression RED, then passed 77 focused semantic/food tests, 253 full tests, Ruff, and diff checks.
 - Resolved all independent Phase A blocking findings with an isolated in-memory migrated read-only snapshot, early whitespace-original validation, provider-independent conservative specificity protection, and safe reopened-USDA priority recovery.
 - Added six focused regressions covering zero-byte/v1/v2 source preservation, offline explicit-brand refusal, persisted cache reopen ordering, and pre-cache whitespace rejection; recorded all six RED before implementation.
 - Passed 114 focused tests, 250 full tests, Ruff, diff checks, and disposable subprocess CLI success/refusal smoke with identical database SHA-256, schema, counts, and no side files.
@@ -39,9 +42,11 @@
 - No implementation work pending.
 
 ## Next
-- None; stop without pushing or opening a pull request.
+- None; create the requested local conventional commit, then stop without pushing or opening a pull request.
 
 ## Decisions Made
+- Final P2: enforce exact intent once at the raw planning boundary so alias, exact/cache/search, and provider returns share the same protection.
+- Final P2: protected raw intent may pass only for a matching `exact_product`, including explicit local barcode/name/lookup pins and aliases.
 - Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
 - Issue #33 Phase A: semantic candidates can produce only `generic_proxy`; original barcode/SKU/explicit-brand intent remains exact-capture-only regardless of supplied `brand_intent`.
 - Issue #33 Phase A: rank across all accepted candidates by relation, generic USDA quality before safe OFF proxy, confidence, then normalized query.
@@ -82,6 +87,7 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M37–M39 final P2 | raw-plan guard, migrated legacy SKU fixture, semantic regressions, docs | focused RED/GREEN; 77 focused; 253 full; Ruff; diff check | pass; source DB/cache/log/side files unchanged | local commit |
 | 2026-07-21 | M34–M36 review fixes | read-only DB snapshot, semantic guards/ranking, regressions, docs | focused RED/GREEN; 114 focused; 250 full; Ruff; diff check; subprocess smoke | pass; exact DB digest/schema/counts unchanged | local commit |
 | 2026-07-21 | M31–M33 | semantic contract/planner/CLI/read-only DB, benchmark, docs | focused/full pytest; Ruff; diff check; digest-preserving temp-DB smoke | 136 focused; 244 full; clean; success/refusal no writes | local commit |
 | 2026-07-21 | Issue #33 preflight | issue comment, resolver/providers/CLI/DB/models/tests, planning docs | `gh issue view 33 --comments`; source/test inspection | Phase A boundary and mutation risk identified | M31 tests |

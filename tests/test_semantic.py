@@ -105,6 +105,34 @@ def _create_legacy_database(path, version: int) -> None:
         )
 
 
+def _create_legacy_sku_cache_database(path) -> None:
+    _create_legacy_database(path, 2)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, lookup_query)
+            VALUES ('Cached legacy chicken', 165, 31, 3.6, 1,
+                    'legacy fixture', 'chicken 12345');
+            CREATE TABLE log_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                logged_at TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'food',
+                label TEXT,
+                items_json TEXT NOT NULL,
+                kcal REAL NOT NULL,
+                protein REAL NOT NULL,
+                fat REAL NOT NULL,
+                carbs REAL NOT NULL
+            );
+            INSERT INTO log_entries
+            (logged_at, kind, label, items_json, kcal, protein, fat, carbs)
+            VALUES ('2026-07-20T12:00:00+05:00', 'food', 'existing log',
+                    '[]', 0, 0, 0, 0);
+            """
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -542,6 +570,89 @@ def test_cli_resolve_uses_isolated_migrated_copy_for_existing_databases(
     assert output["would_write"] is False
     assert output["original"] == original
     assert _database_state(database) == original_state
+
+
+def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "legacy-sku.sqlite3"
+    _create_legacy_sku_cache_database(database)
+    original_state = _database_state(database)
+    original_files = {
+        path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()
+    }
+    original = "chicken 12345"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(database) == original_state
+    assert {
+        path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()
+    } == original_files
+
+
+@pytest.mark.parametrize(
+    ("original", "food"),
+    [
+        (
+            "1234567890123",
+            Food(
+                name="Exact barcode chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="openfoodfacts",
+                barcode="1234567890123",
+                resolution_mode="exact_product",
+                source_id="1234567890123",
+                provenance="openfoodfacts",
+            ),
+        ),
+        (
+            "chicken 12345",
+            Food(
+                name="Pinned chicken product",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                resolution_mode="exact_product",
+                source_id="pin-12345",
+                provenance="user",
+            ),
+        ),
+    ],
+)
+def test_exact_local_barcode_or_pin_still_returns_raw_plan(repository, original, food):
+    repository._cache_food(food, lookup_query=original)
+    intent = parse_resolution_intent(
+        json.dumps(_intent(original, [])), expected_original=original
+    )
+
+    plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert plan["retrieval_query"] == original
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["source_id"] == food.source_id
+    assert plan["would_write"] is False
 
 
 def test_explicit_brand_is_protected_without_off_response(repository, monkeypatch):

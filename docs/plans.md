@@ -1,5 +1,62 @@
 # Plans
 
+## Issue #33 Phase A Final P2 Source
+- Task: Prevent cached legacy/non-exact rows from bypassing SKU/barcode exact intent during read-only semantic planning.
+- Canonical input: Independent Codex final P2 review finding plus the user's regression, audit, validation, local-commit, and no-push requirements.
+- Repo context: `FoodRepository.plan_resolution`, all raw `_resolve` return routes, CLI read-only database snapshots, semantic regressions, and Phase A documentation.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Final P2 Assumptions
+- The guard belongs at the planning boundary after raw resolution so alias, exact cache, ranked cache, local search, and provider return routes cannot bypass it independently.
+- A protected raw result is acceptable only when it is `exact_product` and the original query is bound to its barcode/brand, an exact local name or lookup pin, or an explicit local alias.
+- Non-SKU/non-brand raw-first behavior and Phase A's read-only/no-policy/no-log boundary remain unchanged.
+
+## Issue #33 Phase A Final P2 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M37 | Reproduce legacy cache bypass and freeze valid exact paths | M36 | [x] |
+| M38 | Apply one exact-intent guard across raw returns | M37 | [x] |
+| M39 | Run full gates, audit, and commit | M38 | [x] |
+
+## M37. Reproduce final P2 and freeze valid exact paths `[x]`
+### Goal
+- A migrated legacy/non-exact cache row matching `chicken 12345` fails through `nomnom resolve` with structured `exact_resolution_required`, `would_write: false`, and byte-identical source state, while exact local barcode/pin behavior remains accepted.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'legacy_non_exact or exact_local'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until the legacy cache regression is observed RED.
+
+## M38. Guard every raw plan return `[x]`
+### Goal
+- One planning-boundary predicate rejects protected original intent from every raw route unless the returned record is a matching `exact_product`.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py
+```
+
+### Stop-and-Fix Rule
+- Any raw cache/search bypass, rejected exact barcode/pin, or changed non-SKU raw-first plan blocks M39.
+
+## M39. Verify and commit final P2 `[x]`
+### Goal
+- Targeted tests, full pytest, Ruff, diff checks, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until every requested gate passes and the diff contains only the Phase A final P2 fix, tests, and execution records.
+
 ## Issue #33 Phase A Review-Fix Source
 - Task: Resolve all blocking independent-review findings in the current Phase A semantic-resolution diff.
 - Canonical input: User-supplied P1/P2 findings and required regressions, verification, smoke, local commit, and no-push constraints.

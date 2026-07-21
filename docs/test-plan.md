@@ -1,5 +1,31 @@
 # Test Plan
 
+## Issue #33 Phase A Final P2 Validation
+- In scope: exact-intent guarding for every raw alias/exact/cache/search/provider plan return, a migrated legacy/non-exact SKU cache CLI regression, preserved raw-first behavior for ordinary input, preserved exact local barcode/pin behavior, and source-state immutability.
+- Out of scope: Phase B plan application, new semantic policy/config/log integration, schema changes, live provider traffic, push, or PR operations.
+- Fixture: a v2 SQLite source whose matching `lookup_query` migrates in the private snapshot to `resolution_mode=legacy`; source bytes, schema, version, table counts, and directory contents are captured before the CLI call.
+
+### Critical Scenarios
+- `nomnom resolve --food 'chicken 12345'` cannot return a plan from the matching migrated legacy row; it returns structured `exact_resolution_required` with `would_write: false`.
+- The source database/cache/log/alias/recipe state and side-file set remain identical after refusal.
+- Exact local barcode and explicit pin/alias records still return raw `exact_product` plans.
+- Ordinary non-SKU input still uses the original raw result before semantic candidates.
+
+### Acceptance Gates
+- [x] Legacy/non-exact cache CLI regression observed RED before production changes — 1 failed, 2 exact-path checks passed.
+- [x] Targeted semantic/food tests pass — 77 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 253 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Scoped diff/status audit passes and one conventional local commit exists; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Review-Fix Validation
 - In scope: existing empty and supported v1/v2 database compatibility without source mutation, provider-independent explicit-brand protection, reopened safe USDA proxy ordering, whitespace-original validation before cache access, existing raw-first/proxy-only/#29 protections, and disposable CLI smoke.
 - Out of scope: semantic plan application, semantic policy/config, schema changes to user databases, static brand/synonym/translation datasets, live provider traffic, and PR/push operations.
