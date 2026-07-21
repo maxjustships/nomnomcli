@@ -79,6 +79,7 @@ def test_usda_uses_official_endpoint_and_parses_actual_nutrient_schema():
         "api_key": "placeholder",
         "query": "sample legumes cooked",
         "pageSize": 10,
+        "dataType": ["Foundation", "SR Legacy"],
     }
     assert (food.kcal, food.protein, food.fat, food.carbs) == (180, 9, 4, 28)
     assert food.fdc_id == 100
@@ -177,6 +178,31 @@ def test_usda_prefers_foundation_over_branded_candidate():
     assert food.fdc_id == 2
     assert confidence > food.alternatives[0]["confidence"]
     assert food.alternatives[0]["fdc_id"] == 1
+
+
+def test_usda_generic_provenance_outranks_more_exact_branded_fdc_candidate():
+    branded = record(
+        "Peanuts", fdc_id=9001, data_type="Branded", category="Peanuts"
+    )
+    branded["brandOwner"] = "Example Foods"
+    foundation = record(
+        "Peanuts, raw", fdc_id=2346380, data_type="Foundation", category="Peanuts"
+    )
+    captured = {}
+
+    def get(url, **kwargs):
+        captured.update(kwargs)
+        return Response({"foods": [branded, foundation]})
+
+    food, confidence = USDAClient(request_get=get).resolve("peanuts", "placeholder")
+
+    assert captured["params"]["dataType"] == ["Foundation", "SR Legacy"]
+    assert food.fdc_id == 2346380
+    assert food.provider_data_type == "Foundation"
+    assert food.brand is None
+    assert food.source_id == "2346380"
+    assert food.provenance == "usda"
+    assert confidence >= 0.8
 
 
 def test_usda_serving_weight_provenance_comes_only_from_returned_fields():

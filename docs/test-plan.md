@@ -1,5 +1,27 @@
 # Test Plan
 
+## Issue #29 Validation
+- In scope: resolver intent, OFF safe generic proxy semantics, USDA request/ranking provenance, exact barcode/brand/pin/alias paths, cache isolation, generic policy writes, CLI/API JSON, and literal translated inputs.
+- Fixtures: mocked OFF and USDA payloads only, temporary SQLite user databases, no live traffic or personal data.
+- Critical negative cases: HSN soy isolate, arbitrary cream-cheese barcode, Menguy's peanuts, branded USDA outranking attempts, unsafe branded queries, and rejected-candidate no-write behavior.
+- Literal smoke inputs: `milk 3% 625 ml`, `soy protein isolate 30 g`, `chicken pastrami 150 g`, `whole wheat bread 140 g`, `cream cheese 40 g`, and `peanuts 55 g`; every success must be `generic_proxy`, and unsafe resolution must be structured.
+
+### Issue #29 Acceptance Gates
+- [x] Focused tests observed RED before production changes.
+- [x] Focused resolver/provider/CLI/docs tests pass (114 tests).
+- [x] Full `PYTHONPATH=. pytest -q` passes (204 tests).
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] Fresh temp-data-dir literal mocked-provider smoke proves modes/provenance and no unsafe writes.
+- [x] Scoped conventional commit exists; worktree is clean; nothing is pushed.
+
+### Issue #29 Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_foods.py tests/test_usda.py tests/test_off.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #27 Source
 - Task: Validate safe backdated logging and local-date-scoped stats.
 - Plan file: `docs/plans.md`

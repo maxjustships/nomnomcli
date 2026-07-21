@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #29 Source
+- Task: Ensure unbranded foods resolve only to truthful generic proxies, never arbitrary branded exact products.
+- Canonical input: GitHub issue #29 and the user's strict TDD, smoke, commit, and no-push requirements.
+- Repo context: resolver intent, OFF/USDA selection, local cache/aliases, CLI/API JSON, docs, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #29 Assumptions
+- Exact identity is established only by user barcode capture, an explicit brand/SKU match in the query, or an exact local pin/alias; provider confidence alone cannot establish exact identity.
+- USDA generic lookup should request and rank Foundation/SR Legacy records ahead of any branded data, without embedding nutrition facts or food aliases in production.
+- A branded OFF source may represent an unbranded query only as an explicitly assumed generic proxy after strict name/category/core-nutrient checks.
+
+## Issue #29 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M25 | Freeze identity, provider, cache, policy, and literal contracts | M24 | [x] |
+| M26 | Implement intent-aware generic proxy resolution | M25 | [x] |
+| M27 | Document identity semantics and verify release gates | M26 | [x] |
+
+## M25. Freeze issue #29 contracts `[x]`
+### Goal
+- Focused tests reproduce arbitrary branded OFF exact matches, realistic USDA generic-versus-branded ranking, exact user intent, cache isolation, all policies, and the literal acceptance list.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_foods.py tests/test_usda.py tests/test_off.py
+```
+
+### Stop-and-Fix Rule
+- Record the expected RED failures before changing resolver/provider production behavior.
+
+## M26. Implement intent-aware generic proxy resolution `[x]`
+### Goal
+- Unbranded input returns only a clearly sourced safe generic proxy or structured `food_needs_source`; exact user intent remains exact-only and cache entries cannot cross identity boundaries.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_foods.py tests/test_usda.py tests/test_off.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any arbitrary branded `exact_product`, generic fallback for branded/barcode intent, unsafe cache write, or missing provenance blocks documentation work.
+
+## M27. Document identity semantics and verify release gates `[x]`
+### Goal
+- README and agent skill distinguish exact products from generic proxies, and all tests, lint, literal isolated smoke, diff audit, and local commit requirements pass.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until the full suite, Ruff, clean temp-data smoke, and scoped diff audit pass.
+
 ## Issue #27 Source
 - Task: Add safe backdated meal logging and local-date-scoped stats.
 - Canonical input: GitHub issue #27 and the user's strict TDD, smoke, commit, and no-push requirements.

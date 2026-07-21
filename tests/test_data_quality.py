@@ -71,4 +71,7 @@ def test_v04_docs_define_safe_proxy_and_private_exact_capture_flow():
     assert "never receives or stores the photo" in readme
     assert "request a clear package photo" in skill
     assert "Vision/OCR remains agent-side" in skill
+    assert "Candidate confidence never establishes exact identity." in readme
+    assert "unbranded text is always a `generic_proxy`" in readme
+    assert "never makes an arbitrary branded result `exact_product`" in skill
     assert len(skill.splitlines()) <= 200

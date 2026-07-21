@@ -14,7 +14,7 @@ from nomnomcli.off import OpenFoodFactsClient
 from nomnomcli.usda import USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
-GENERIC_USDA_DATA_TYPES = frozenset({"foundation", "sr legacy", "survey (fndds)"})
+GENERIC_USDA_DATA_TYPES = frozenset({"foundation", "sr legacy"})
 EXACT_CAPTURE_ACTION = (
     "Provide the package barcode or photo so the agent can run nomnom capture "
     "barcode or nomnom capture label"
@@ -71,39 +71,113 @@ def _candidate_details(food: Food, confidence: float) -> dict:
 def _brand_matches_query(food: Food, query: str) -> bool:
     if not food.brand:
         return False
-    normalized_query = normalize_name(query)
+    query_tokens = _name_tokens(query)
     brand_parts = re.split(r"[,;/|]+", food.brand)
     return any(
-        normalized_brand and normalized_brand in normalized_query
+        brand_tokens
+        and brand_tokens <= query_tokens
+        and bool(query_tokens - brand_tokens)
         for part in brand_parts
-        if (normalized_brand := normalize_name(part))
+        if (brand_tokens := _name_tokens(part))
     )
+
+
+def _query_has_sku(query: str) -> bool:
+    return bool(re.search(r"(?<!\w)\d{4,}(?!\w)", normalize_name(query)))
+
+
+def _off_product_tokens(food: Food) -> set[str]:
+    if " — " in food.name:
+        product_name = food.name.split(" — ", 1)[0]
+        return _name_tokens(product_name)
+    tokens = _name_tokens(food.name)
+    return tokens - _name_tokens(food.brand or "") if food.brand else tokens
 
 
 def _generic_proxy_query_is_safe(query: str, food: Food) -> bool:
     query_tokens = _name_tokens(query)
-    candidate_tokens = _name_tokens(food.name)
-    return bool(query_tokens) and query_tokens <= candidate_tokens and not any(
-        token.isdigit() for token in query_tokens
+    candidate_tokens = (
+        _off_product_tokens(food) if food.source == "openfoodfacts" else _name_tokens(food.name)
+    )
+    return (
+        bool(query_tokens)
+        and not _query_has_sku(query)
+        and not _brand_matches_query(food, query)
+        and query_tokens <= candidate_tokens
     )
 
 
-def _off_candidate_query_is_safe(query: str, food: Food) -> bool:
-    if food.brand is None:
-        return _generic_proxy_query_is_safe(query, food)
+def _off_exact_candidate_query_is_safe(query: str, food: Food) -> bool:
     query_tokens = _name_tokens(query)
-    candidate_tokens = _name_tokens(" ".join((food.name, food.brand)))
+    candidate_tokens = _name_tokens(
+        " ".join(value for value in (food.name, food.brand, food.barcode) if value)
+    )
     return bool(query_tokens) and query_tokens <= candidate_tokens
 
 
+def _off_generic_candidate_query_is_safe(query: str, food: Food) -> bool:
+    query_tokens = _name_tokens(query)
+    category_tokens = _name_tokens(" ".join(food.categories))
+    return (
+        bool(category_tokens)
+        and bool(query_tokens & category_tokens)
+        and _generic_proxy_query_is_safe(query, food)
+    )
+
+
+def _exact_product_intent(query: str, food: Food) -> bool:
+    return (
+        bool(food.barcode and normalize_name(query) == normalize_name(food.barcode))
+        or _brand_matches_query(food, query)
+        or (_query_has_sku(query) and _off_exact_candidate_query_is_safe(query, food))
+    )
+
+
+def _off_candidate_query_is_safe(query: str, food: Food, *, exact_intent: bool) -> bool:
+    if exact_intent:
+        return _exact_product_intent(query, food) and _off_exact_candidate_query_is_safe(
+            query, food
+        )
+    return _off_generic_candidate_query_is_safe(query, food)
+
+
 def _generic_proxy_candidate(food: Food, confidence: float) -> dict:
-    return {
+    candidate = {
         "name": food.name,
         "source": food.source,
         "source_id": food.source_id or (str(food.fdc_id) if food.fdc_id is not None else None),
         "resolution_mode": "generic_proxy",
         "confidence": round(confidence, 2),
     }
+    if food.brand:
+        candidate.update(
+            {
+                "brand": food.brand,
+                "barcode": food.barcode,
+                "assumption": food.assumption,
+            }
+        )
+    return {key: value for key, value in candidate.items() if value is not None}
+
+
+def _off_proxy_assumption(food: Food) -> str:
+    if not food.brand:
+        return f"Brand not specified; used Open Food Facts generic proxy: {food.name}."
+    identity = f"brand: {food.brand}"
+    if food.barcode:
+        identity += f"; barcode: {food.barcode}"
+    return (
+        "Brand not specified; used Open Food Facts generic proxy from candidate "
+        f"{food.name} ({identity})."
+    )
+
+
+def _cached_food_query_is_safe(query: str, food: Food, *, exact_name: bool = False) -> bool:
+    if food.resolution_mode == "generic_proxy":
+        return _generic_proxy_query_is_safe(query, food)
+    if food.resolution_mode == "exact_product" and food.source == "openfoodfacts":
+        return exact_name or _exact_product_intent(query, food)
+    return True
 
 
 def _food_needs_source_error(
@@ -302,11 +376,19 @@ class FoodRepository:
         cached = self.user_connection.execute(
             """SELECT * FROM food_cache
             WHERE name = ? COLLATE NOCASE OR lookup_query = ? COLLATE NOCASE
-            ORDER BY CASE WHEN lookup_query = ? COLLATE NOCASE THEN 0 ELSE 1 END
-            LIMIT 1""",
+            ORDER BY CASE WHEN lookup_query = ? COLLATE NOCASE THEN 0 ELSE 1 END""",
             (name, normalize_name(name), normalize_name(name)),
-        ).fetchone()
-        return self._row_to_food(cached) if cached else None
+        ).fetchall()
+        for row in cached:
+            food = self._row_to_food(row)
+            if not _cached_food_query_is_safe(
+                name,
+                food,
+                exact_name=normalize_name(food.name) == normalize_name(name),
+            ):
+                continue
+            return food
+        return None
 
     def _find_name_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
@@ -378,6 +460,9 @@ class FoodRepository:
         off_enabled = remote_enabled and not os.getenv("NOMNOM_DISABLE_OFF")
         credential = self.provider_config.usda_credential()
         off_error: NomnomError | None = None
+        accepted: list[tuple[Food, float]] = []
+        exact_intent = _query_has_sku(query)
+        off_matches: list[Food] = []
         if off_enabled:
             try:
                 off_matches = self.off_client.search(query, page_size=5)
@@ -389,6 +474,7 @@ class FoodRepository:
                     (food for food in off_matches if _brand_matches_query(food, query)), None
                 )
                 if matching_brand is not None:
+                    exact_intent = True
                     off_matches = [
                         matching_brand,
                         *(food for food in off_matches if food is not matching_brand),
@@ -399,13 +485,17 @@ class FoodRepository:
                     for match in scored
                     if match[1] >= 0.5
                     and (match[0].source_id or match[0].barcode)
-                    and _off_candidate_query_is_safe(query, match[0])
+                    and _off_candidate_query_is_safe(
+                        query, match[0], exact_intent=exact_intent
+                    )
                 ]
                 if not accepted:
                     candidate, confidence = scored[0]
                     source_identity_missing = (
                         confidence >= 0.5
-                        and _off_candidate_query_is_safe(query, candidate)
+                        and _off_candidate_query_is_safe(
+                            query, candidate, exact_intent=exact_intent
+                        )
                         and not (candidate.source_id or candidate.barcode)
                     )
                     code = (
@@ -431,55 +521,60 @@ class FoodRepository:
                             "action": EXACT_CAPTURE_ACTION,
                         },
                     )
-                else:
-                    accepted.sort(key=lambda match: -match[1])
-                    selected, confidence = accepted[0]
-                    off_matches = [
-                        selected,
-                        *(food for food in off_matches if food is not selected),
-                    ]
-                    alternatives = tuple(
-                        {
-                            key: value
-                            for key, value in {
-                                "name": alternative.name,
-                                "brand": alternative.brand,
-                                "barcode": alternative.barcode,
-                            }.items()
-                            if value is not None
-                        }
-                        for alternative in off_matches[1:]
-                    )
-                    selected = off_matches[0]
-                    if selected.brand is None:
-                        food = replace(
-                            selected,
-                            alternatives=alternatives,
-                            resolution_mode="generic_proxy",
-                            source_id=selected.source_id or selected.barcode,
-                            provenance=selected.provenance or "openfoodfacts",
-                            assumption=(
-                                "Brand not specified; used Open Food Facts generic proxy: "
-                                f"{selected.name}."
-                            ),
-                        )
-                        food, confidence = self._apply_generic_proxy_policy(food, confidence)
-                    else:
-                        food = replace(
-                            selected,
-                            alternatives=alternatives,
-                            resolution_mode="exact_product",
-                            source_id=selected.source_id or selected.barcode,
-                            provenance=selected.provenance or "openfoodfacts",
-                        )
-                    self._cache_food(food, lookup_query=query)
-                    return food, confidence
+        usda_error: NomnomError | None = None
+        if remote_enabled and credential is not None and not exact_intent:
+            try:
+                food, confidence = self.usda_client.resolve(query, credential.value)
+            except NomnomError as exc:
+                usda_error = exc
+            else:
+                food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
+                self._cache_food(food, lookup_query=query)
+                return food, confidence
 
-        if remote_enabled and credential is not None:
-            food, confidence = self.usda_client.resolve(query, credential.value)
-            food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
+        if accepted:
+            accepted.sort(key=lambda match: -match[1])
+            selected, confidence = accepted[0]
+            alternatives = tuple(
+                {
+                    key: value
+                    for key, value in {
+                        "name": alternative.name,
+                        "brand": alternative.brand,
+                        "barcode": alternative.barcode,
+                    }.items()
+                    if value is not None
+                }
+                for alternative in off_matches
+                if alternative is not selected
+            )
+            if exact_intent:
+                food = replace(
+                    selected,
+                    alternatives=alternatives,
+                    resolution_mode="exact_product",
+                    source_id=selected.source_id or selected.barcode,
+                    provenance=selected.provenance or "openfoodfacts",
+                    assumption=None,
+                )
+            else:
+                food = replace(
+                    selected,
+                    alternatives=alternatives,
+                    resolution_mode="generic_proxy",
+                    source_id=selected.source_id or selected.barcode,
+                    provenance=selected.provenance or "openfoodfacts",
+                    assumption=_off_proxy_assumption(selected),
+                )
+                food, confidence = self._apply_generic_proxy_policy(food, confidence)
             self._cache_food(food, lookup_query=query)
             return food, confidence
+
+        if usda_error is not None:
+            raise usda_error
+        if remote_enabled and credential is not None and exact_intent and not off_enabled:
+            food, confidence = self.usda_client.resolve(query, credential.value)
+            food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
         raise _food_needs_source_error(
             query,
             provider_error=off_error,
@@ -501,9 +596,7 @@ class FoodRepository:
         unique: dict[str, Food] = {}
         for row in rows:
             food = self._row_to_food(row)
-            if food.resolution_mode == "generic_proxy" and not _generic_proxy_query_is_safe(
-                query, food
-            ):
+            if not _cached_food_query_is_safe(query, food):
                 continue
             unique.setdefault(normalize_name(food.name), food)
         return list(unique.values())[:limit]
@@ -587,9 +680,7 @@ class FoodRepository:
         ).fetchall()
         for row in rows:
             food = self._row_to_food(row)
-            if food.resolution_mode == "generic_proxy" and not _generic_proxy_query_is_safe(
-                query, food
-            ):
+            if not _cached_food_query_is_safe(query, food):
                 continue
             candidate_tokens = _name_tokens(
                 " ".join(

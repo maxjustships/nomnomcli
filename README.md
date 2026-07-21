@@ -94,16 +94,21 @@ Resolution is deterministic and ordered:
 1. exact phrase in the user's alias table, pointing to an exact local cache name;
 2. exact match in the user's `food_cache`;
 3. token-overlap search in that cache;
-4. strict Open Food Facts free-text search;
-5. a safe USDA FoodData Central generic proxy, when a setup key or
+4. an exact Open Food Facts product only when the input explicitly matches its brand/SKU;
+5. a safe USDA FoodData Central Foundation/SR Legacy generic proxy, when a setup key or
    `NOMNOM_USDA_KEY` is configured;
-6. actionable JSON error—never a guessed food.
+6. a strictly matching Open Food Facts generic proxy, including a labelled branded candidate only
+   when its returned product name/type is safe for the unbranded input;
+7. actionable JSON error—never a guessed food.
 
 Open Food Facts candidates need complete normalized query-token coverage from the returned product
-name/brand, a matching food type/category, a source identity/barcode, and complete positive finite
-kcal, protein, fat, and carbs. A branded source identity is cached as `exact_product`; an unbranded
-source identity is truthfully cached as `generic_proxy` and remains subject to the configured proxy
-policy. Rejected results are neither cached nor logged.
+name, a matching food type/category, a source identity/barcode, and complete positive finite kcal,
+protein, fat, and carbs. An exact product requires a user-supplied barcode, an explicitly matched
+brand/SKU, or an exact local pin/alias. Candidate confidence never establishes exact identity. A
+safe branded OFF candidate used for unbranded text is always a `generic_proxy`, retains its source,
+brand, barcode, and explicit assumption, and remains subject to the configured proxy policy. An
+unsafe candidate returns `food_needs_source`. Rejected results are neither cached nor logged, and a
+generic-proxy cache entry cannot satisfy a later branded query.
 
 Successful API results are cached in the user's database, so the same food can resolve locally
 later. Existing cache records, logs, recipes, and aliases are preserved when v0.4 opens the
@@ -154,7 +159,7 @@ confidence floor. Weak matches return `usda_low_confidence` with candidate alter
 never cached.
 
 The default generic policy is `allow_for_unbranded`. A USDA result becomes a generic proxy only
-when it is an unbranded Foundation, SR Legacy, or Survey (FNDDS) record with an FDC id and every
+when it is an unbranded Foundation or SR Legacy record with an FDC id and every
 normalized query token is covered by its name. Brand/SKU-like or unmatched input and branded USDA
 records return `exact_resolution_required` without cache or log writes. Accepted proxies expose
 `resolution_mode=generic_proxy`, `source=usda`, the FDC `source_id`, `provenance=usda`, confidence,
@@ -241,7 +246,8 @@ required; modifiers may express a fraction, size, or explicit per-piece mass.
 
 An agent translates the user's language into this contract before invoking nomnom. Translation may
 choose a canonical food name already known to the user cache or an explicit user alias. Nutrition
-resolution is a separate deterministic step: alias → local cache → Open Food Facts → USDA → error.
+resolution is a separate deterministic step: alias → local cache → exact intent or generic
+provider proxy → error.
 The agent must not translate by inventing nutrition values or silently substituting another food.
 
 ## Quantities, sizes, and dishes
@@ -286,7 +292,7 @@ an `error` object and exit with status 2. Important codes include:
 - `usda_low_confidence`: inspect the FDC candidate/data type/category and retry more specifically;
   no near match was cached.
 - `usda_invalid_nutrition`: every USDA candidate lacked one or more complete positive core values.
-- `generic_proxy_confirmation_required`: show the named USDA candidate and ask before changing the
+- `generic_proxy_confirmation_required`: show the named provider candidate and ask before changing the
   configured policy; nothing was cached or logged.
 - `exact_resolution_required`: request the barcode or a package photo for source-backed capture.
 - `invalid_barcode` / `barcode_not_found` / `barcode_nutrition_incomplete`: correct the barcode or
