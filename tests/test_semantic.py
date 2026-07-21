@@ -26,6 +26,13 @@ def _intent(original: str, candidates: list[dict], *, brand_intent: bool = False
     }
 
 
+def _strict_json_loads(value: str) -> dict:
+    def reject_constant(constant: str) -> None:
+        pytest.fail(f"Non-finite constant in JSON output: {constant}")
+
+    return json.loads(value, parse_constant=reject_constant)
+
+
 def _generic_food(
     name: str,
     *,
@@ -197,6 +204,38 @@ def test_intent_v1_requires_exact_original_match():
     assert caught.value.code == "resolution_intent_original_mismatch"
     assert caught.value.details["original"] == "курица"
     assert caught.value.details["intent_original"] == " курица "
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_cli_rejects_non_finite_intent_constants_with_strict_json_error(
+    tmp_path, monkeypatch, capsys, constant
+):
+    database = tmp_path / "non-finite-intent.sqlite3"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    original = "chicken"
+    raw_intent = (
+        '{"version": '
+        + constant
+        + ', "original": "chicken", "brand_intent": false, "candidates": []}'
+    )
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            raw_intent,
+            "--json",
+        ]
+    )
+    error = _strict_json_loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "invalid_resolution_intent"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert not database.exists()
 
 
 def test_raw_original_safe_resolution_wins_without_trying_semantic_candidates(
@@ -819,7 +858,15 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     } == original_files
 
 
-@pytest.mark.parametrize("original", ["курица SKU12345", "SKUABC123"])
+@pytest.mark.parametrize(
+    "original",
+    [
+        "курица SKU12345",
+        "SKUABC123",
+        "курица SKU 12345",
+        "курица SKU: ABC-123",
+    ],
+)
 def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
     user_db, monkeypatch, capsys, original
 ):
@@ -985,7 +1032,16 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
 
 @pytest.mark.parametrize(
     "original",
-    ["курица SKU12345", "курица ABC-12345", "курица ABC_12345"],
+    [
+        "курица SKU12345",
+        "курица SKU 12345",
+        "курица SKU ABC123",
+        "курица SKU:12345",
+        "курица SKU: ABC-123",
+        "курица SKU : ABC_123",
+        "курица ABC-12345",
+        "курица ABC_12345",
+    ],
 )
 def test_alphanumeric_sku_variants_require_exact_resolution(
     repository, original
@@ -1021,7 +1077,14 @@ def test_alphanumeric_sku_variants_require_exact_resolution(
 
 @pytest.mark.parametrize(
     ("original", "semantic_query"),
-    [("milk 3%", "dairy drink"), ("3 eggs", "omelette"), ("vitamin B12", "cobalamin")],
+    [
+        ("milk 3%", "dairy drink"),
+        ("3 eggs", "omelette"),
+        ("vitamin B12", "cobalamin"),
+        ("SKU chicken", "poultry"),
+        ("chicken SKU", "poultry"),
+        ("SKU: chicken", "poultry"),
+    ],
 )
 def test_ordinary_food_expression_is_not_treated_as_sku(
     repository, original, semantic_query
@@ -1196,6 +1259,20 @@ def test_cli_possessive_brand_raw_cache_match_requires_exact_resolution_without_
                 source="user",
                 resolution_mode="exact_product",
                 source_id="pin-sku12345",
+                provenance="user",
+            ),
+        ),
+        (
+            "курица SKU: ABC-123",
+            Food(
+                name="Pinned separated SKU chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                resolution_mode="exact_product",
+                source_id="pin-separated-sku",
                 provenance="user",
             ),
         ),

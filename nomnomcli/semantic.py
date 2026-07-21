@@ -74,6 +74,10 @@ def _candidate_key(value: str) -> str:
     return " ".join(value.casefold().replace("ё", "е").split())
 
 
+def _reject_non_finite_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"Non-finite JSON constant is not allowed: {value}")
+
+
 def parse_resolution_intent(raw_json: str, *, expected_original: str) -> ResolutionIntent:
     if not isinstance(expected_original, str) or not expected_original.strip():
         _intent_error(
@@ -81,8 +85,8 @@ def parse_resolution_intent(raw_json: str, *, expected_original: str) -> Resolut
             expected_original=expected_original,
         )
     try:
-        payload = json.loads(raw_json)
-    except (TypeError, json.JSONDecodeError) as exc:
+        payload = json.loads(raw_json, parse_constant=_reject_non_finite_json_constant)
+    except (TypeError, ValueError) as exc:
         _intent_error(
             "Resolution intent must be valid inline JSON",
             expected_original=expected_original,

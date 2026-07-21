@@ -131,6 +131,12 @@ def _query_has_sku(query: str) -> bool:
     normalized = normalize_name(query)
     if re.search(r"(?<!\w)\d{4,}(?!\w)", normalized):
         return True
+    if re.search(
+        r"(?<!\w)sku(?:\s*:\s*|\s+)(?=[a-z0-9_-]*\d)"
+        r"[a-z0-9]+(?:[-_][a-z0-9]+)*(?!\w)",
+        normalized,
+    ):
+        return True
     if re.search(r"(?<!\w)sku[a-z0-9_-]*\d[a-z0-9_-]*(?!\w)", normalized):
         return True
     identifiers = re.findall(

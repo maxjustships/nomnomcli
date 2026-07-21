@@ -1,44 +1,12 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A possessive-brand P2 completed
+- Current phase: issue #31 implemented and verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
-- Added a brand-only identity tokenizer that removes terminal ASCII/curly possessive-s forms while leaving `_name_tokens` and all non-brand comparisons unchanged; applied it consistently to provider evidence, raw-cache evidence, and exact brand matching.
-- Added both `Acme's`/`Acme` and `Campbell`/`Campbell’s` directions across provider and raw-cache CLI refusal paths, exact branded local-pin controls, and exact source byte/schema/count/directory preservation.
-- Recorded four focused RED failures with 11 controls green, then passed 15 focused tests, 134 targeted semantic/food/CLI tests, 279 full tests, repository-wide Ruff, and diff checks.
-- Added `SKUABC123` to the CLI semantic refusal regression with exact source-state preservation; extended explicit marker detection to arbitrary allowed suffix content containing a digit while retaining numeric and general alphanumeric controls.
-- Added a real WAL-checkpoint-during-copy regression proving the first private attempt is discarded and a second stable copy returns the committed exact pin without resolver source writes.
-- Added permanently unstable fingerprint coverage proving three attempts/six fingerprints end in structured `database_snapshot_unstable`, `would_write:false`, no plan, and unchanged source files.
-- Recorded the requested RED run (3 failures, 7 controls green), then passed 10 focused tests, 15 preservation-focused semantic tests, 9 database tests, 138 targeted semantic/database/food/CLI tests, and focused Ruff.
-- Passed 274 full tests, repository-wide Ruff, diff checks, scoped diff audit, and a disposable subprocess CLI `SKUABC123` refusal smoke with every source filename and SHA-256 unchanged.
-- Fixed alphanumeric SKU exact-intent detection for explicit `SKU` markers and conservative joined/hyphen/underscore letter-digit identifiers while retaining standalone numeric 4+ behavior.
-- Added the Cyrillic `курица SKU12345` CLI/repository refusal with exact database/file immutability, ordinary `milk 3%`/`3 eggs`/`vitamin B12` controls, and a matching exact local SKU pin control.
-- Recorded the requested RED (3 failures, 8 controls green), then passed 11 focused tests, 126 targeted tests, 271 full tests, repository-wide Ruff, and diff checks.
-- Fixed the final raw-brand P2 by treating matching brand metadata on raw local/migrated cache results as hard exact intent in `_protect_original_intent`, using the same normalized runtime helper as provider evidence.
-- Added a migrated legacy branded-cache CLI refusal with exact source-state preservation, strengthened the matching exact local-pin control, and added a nonmatching raw-brand control.
-- Recorded the matching-brand regression RED with four controls green, then passed 5 focused tests, 118 targeted tests, 263 full tests, repository-wide Ruff, and diff checks.
-- Centralized original-intent inference/protection before raw-plan return or semantic-candidate acceptance, including declared brand/SKU intent, dropped-token specificity, and provider-observed matching-brand evidence.
-- Added raw legacy/generic cache and OFF-brand-plus-USDA-failure CLI regressions with exact byte/schema/count/directory no-write assertions; preserved ordinary raw-first behavior, exact local pins/barcodes, and the nonmatching-brand control.
-- Recorded both regressions RED, then passed 116 targeted tests, 261 full tests, repository-wide Ruff, diff checks, and a disposable subprocess refusal smoke with identical source bytes and entries.
-- Copied matching hot DELETE-mode rollback journals into private snapshot storage before SQLite opens the copy, so recovery restores committed state without touching source main/journal bytes or directory entries.
-- Recognized provider-evidenced brand-token equality, including brand-only `Acme`, as exact intent without a static brand corpus; preserved unmatched non-brand semantic behavior.
-- Recorded both requested RED failures, then passed 122 targeted tests, 258 full tests, repository-wide Ruff, diff checks, existing pending-WAL regressions, and a disposable hot-journal subprocess CLI smoke with exact source hashes/names unchanged.
-- Replaced source SQLite opening with byte-copy-first main/WAL/SHM isolation in a uniquely owned temporary directory; all SQLite open, backup, sidecar, and migration behavior is now private.
-- Added absent-SHM and existing-SHM pending-WAL regressions under a `0555` source directory, proving pending data remains visible while source sibling names and bytes remain exactly unchanged.
-- Passed 70 targeted tests, 255 full tests, repository-wide Ruff, diff checks, and a disposable installed-CLI WAL smoke with no source SHM creation.
-- Fixed the final P2 by applying one exact-intent validation boundary to every raw alias/exact/cache/search/provider result before returning a plan.
-- Added a migrated v2 legacy SKU cache CLI regression proving structured `exact_resolution_required`, `would_write: false`, and byte/schema/count/log/side-file immutability; preserved exact local barcode/pin and non-SKU raw-first behavior.
-- Recorded the regression RED, then passed 77 focused semantic/food tests, 253 full tests, Ruff, and diff checks.
-- Resolved all independent Phase A blocking findings with an isolated in-memory migrated read-only snapshot, early whitespace-original validation, provider-independent conservative specificity protection, and safe reopened-USDA priority recovery.
-- Added six focused regressions covering zero-byte/v1/v2 source preservation, offline explicit-brand refusal, persisted cache reopen ordering, and pre-cache whitespace rejection; recorded all six RED before implementation.
-- Passed 114 focused tests, 250 full tests, Ruff, diff checks, and disposable subprocess CLI success/refusal smoke with identical database SHA-256, schema, counts, and no side files.
-- Completed issue #33 Phase A with a strict external intent v1 module, original-first read-only resolution, generic-proxy-only semantic candidates, deterministic relation/provider/confidence/query ordering, and structured JSON plans/refusals.
-- Added a query-only SQLite CLI path and persistence-disabled provider resolution; the mocked success/refusal smoke preserved all mutable table counts and the exact database digest.
-- Passed 136 focused tests, 244 full tests, Ruff, diff checks, and the Russian fallback/mixed-meat disposable CLI smoke.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -62,33 +30,12 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending.
+- No implementation work pending; issue #31 is ready for the scoped local commit.
 
 ## Next
-- Stop after the requested local conventional commit; do not push or open a PR.
+- Do not push, merge, or open a pull request unless the user requests it separately.
 
 ## Decisions Made
-- Possessive-brand P2: introduce a brand-only token helper; do not modify `_name_tokens` or its ordinary food, semantic specificity, category, or confidence consumers.
-- Possessive-brand P2: use the helper on both sides of provider evidence, raw cache evidence, and exact brand matching so `Acme's`/`Acme` and `Campbell`/`Campbell’s` are symmetric.
-- Concurrent snapshot P2: fingerprint main plus rollback journal/WAL/SHM by existence, identity, size, and nanosecond mtime around the complete private copy; discard and retry any changed attempt.
-- Concurrent snapshot P2: bound copying at three attempts and return `database_snapshot_unstable` with `would_write:false` rather than opening a possibly mixed snapshot or returning a plan.
-- Explicit-SKU P2: make digit-bearing `sku` prefix forms exact regardless of the order of later letters/digits/separators, while preserving existing numeric and conservative general alphanumeric detection.
-- Alphanumeric-SKU P2: recognize explicit standalone `SKU` markers containing digits; otherwise require at least two ASCII letters and four digits, allow optional internal `-`/`_`, and retain standalone numeric 4+ detection.
-- Alphanumeric-SKU P2: use semantic-planning behavior controls for `milk 3%`, `3 eggs`, and `vitamin B12`, with disjoint candidates so the existing same-language dropped-token guard does not confound SKU classification.
-- Raw cache brands will use `_provider_brand_evidence_matches_query`, keeping runtime brand-token semantics identical across raw and remote evidence.
-- The existing `_raw_record_satisfies_exact_intent` remains the sole positive escape hatch for matching local `exact_product` pins/barcodes.
-- Exact-intent follow-up: infer all original specificity at one planner boundary before returning a raw plan or considering semantic candidates.
-- Exact-intent follow-up: carry matching OFF brand evidence as resolution-attempt state so later USDA exceptions cannot erase it; do not infer from unrelated provider brands.
-- Exact-intent follow-up: hard exact evidence requires a matching `exact_product`; conservative dropped-token inference may also pass a raw generic result that preserves every original query token.
-- Final safety findings: treat existing `-journal` as inseparable SQLite snapshot input and permit recovery only beside the private copy.
-- Final safety findings: infer brand-only exact intent only from provider-returned candidate evidence whose normalized brand tokens are contained in the original; do not introduce static brand data.
-- WAL-safe snapshot: never pass the source path to `sqlite3.connect`; copy the main file plus already-existing WAL/SHM siblings into one private temporary directory first.
-- WAL-safe snapshot: allow all SQLite open/backup/migration side effects only inside that owned directory, then remove it through scoped context cleanup.
-- Final P2: enforce exact intent once at the raw planning boundary so alias, exact/cache/search, and provider returns share the same protection.
-- Final P2: hard exact intent may pass only for a matching `exact_product`, including explicit local barcode/name/lookup pins and aliases.
-- Issue #33 Phase A: original resolution always runs first, but through a dedicated non-persisting path that never calls `_cache_food`.
-- Issue #33 Phase A: semantic candidates can produce only `generic_proxy`; original barcode/SKU/explicit-brand intent remains exact-capture-only regardless of supplied `brand_intent`.
-- Issue #33 Phase A: rank across all accepted candidates by relation, generic USDA quality before safe OFF proxy, confidence, then normalized query.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -109,7 +56,6 @@
 - Reuse `scripts/build_mini_db.py --update-existing` for deterministic offline v0.2 data repair without shrinking the tracked USDA corpus.
 
 ## Assumptions In Force
-- Issue #33 intent v1 is external bounded retrieval metadata only; it contains no nutrition, synonyms, translations, weights, model call, or persistence policy.
 - Schema v4 is completed additively from the existing v3-to-v4 boundary and preserves every v3 table and row.
 - Issue #17 tests use only mocked/replay transports and never live OFF traffic.
 - Agent confirmation is an operating pattern, not a pending database transaction in v0.1.
@@ -126,24 +72,6 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
-| 2026-07-21 | M58–M60 possessive-brand P2 | brand-only tokenizer, provider/raw/exact matching, regressions, execution docs | focused RED/GREEN; 134 targeted; 279 full; Ruff; diff check | pass; both possessive directions refuse disjoint semantic generics without source writes; exact/nonmatching/ordinary controls green | local commit, then stop |
-| 2026-07-21 | M55–M57 snapshot/SKU P2 | stable-copy protocol, SKU detector, regressions, README/skill, execution docs | focused RED/GREEN; 138 targeted; 274 full; Ruff; diff check; disposable no-write smoke | pass; transient checkpoint retries consistently, ongoing churn refuses structurally, exact source hashes/names unchanged | local commit, then stop |
-| 2026-07-21 | M54 alphanumeric-SKU P2 | scoped production/test/docs diff | 271 full pytest; full Ruff; diff check; scoped audit | pass; exact refusal/no-write behavior and all controls green | local commit, then stop |
-| 2026-07-21 | M53 alphanumeric-SKU P2 | `nomnomcli/foods.py`, semantic regressions, execution docs | 11 focused; 126 targeted; focused Ruff | pass; joined/separated identifiers refuse, ordinary expressions and exact local pin remain accepted | M54 |
-| 2026-07-21 | M52 alphanumeric-SKU P2 | semantic regressions and execution docs | focused pytest | RED: 3 joined/underscore SKU paths accepted a semantic plan; 8 ordinary/numeric/hyphen/exact-pin controls passed | M53 |
-| 2026-07-21 | M50–M51 raw-brand boundary | `nomnomcli/foods.py`, semantic regressions, execution docs | 5 focused; 118 targeted; 263 full; Ruff; diff check | pass; matching brand refuses without writes, exact/nonmatching controls green | local commit |
-| 2026-07-21 | M49 raw-brand boundary | semantic regressions and execution docs | focused pytest | RED: matching legacy brand returned a raw plan; four exact/nonmatching controls passed | M50 |
-| 2026-07-21 | M46–M48 exact-intent follow-up | `nomnomcli/foods.py`, semantic regressions, execution docs | focused RED/GREEN; 116 targeted; 261 full; Ruff; diff check; disposable no-write smoke | pass; exact refusal and source bytes/entries unchanged | local commit |
-| 2026-07-21 | M45 final safety findings | scoped production/test/docs diff | 258 full pytest; full Ruff; diff check; disposable hot-journal CLI smoke | pass; committed row recovered and exact source main/journal hashes and entries unchanged | local commit |
-| 2026-07-21 | M44 final safety findings | `nomnomcli/db.py`, `nomnomcli/foods.py`, regressions, docs | 122 targeted pytest; focused Ruff; pending-WAL regression | pass; rollback recovery and brand-only exact refusal green; non-brand control green | M45 |
-| 2026-07-21 | M43 final safety findings | semantic rollback/brand regressions and execution docs | focused pytest | RED: private snapshot exposed spilled uncommitted row; brand-only input returned semantic plan | M44 |
-| 2026-07-21 | M42 WAL-safe snapshot | scoped production/test/docs diff | 255 full pytest; full Ruff; diff check; installed-CLI pending-WAL smoke | pass; source main/WAL bytes and names identical, no SHM, `would_write: false` | local commit |
-| 2026-07-21 | M41 WAL-safe snapshot | `nomnomcli/db.py`, semantic WAL regression | focused WAL plus semantic/database/CLI pytest; scoped Ruff; diff check | GREEN: 2 WAL variants and 70 targeted tests pass; source main/WAL/SHM state unchanged | M42 |
-| 2026-07-21 | M40 WAL-safe snapshot | semantic WAL regression and execution docs | focused pytest | RED: uncaught `sqlite3.OperationalError` opening pending WAL without SHM in read-only source directory | M41 |
-| 2026-07-21 | M37–M39 final P2 | raw-plan guard, migrated legacy SKU fixture, semantic regressions, docs | focused RED/GREEN; 77 focused; 253 full; Ruff; diff check | pass; source DB/cache/log/side files unchanged | local commit |
-| 2026-07-21 | M34–M36 review fixes | read-only DB snapshot, semantic guards/ranking, regressions, docs | focused RED/GREEN; 114 focused; 250 full; Ruff; diff check; subprocess smoke | pass; exact DB digest/schema/counts unchanged | local commit |
-| 2026-07-21 | M31–M33 | semantic contract/planner/CLI/read-only DB, benchmark, docs | focused/full pytest; Ruff; diff check; digest-preserving temp-DB smoke | 136 focused; 244 full; clean; success/refusal no writes | local commit |
-| 2026-07-21 | Issue #33 preflight | issue comment, resolver/providers/CLI/DB/models/tests, planning docs | `gh issue view 33 --comments`; source/test inspection | Phase A boundary and mutation risk identified | M31 tests |
 | 2026-07-18 | Preflight | `.task-brief.md`, planning docs | repository inspection | pass | M1 |
 | 2026-07-18 | M1–M3 | package, data, tests, docs, skill, installer, CI | `pytest -q`; `ruff check .` | 30 pass; clean | M4 |
 | 2026-07-18 | M4 smoke | isolated user DB and local recipe fixture | CLI acceptance commands; `sh install.sh --dry-run` | pass | commit |
@@ -171,9 +99,6 @@ ruff check .
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
 
 ## Smoke / Demo Checklist
-- [x] WAL-mode source with pending data and no SHM resolves through the CLI without creating or changing any source sibling.
-- [x] Review-fix success and offline explicit-brand refusal subprocesses preserve exact SQLite digest/schema/counts and create no side files.
-- [x] Issue #33 Russian fallback succeeds and mixed-meat refusal fails with unchanged cache/log/alias/recipe counts and identical SQLite digest.
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
 - [x] Russian mixed-item log works and persists.
 - [x] Today stats reproduce logged totals.

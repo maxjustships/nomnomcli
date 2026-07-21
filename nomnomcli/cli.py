@@ -26,7 +26,13 @@ from nomnomcli.semantic import parse_resolution_intent
 
 
 def _json_output(payload: dict | list) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        allow_nan=False,
+    )
 
 
 def _local_now() -> datetime:
