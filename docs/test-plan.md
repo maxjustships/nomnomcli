@@ -1,5 +1,29 @@
 # Test Plan
 
+## Issue #33 Phase A
+
+### Validation Scope
+- In scope: strict semantic v1 parsing; raw-first lookup; generic-only semantic candidates; relation/provider/confidence/tie ranking; exact-intent refusal; JSON provenance; zero cache/log/alias/recipe/config writes.
+- Out of scope: log application, semantic policy configuration, production language/food datasets, LLM calls, and per-user semantic selection state.
+
+### Fixtures and Levels
+- Unit: test-only mocked USDA/OFF benchmark covering Russian smoked chicken, chicken pastrami, literal mixed-meat rejection, safe roasted chicken, exact brand/barcode intent, weak providers, and malformed contracts.
+- Integration: repository planning against writable connections with table counts before/after; CLI success/refusal against a disposable read-only user database.
+- Regression: existing food/provider/parser/CLI/database tests and the full suite.
+
+### Phase A Acceptance Gates
+- [x] Focused RED is recorded before production implementation — 19 expected failures.
+- [x] Focused semantic/CLI/food/database suite passes — 116 passed.
+- [x] `PYTHONPATH=. pytest -q` passes — 252 passed.
+- [x] `ruff check .` passes.
+- [x] `git diff --check` passes.
+- [x] Editable-install success/refusal smoke proves unchanged DB bytes and `0|0|0|0` record counts.
+
+### Phase A Negative / Edge Cases
+- Version/type/original mismatch, empty/duplicate/too-many candidates, unsupported relations, and missing fallback assumption are structured failures.
+- Original barcode/SKU/brand intent cannot be weakened with `brand_intent:false` or semantic candidates.
+- Semantic exact products, unsafe OFF products, weak USDA candidates, and all-provider failure are refused without writes.
+
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.

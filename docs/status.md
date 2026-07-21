@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: issue #33 Phase A implemented and verified
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Completed issue #33 Phase A with strict semantic v1 validation, raw-first resolution, generic-only candidate planning, deterministic safety ranking, read-only in-memory DB snapshots, and structured exact/refusal paths.
+- Recorded the required RED run at 19 expected failures, then passed 116 focused tests, 252 full tests, Ruff, and diff checks.
+- Editable-install mocked-provider CLI smoke returned a confirmation-required Russian fallback plan and a barcode exact-capture refusal; counts stayed `0|0|0|0` and DB SHA-256 stayed `d78a2708ccc2ddc8a789666a9191300b13cafbed17546a69dec4d683d3e75fe7`.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,12 +33,14 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- None; issue #33 Phase A is complete.
 
 ## Next
-- Do not push, merge, or open a pull request unless the user requests it separately.
+- Do not push, merge, open a pull request, or begin Phase B unless the user requests it separately.
 
 ## Decisions Made
+- Phase A semantic candidates are confirmation-required dry-run plans; no Phase B log integration or semantic-policy config is included.
+- Contract v1 is strict and bounded; provider confidence and quality, not agent-supplied nutrition or scoring, determine selection.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -97,6 +102,8 @@ ruff check .
 | 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
 | 2026-07-21 | M28 | issue #31 tests and planning records | targeted pytest before production edits | RED: 16 expected failures; 1 strict-path pass | M29 |
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
+| 2026-07-21 | M31 | semantic contract and mocked benchmark fixture | focused pytest before production edits | RED: 19 expected failures | M32 |
+| 2026-07-21 | M32–M33 | semantic planner, nonpersistent resolver, read-only DB snapshot, CLI, docs, skill, tests | 116 focused; full pytest; Ruff; diff check; editable-install mocked CLI smoke | 116/252 pass; clean; DB hash/count unchanged | local commit |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -119,3 +126,4 @@ ruff check .
 - [x] Issue #29 literal six-item temp-data smoke returns only explicit generic proxies with audited OFF candidate identity.
 - [x] Issue #31 exact breakfast logs atomically with four explicit agent estimates and two unflagged explicit-gram items.
 - [x] Issue #31 date stats preserve the four portion provenance objects and one concise correction route.
+- [x] Issue #33 Russian fallback plan and barcode refusal are read-only with unchanged DB hash/counts.

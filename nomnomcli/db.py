@@ -203,6 +203,25 @@ def connect(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+@contextmanager
+def connect_readonly(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
+    db_path = Path(path).expanduser() if path is not None else default_db_path()
+    connection = sqlite3.connect(":memory:")
+    if db_path.is_file():
+        source = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            source.backup(connection)
+        finally:
+            source.close()
+    try:
+        connection.row_factory = sqlite3.Row
+        _initialize_database(connection)
+        connection.execute("PRAGMA query_only = ON")
+        yield connection
+    finally:
+        connection.close()
+
+
 def store_log(
     connection: sqlite3.Connection,
     items: list[dict],

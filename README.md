@@ -110,6 +110,50 @@ brand, barcode, and explicit assumption, and remains subject to the configured p
 unsafe candidate returns `food_needs_source`. Rejected results are neither cached nor logged, and a
 generic-proxy cache entry cannot satisfy a later branded query.
 
+### Read-only semantic resolution planning
+
+An agent can dry-run a bounded semantic reformulation before any logging command. The exact raw
+`--food` phrase must also appear byte-for-byte as `original` in the v1 intent:
+
+```sh
+nomnom resolve --food "курица сырокопченая" --intent-json '{
+  "version": 1,
+  "original": "курица сырокопченая",
+  "brand_intent": false,
+  "candidates": [
+    {"query": "smoked chicken", "relation": "same_form"},
+    {
+      "query": "chicken breast roasted",
+      "relation": "generic_fallback",
+      "assumption": "Smoked deli poultry is approximated by generic roasted chicken breast nutrition."
+    }
+  ]
+}' --json
+```
+
+The v1 object has exactly `version`, `original`, `brand_intent`, and `candidates`. There may be at
+most three candidates; every normalized `query` must be nonempty and unique. Relations are only
+`lexical_equivalent`, `same_form`, and `generic_fallback`; a fallback requires a nonempty
+`assumption`. Food/language inference stays agent-side—nomnom ships no translation, synonym, or
+nutrition dataset and calls no LLM.
+
+`resolve` tries the untouched raw phrase first. Only when that fails does it validate all semantic
+candidates through the existing local/provider identity gates. Selection is deterministic:
+relation priority, then unbranded USDA Foundation/SR Legacy quality over a safe OFF proxy, then
+provider confidence, then normalized query. A semantic candidate can produce only a fully
+validated `generic_proxy`, never `exact_product`. Mixed-species results, weak provider candidates,
+and brand/SKU/barcode attempts are refused; `brand_intent:false` cannot weaken identity detected in
+the raw phrase or provider response.
+
+Success JSON includes `would_write:false`, raw `original`, `retrieval_query`, `intent_version`, raw
+or semantic origin, provider source/id/data type/confidence/mode/alternatives, and candidate
+index/relation/assumption when applied. Semantic plans set `requires_confirmation:true`: show the
+plan and ask before taking any later action. Refusals are structured and offer clarification or
+photo/barcode/label capture. Phase A does not integrate with `log`, add a semantic policy, or persist
+anything. It takes an in-memory snapshot through a read-only connection to an existing user
+database; if none exists, it plans against an ephemeral empty cache and does not create the database
+path. Cache, logs, aliases, recipes, config, and all user records remain unchanged.
+
 Successful API results are cached in the user's database, so the same food can resolve locally
 later. Existing cache records, logs, recipes, and aliases are preserved when v0.4 opens the
 database.

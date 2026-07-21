@@ -5,7 +5,13 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from nomnomcli.db import LATEST_SCHEMA_VERSION, connect, get_stats, store_log
+from nomnomcli.db import (
+    LATEST_SCHEMA_VERSION,
+    connect,
+    connect_readonly,
+    get_stats,
+    store_log,
+)
 
 ITEM = {
     "name": "borscht",
@@ -283,6 +289,48 @@ def test_connect_creates_fresh_database_at_latest_schema(tmp_path):
             "provenance",
             "assumption",
         } <= columns
+
+
+def test_readonly_connection_does_not_create_missing_user_database(tmp_path):
+    database = tmp_path / "missing.sqlite3"
+
+    with connect_readonly(database) as connection:
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute(
+                """INSERT INTO food_cache
+                (name, kcal, protein, fat, carbs, source)
+                VALUES ('forbidden', 1, 1, 1, 1, 'test')"""
+            )
+
+    assert not database.exists()
+
+
+def test_readonly_connection_preserves_existing_database_bytes(user_db):
+    with connect(user_db) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source)
+            VALUES ('existing', 1, 1, 1, 1, 'test')"""
+        )
+    before = user_db.read_bytes()
+
+    with connect_readonly(user_db) as connection:
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 1
+
+    assert user_db.read_bytes() == before
+
+
+def test_readonly_connection_migrates_only_ephemeral_snapshot(v2_database):
+    before = v2_database.read_bytes()
+
+    with connect_readonly(v2_database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("SELECT count(*) FROM food_aliases").fetchone()[0] == 0
+
+    assert v2_database.read_bytes() == before
+    with sqlite3.connect(v2_database) as source:
+        assert source.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_connect_migrates_v3_to_v4_preserving_all_user_records(v3_database):

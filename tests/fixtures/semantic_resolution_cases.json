@@ -1,0 +1,49 @@
+[
+  {
+    "id": "russian_smoked_chicken",
+    "original": "курица сырокопченая",
+    "intent": {
+      "version": 1,
+      "original": "курица сырокопченая",
+      "brand_intent": false,
+      "candidates": [
+        {
+          "query": "smoked chicken",
+          "relation": "same_form"
+        },
+        {
+          "query": "chicken breast roasted",
+          "relation": "generic_fallback",
+          "assumption": "Smoked deli poultry is approximated by generic roasted chicken breast nutrition."
+        }
+      ]
+    },
+    "expected_query": "chicken breast roasted",
+    "expected_relation": "generic_fallback",
+    "expected_candidate_index": 1
+  },
+  {
+    "id": "russian_chicken_pastrami",
+    "original": "куриная пастрома",
+    "intent": {
+      "version": 1,
+      "original": "куриная пастрома",
+      "brand_intent": false,
+      "candidates": [
+        {
+          "query": "chicken pastrami",
+          "relation": "same_form",
+          "assumption": "Use an unbranded chicken pastrami proxy only."
+        },
+        {
+          "query": "chicken breast roasted",
+          "relation": "generic_fallback",
+          "assumption": "Chicken pastrami is approximated by generic roasted chicken breast nutrition."
+        }
+      ]
+    },
+    "expected_query": "chicken breast roasted",
+    "expected_relation": "generic_fallback",
+    "expected_candidate_index": 1
+  }
+]

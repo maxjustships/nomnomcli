@@ -11,6 +11,14 @@ from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
 from nomnomcli.off import OpenFoodFactsClient
+from nomnomcli.semantic import (
+    PlannedCandidate,
+    SemanticIntent,
+    candidate_sort_key,
+    parse_semantic_intent,
+    resolution_plan,
+    semantic_proxy_rejection,
+)
 from nomnomcli.usda import USDAClient
 
 USDA_SETUP_URL = "https://fdc.nal.usda.gov/api-key-signup.html"
@@ -185,6 +193,7 @@ def _food_needs_source_error(
     *,
     provider_error: NomnomError | None = None,
     offline: bool = False,
+    exact_intent: bool = False,
 ) -> NomnomError:
     technical = None
     if provider_error is not None:
@@ -224,6 +233,8 @@ def _food_needs_source_error(
             "USDA setup is optional for broader generic/raw coverage"
         ),
     }
+    if exact_intent:
+        details["exact_intent"] = True
     if provider_error is not None:
         for key in ("candidate", "alternatives"):
             if key in provider_error.details:
@@ -426,6 +437,15 @@ class FoodRepository:
         return target
 
     def resolve(self, query: str, *, allow_remote: bool = True) -> tuple[Food, float]:
+        return self._resolve(query, allow_remote=allow_remote, persist=True)
+
+    def _resolve(
+        self,
+        query: str,
+        *,
+        allow_remote: bool,
+        persist: bool,
+    ) -> tuple[Food, float]:
         normalized = normalize_name(query)
         alias = self._alias_target(normalized)
         if alias is not None:
@@ -529,11 +549,22 @@ class FoodRepository:
                 usda_error = exc
             else:
                 food, confidence = self._prepare_usda_generic_proxy(query, food, confidence)
-                self._cache_food(food, lookup_query=query)
+                if persist:
+                    self._cache_food(food, lookup_query=query)
                 return food, confidence
 
         if accepted:
-            accepted.sort(key=lambda match: -match[1])
+            if persist:
+                accepted.sort(key=lambda match: -match[1])
+            else:
+                accepted.sort(
+                    key=lambda match: (
+                        -match[1],
+                        len(_off_product_tokens(match[0]) - _name_tokens(query)),
+                        normalize_name(match[0].name),
+                        match[0].source_id or match[0].barcode or "",
+                    )
+                )
             selected, confidence = accepted[0]
             alternatives = tuple(
                 {
@@ -567,7 +598,8 @@ class FoodRepository:
                     assumption=_off_proxy_assumption(selected),
                 )
                 food, confidence = self._apply_generic_proxy_policy(food, confidence)
-            self._cache_food(food, lookup_query=query)
+            if persist:
+                self._cache_food(food, lookup_query=query)
             return food, confidence
 
         if usda_error is not None:
@@ -579,6 +611,161 @@ class FoodRepository:
             query,
             provider_error=off_error,
             offline=not remote_enabled,
+            exact_intent=exact_intent,
+        )
+
+    def plan_resolution(
+        self,
+        original_query: str,
+        *,
+        intent: dict | SemanticIntent,
+        allow_remote: bool = True,
+        persist: bool = False,
+    ) -> dict:
+        semantic_intent = parse_semantic_intent(intent, original=original_query)
+        if persist:
+            raise NomnomError(
+                "semantic_persistence_forbidden",
+                "Phase A semantic resolution is read-only",
+                details={
+                    "would_write": False,
+                    "original": original_query,
+                    "intent_version": semantic_intent.version,
+                },
+            )
+
+        raw_error: NomnomError | None = None
+        try:
+            raw_food, raw_confidence = self._resolve(
+                original_query,
+                allow_remote=allow_remote,
+                persist=False,
+            )
+        except NomnomError as exc:
+            raw_error = exc
+        else:
+            if semantic_intent.brand_intent and raw_food.resolution_mode != "exact_product":
+                raw_error = NomnomError(
+                    "unsafe_raw_resolution",
+                    f"Raw provider result cannot satisfy exact brand intent: {original_query}",
+                    details={"reason": "brand_intent_requires_exact", "exact_intent": True},
+                )
+            else:
+                rejection = (
+                    semantic_proxy_rejection(original_query, raw_food, raw_confidence)
+                    if raw_food.resolution_mode == "generic_proxy"
+                    else None
+                )
+                if rejection is None:
+                    return resolution_plan(
+                        intent=semantic_intent,
+                        retrieval_query=original_query,
+                        food=raw_food,
+                        confidence=raw_confidence,
+                        semantic=None,
+                    )
+                raw_error = NomnomError(
+                    "unsafe_raw_resolution",
+                    f"Raw provider result is unsafe for: {original_query}",
+                    details={"reason": rejection},
+                )
+
+        exact_required = (
+            semantic_intent.brand_intent
+            or _query_has_sku(original_query)
+            or bool(raw_error.details.get("exact_intent"))
+        )
+        if exact_required:
+            raise NomnomError(
+                "semantic_exact_capture_required",
+                f"Exact package capture is required for: {original_query}",
+                details={
+                    "would_write": False,
+                    "original": original_query,
+                    "intent_version": semantic_intent.version,
+                    "raw_query_tried": True,
+                    "raw_error": raw_error.as_dict()["error"],
+                    "action": EXACT_CAPTURE_ACTION,
+                },
+            )
+
+        accepted: list[PlannedCandidate] = []
+        rejected: list[dict] = []
+        for candidate in semantic_intent.candidates:
+            try:
+                food, confidence = self._resolve(
+                    candidate.query,
+                    allow_remote=allow_remote,
+                    persist=False,
+                )
+            except NomnomError as exc:
+                reason = (
+                    "semantic_exact_product_forbidden"
+                    if exc.details.get("exact_intent")
+                    else "provider_rejected"
+                )
+                rejected.append(
+                    {
+                        "candidate_index": candidate.index,
+                        "retrieval_query": candidate.query,
+                        "relation": candidate.relation,
+                        "reason": reason,
+                        "provider_error": exc.as_dict()["error"],
+                    }
+                )
+                continue
+            reason = semantic_proxy_rejection(candidate.query, food, confidence)
+            if reason is not None:
+                rejected.append(
+                    {
+                        "candidate_index": candidate.index,
+                        "retrieval_query": candidate.query,
+                        "relation": candidate.relation,
+                        "reason": reason,
+                        "provider_result": {
+                            "name": food.name,
+                            "source": food.source,
+                            "source_id": food.source_id,
+                            "data_type": food.provider_data_type,
+                            "confidence": round(confidence, 2),
+                            "resolution_mode": food.resolution_mode,
+                        },
+                    }
+                )
+                continue
+            accepted.append(
+                PlannedCandidate(
+                    semantic=candidate,
+                    food=food,
+                    confidence=confidence,
+                )
+            )
+
+        if accepted:
+            selected = min(accepted, key=candidate_sort_key)
+            return resolution_plan(
+                intent=semantic_intent,
+                retrieval_query=selected.semantic.query,
+                food=selected.food,
+                confidence=selected.confidence,
+                semantic=selected.semantic,
+            )
+
+        raise NomnomError(
+            "semantic_resolution_refused",
+            f"No safe generic semantic resolution for: {original_query}",
+            details={
+                "would_write": False,
+                "original": original_query,
+                "intent_version": semantic_intent.version,
+                "raw_query_tried": True,
+                "raw_error": raw_error.as_dict()["error"],
+                "rejected_candidates": rejected,
+                "action": (
+                    "Ask for a concise clarification or use a package photo, barcode, "
+                    "or verified label capture"
+                ),
+            },
         )
 
     def search(self, query: str, limit: int = 10) -> list[Food]:

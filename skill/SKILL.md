@@ -7,50 +7,27 @@ description: >-
 
 # nomnomcli
 
-Use `nomnom` as the only source of nutrition numbers. Never estimate calories, macros, or food
-composition. Portion mass may be externally estimated only through the contract below.
+Use `nomnom` as the only source of nutrition numbers. Never estimate calories, macros, or food composition. Portion mass may be externally estimated only through the contract below.
 
 ## Mandatory install protocol
 
-This protocol is required whenever `nomnom` is unavailable. Ask permission, then run the single
-user-level bootstrap and parse its JSON:
+This protocol is required whenever `nomnom` is unavailable. Ask permission, then run the single user-level bootstrap and parse its JSON:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxjustships/nomnomcli/main/install.sh \
   | sh -s -- --status-json
 ```
 
-Never run `pip install -e` (or any editable install) inside a Hermes/agent virtualenv, never run a
-package installer from a Hermes/agent virtualenv, and never make an agent-private executable the
-user's command. The bootstrap must select uv tool, pipx, or a non-venv Python 3.11+ user site itself.
+Never run `pip install -e` (or any editable install) inside a Hermes/agent virtualenv, never run a package installer there, or make an agent-private executable the user's command. The bootstrap selects uv tool, pipx, or a non-venv Python 3.11+ user site itself.
 
 Follow this exact sequence:
 
-1. Parse the installer `status`, `executable`, `version`, `generic_coverage`,
-   `optional_usda_setup`, `error`, and `path_repair` fields. Accept `installed_base_ready` and
-   `installed_and_ready` as completed shell installs. Base tracking is ready without a USDA key. For
-   `installed_path_repair_needed`, give the returned one-time repair command and do not claim the
-   install is complete. For `error`, explain its returned action.
-2. Derive the executable directory from the returned path. Verify `nomnom --version` and run
-   `nomnom doctor --json` with a sanitized user/system-only environment containing that user
-   executable directory plus only ordinary locations such as `~/.local/bin`, `~/bin`,
-   `/usr/local/bin`, `/usr/bin`, `/bin`, `/opt/homebrew/bin`, and `/opt/local/bin`. For bootstrap
-   verification, set `XDG_CONFIG_HOME=$HOME/.config` and clear every `NOMNOM_*` override: never
-   inherit agent XDG roots, credentials, database paths, or status settings. Exclude Hermes, Codex,
-   the current project, temporary directories, and every virtualenv path. Parse the doctor JSON; do
-   not infer readiness from exit status or human text.
-3. Treat `installed_base_ready` as installation success and continue with the user's tracking task.
-   Say: "Base tracking is ready without a USDA key." Do not ask for setup after a successful base install.
-   Offer `nomnom setup` only when the user wants broader no-photo generic/raw-food coverage
-   or after a specific item returns `food_needs_source`. Never open a browser or run interactive
-   setup automatically.
-4. Agents must never type, receive, echo, or persist a USDA key or any other user secret. Do not ask
-   for it in chat. Secret entry belongs only in the user's terminal through `nomnom setup`, which
-   links to <https://fdc.nal.usda.gov/api-key-signup.html>, validates the key, and stores it in the
-   owner-only XDG config (`0600`).
-5. For base mode, use aliases/cache, strict OFF full text, exact OFF barcode, and package-photo label
-   capture. `nomnom setup --status --json` is available when capability status is actually needed:
-   `base_ready` means base mode works, and `connected` means USDA-enhanced coverage works.
+1. Parse installer `status`, `executable`, `version`, `generic_coverage`, `optional_usda_setup`, `error`, and `path_repair`. Accept `installed_base_ready` and `installed_and_ready` as complete; base needs no USDA key. For `installed_path_repair_needed`, give its repair command and do not claim completion; for `error`, explain its action.
+2. Derive the executable directory, verify `nomnom --version`, and run `nomnom doctor --json` with a sanitized user/system-only environment containing it plus ordinary locations such as `~/.local/bin`, `~/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, `/opt/homebrew/bin`, and `/opt/local/bin`.
+   For bootstrap verification set `XDG_CONFIG_HOME=$HOME/.config`, clear every `NOMNOM_*` override, and exclude agent XDG roots, credentials, database paths, Hermes, Codex, the project, temporary directories, and virtualenvs. Parse doctor JSON; never infer readiness from exit status or human text.
+3. Treat `installed_base_ready` as success, continue the task, and say: "Base tracking is ready without a USDA key." Do not ask for setup after a successful base install. Offer `nomnom setup` only for broader no-photo generic/raw-food coverage or after `food_needs_source`; never open a browser or run interactive setup automatically.
+4. Agents must never type, receive, echo, or persist a USDA key or other secret, or ask for it in chat. Secret entry belongs only in the user's terminal through `nomnom setup`, which links to <https://fdc.nal.usda.gov/api-key-signup.html>, validates it, and stores owner-only XDG config (`0600`).
+5. Base mode uses aliases/cache, strict OFF full text, exact OFF barcode, and package-photo label capture. Use `nomnom setup --status --json` only when capability status is needed: `base_ready` works; `connected` adds USDA-enhanced coverage.
 
 ## Log free text
 
@@ -79,6 +56,14 @@ exact trimmed `input`, finite nonnegative central/lower/upper grams (lower <= ce
 confidence 0..1, `method:"agent_estimate"`, and nonempty `assumption`. Never fuzzy-match or generate
 nutrition ranges. Invalid or incomplete input rejects the whole log. Show returned portion fields
 and correction prompt. `ask` writes nothing; `strict` is default.
+
+## Read-only semantic resolution plan
+
+When literal unbranded text cannot resolve safely, infer at most three retrieval candidates without inventing nutrition. Run `nomnom resolve --food RAW --intent-json JSON --json` before logging. JSON v1 has exactly `version:1`, byte-exact `original`, boolean `brand_intent`, and `candidates`; each candidate has a nonempty unique `query`, relation `lexical_equivalent | same_form | generic_fallback`, and a nonempty fallback `assumption`. Add no translations, aliases, nutrition, weights, or hidden candidates.
+
+The CLI tries RAW first and ranks validated candidates by relation, safe provider quality, provider confidence, then normalized query. Semantic output is only `generic_proxy`. Show original/retrieval query, candidate index/relation, assumptions, provider provenance/alternatives, and `requires_confirmation`; ask before later action when true. Never pass candidates to `log`: Phase A is planning only and `would_write` is false.
+
+Never use `brand_intent:false` to erase a brand/SKU/barcode or accept an exact, mixed-species, weak, or first-result proxy. On `semantic_exact_capture_required`, capture exactly. On `semantic_resolution_refused`, preserve diagnostics and ask one concise clarification or request photo/barcode.
 
 ## Direct food flow
 

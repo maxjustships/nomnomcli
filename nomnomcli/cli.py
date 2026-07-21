@@ -10,7 +10,7 @@ from datetime import date, datetime
 
 from nomnomcli import __version__
 from nomnomcli.config import ProviderConfig
-from nomnomcli.db import connect, get_stats, store_log
+from nomnomcli.db import connect, connect_readonly, get_stats, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
@@ -22,6 +22,7 @@ from nomnomcli.portions import (
     validate_portion_policy,
 )
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
+from nomnomcli.semantic import parse_semantic_intent
 
 
 def _json_output(payload: dict | list) -> str:
@@ -164,6 +165,20 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor = commands.add_parser("doctor", help="probe provider readiness")
     doctor.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
+    resolve = commands.add_parser(
+        "resolve", help="plan semantic food resolution without writing user data"
+    )
+    resolve.add_argument("--food", required=True, metavar="TEXT", help="exact raw food phrase")
+    resolve.add_argument(
+        "--intent-json",
+        required=True,
+        metavar="JSON",
+        help="inline semantic intent contract v1",
+    )
+    resolve.add_argument(
+        "--json", action="store_true", required=True, help="machine-readable JSON output"
+    )
+
     log = commands.add_parser("log", help="resolve and store food")
     form = log.add_mutually_exclusive_group(required=True)
     form.add_argument("--parse", metavar="TEXT", help="comma-separated food phrases")
@@ -299,6 +314,18 @@ def _run(args: argparse.Namespace) -> int:
                 "A calendar date can only be used with the date stats period",
                 details={"action": "Use nomnom stats date YYYY-MM-DD."},
             )
+
+    if args.command == "resolve":
+        intent = parse_semantic_intent(args.intent_json, original=args.food)
+        with connect_readonly() as connection:
+            result = FoodRepository(connection).plan_resolution(
+                args.food,
+                intent=intent,
+                allow_remote=True,
+                persist=False,
+            )
+        print(_json_output(result))
+        return 0
 
     if args.command == "setup":
         if args.status:

@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Source
+- Task: Add the read-only semantic resolution planning contract only.
+- Canonical input: GitHub issue #33 comment 5032968603 and the user's strict Phase A/TDD/no-write requirements.
+- Repo context: semantic intent validation, nonpersistent provider resolution, CLI JSON, mocked benchmark, README, and agent skill.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Assumptions
+- Contract v1 accepts only `version`, exact `original`, boolean `brand_intent`, and at most three candidate objects containing `query`, `relation`, and an optional `assumption`; `generic_fallback` requires the assumption.
+- Provider resolution confidence, not agent-supplied scoring, drives ranking after relation and provider-quality priority.
+- A semantic candidate produces a confirmation-required dry-run plan; it never logs, caches, aliases, captures, or changes configuration.
+
+## Issue #33 Phase A Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M31 | Freeze semantic contract and no-write benchmark | M30 | [x] |
+| M32 | Implement nonpersistent planning and CLI | M31 | [x] |
+| M33 | Document, verify, smoke, audit, and commit | M32 | [x] |
+
+## M31. Freeze semantic contract and no-write benchmark `[x]`
+### Goal
+- Focused tests specify strict v1 validation, raw-first behavior, exact-intent resistance, deterministic safe selection, provenance, and zero database writes before production changes.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic_resolution.py tests/test_cli.py -k 'semantic or resolve'
+```
+
+### Stop-and-Fix Rule
+- Record the expected RED failures before adding production semantic types, repository planning, read-only database access, or CLI behavior.
+
+## M32. Implement nonpersistent planning and CLI `[x]`
+### Goal
+- `nomnom resolve` validates v1 intent and returns only a raw safe result, a fully validated generic semantic proxy plan, or a structured refusal, without any persistence path.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic_resolution.py tests/test_cli.py tests/test_foods.py tests/test_db.py
+```
+
+### Stop-and-Fix Rule
+- Any exact product from a semantic candidate, provider first-result selection, exact-intent bypass, database mutation, or legacy resolver regression blocks documentation work.
+
+## M33. Document, verify, smoke, audit, and commit `[x]`
+### Goal
+- README and agent guidance cover dry-run use only; focused/full tests, Ruff, clean disposable read-only CLI smoke, diff audit, and one scoped conventional commit pass.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until success and refusal smokes prove the temporary user database is byte/count unchanged and the diff contains no Phase B/config/dataset work.
+
 ## Issue #31 Source
 - Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
 - Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.
