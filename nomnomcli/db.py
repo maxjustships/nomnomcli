@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
 import sqlite3
+import struct
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -12,10 +15,21 @@ from pathlib import Path
 
 from nomnomcli.errors import NomnomError
 
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised through the support predicate
+    _fcntl = None
+
 LATEST_SCHEMA_VERSION = 4
 V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
 _SNAPSHOT_SUFFIXES = ("", "-journal", "-wal", "-shm")
 _SNAPSHOT_COPY_ATTEMPTS = 3
+_SQLITE_LOCK_BYTE = 0x40000000
+_SQLITE_LOCK_BYTE_COUNT = 512
+_SQLITE_SHM_LOCK_OFFSET = 120
+_SQLITE_SHM_LOCK_COUNT = 8
+_LINUX_F_OFD_SETLK = 37
+_LINUX_FLOCK = struct.Struct("@hh4xqqi4x")
 
 LATEST_SCHEMA = (
     """CREATE TABLE food_cache (
@@ -215,24 +229,168 @@ def _source_snapshot_fingerprint(
     return fingerprint
 
 
+def _ofd_locks_supported() -> bool:
+    """Return whether this runtime has the Linux lock ABI used by SQLite's unix VFS."""
+    return (
+        sys.platform.startswith("linux")
+        and struct.calcsize("P") == 8
+        and _fcntl is not None
+        and _LINUX_FLOCK.size == 32
+    )
+
+
+def _snapshot_lock_error(code: str, message: str, **details: object) -> NomnomError:
+    return NomnomError(
+        code,
+        message,
+        details={
+            "would_write": False,
+            **details,
+        },
+    )
+
+
+def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target: str) -> None:
+    """Take a nonblocking Linux OFD lock that conflicts with SQLite POSIX writes."""
+    if not _ofd_locks_supported():
+        raise _snapshot_lock_error(
+            "database_snapshot_lock_unavailable",
+            "A compatible no-write SQLite snapshot lock is unavailable",
+            lock_target=target,
+            action="Run resolution on a supported 64-bit Linux filesystem/runtime.",
+        )
+    assert _fcntl is not None
+    lock = _LINUX_FLOCK.pack(_fcntl.F_RDLCK, os.SEEK_SET, start, length, 0)
+    try:
+        _fcntl.fcntl(file_descriptor, _LINUX_F_OFD_SETLK, lock)
+    except OSError as error:
+        if error.errno in {errno.EACCES, errno.EAGAIN}:
+            raise _snapshot_lock_error(
+                "database_snapshot_busy",
+                "An active SQLite writer prevents a consistent read-only snapshot",
+                lock_target=target,
+                action="Wait for the active database write to finish, then retry resolution.",
+            ) from error
+        raise _snapshot_lock_error(
+            "database_snapshot_lock_unavailable",
+            "The filesystem cannot provide the required no-write SQLite snapshot lock",
+            lock_target=target,
+            os_error=error.errno,
+            action="Move the database to a filesystem with Linux OFD lock support.",
+        ) from error
+
+
+def _open_snapshot_source(path: Path) -> int:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    return os.open(path, flags)
+
+
+@contextmanager
+def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | None] | None]:
+    """Freeze SQLite main-file writes and WAL coordination using OS locks only.
+
+    Linux open-file-description locks conflict with SQLite's POSIX locks even
+    inside one process and are not dropped when an unrelated descriptor closes.
+    Locking the complete main lock-byte page rejects rollback writers (including
+    MEMORY/OFF spill transactions); locking every SHM slot freezes WAL writers,
+    checkpoints, and recovery. Other platforms fail closed before any copy.
+    """
+    try:
+        main_descriptor = _open_snapshot_source(source_path)
+    except FileNotFoundError:
+        yield None
+        return
+    except OSError as error:
+        raise _snapshot_lock_error(
+            "database_snapshot_lock_unavailable",
+            "The SQLite source cannot be opened for a no-write snapshot lock",
+            lock_target="main",
+            os_error=error.errno,
+        ) from error
+
+    shm_descriptor = None
+    try:
+        _acquire_ofd_read_lock(
+            main_descriptor,
+            _SQLITE_LOCK_BYTE,
+            _SQLITE_LOCK_BYTE_COUNT,
+            "main",
+        )
+        try:
+            shm_descriptor = _open_snapshot_source(Path(f"{source_path}-shm"))
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise _snapshot_lock_error(
+                "database_snapshot_lock_unavailable",
+                "The SQLite SHM file cannot be opened for a no-write snapshot lock",
+                lock_target="shm",
+                os_error=error.errno,
+            ) from error
+        if shm_descriptor is not None:
+            _acquire_ofd_read_lock(
+                shm_descriptor,
+                _SQLITE_SHM_LOCK_OFFSET,
+                _SQLITE_SHM_LOCK_COUNT,
+                "shm",
+            )
+        yield main_descriptor, shm_descriptor
+    finally:
+        if shm_descriptor is not None:
+            os.close(shm_descriptor)
+        os.close(main_descriptor)
+
+
+def _descriptor_fingerprint(file_descriptor: int) -> tuple[int, int, int, int]:
+    stat = os.fstat(file_descriptor)
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _copy_open_file(file_descriptor: int, destination: Path) -> None:
+    """Copy the exact locked inode instead of reopening a path that could be replaced."""
+    os.lseek(file_descriptor, 0, os.SEEK_SET)
+    with destination.open("wb") as output:
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            output.write(chunk)
+
+
 def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Path | None:
-    """Copy a source file set that remains unchanged across the complete copy."""
+    """Copy a locked SQLite file set that remains unchanged across the complete copy."""
     for attempt in range(1, _SNAPSHOT_COPY_ATTEMPTS + 1):
         attempt_directory = private_root / f"attempt-{attempt}"
         attempt_directory.mkdir()
         private_path = attempt_directory / "snapshot.sqlite3"
-        before = _source_snapshot_fingerprint(source_path)
         copy_succeeded = True
-        try:
-            for suffix in _SNAPSHOT_SUFFIXES:
-                if before[suffix] is not None:
-                    shutil.copyfile(
-                        Path(f"{source_path}{suffix}"),
-                        Path(f"{private_path}{suffix}"),
-                    )
-        except FileNotFoundError:
-            copy_succeeded = False
-        after = _source_snapshot_fingerprint(source_path)
+        with _sqlite_snapshot_boundary(source_path) as descriptors:
+            before = _source_snapshot_fingerprint(source_path)
+            try:
+                if descriptors is None:
+                    copy_succeeded = before[""] is None
+                else:
+                    main_descriptor, shm_descriptor = descriptors
+                    if before[""] != _descriptor_fingerprint(main_descriptor):
+                        copy_succeeded = False
+                    else:
+                        _copy_open_file(main_descriptor, private_path)
+                    for suffix in ("-journal", "-wal"):
+                        if before[suffix] is not None:
+                            shutil.copyfile(
+                                Path(f"{source_path}{suffix}"),
+                                Path(f"{private_path}{suffix}"),
+                            )
+                    if before["-shm"] is not None:
+                        if (
+                            shm_descriptor is None
+                            or before["-shm"] != _descriptor_fingerprint(shm_descriptor)
+                        ):
+                            copy_succeeded = False
+                        else:
+                            _copy_open_file(shm_descriptor, Path(f"{private_path}-shm"))
+            except FileNotFoundError:
+                copy_succeeded = False
+            after = _source_snapshot_fingerprint(source_path)
 
         if copy_succeeded and before == after:
             return private_path if before[""] is not None else None

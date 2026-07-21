@@ -108,15 +108,21 @@ runtime evidence of exact intent. This can refuse a legitimate same-language sim
 cross-language brand detection has no comparable lexical signal, so agents must still set
 `brand_intent:true` and users should capture the exact package identity.
 
-This command is a dry-run boundary only. It fingerprints the existing SQLite main file plus any
-rollback journal, WAL, and SHM siblings before and after copying the complete set into private
-storage. A changed identity, size, mtime, or existence discards that attempt. After three unstable
-attempts, ongoing writes fail safely with `database_snapshot_unstable` and `would_write:false`
-instead of planning from a mixed snapshot. SQLite opens only a stable private copy, which is then
-cloned into memory and validated/migrated (or an ephemeral snapshot is initialized when no database
-exists). Resolution never creates or updates source cache/log/alias/recipe rows and does not apply
-the plan to `nomnom log`. There is no embedded LLM, translation table, synonym corpus, food record,
-or weight data; candidate generation stays agent-side.
+This command is a dry-run boundary only. On supported 64-bit Linux runtimes, it takes
+open-file-description read locks over SQLite's complete main-file lock range and every WAL SHM lock
+slot using OS locking only. This blocks rollback spills, WAL writes, checkpoints, and recovery while
+the main file plus any rollback journal, WAL, and SHM siblings are copied into private storage. An
+active writer returns structured `database_snapshot_busy`; a runtime or filesystem without the
+required compatible primitive returns `database_snapshot_lock_unavailable`. Neither case returns a
+plan. The locked file set is still fingerprinted before and after the complete copy; changed
+identity, size, mtime, or existence discards that attempt, and repeated sidecar churn returns
+`database_snapshot_unstable`.
+
+SQLite never opens the source database. It opens only the isolated private copy, which is cloned
+into memory and validated/migrated (or an ephemeral snapshot is initialized when no database
+exists). Resolution never creates or updates source files, sidecars, cache/log/alias/recipe rows,
+or applies the plan to `nomnom log`. There is no embedded LLM, translation table, synonym corpus,
+food record, or weight data; candidate generation stays agent-side.
 
 For a remembered meal from a prior local calendar day, pass an explicit ISO date to either form:
 
@@ -393,6 +399,10 @@ an `error` object and exit with status 2. Important codes include:
 - `database_snapshot_unstable`: active SQLite files changed throughout bounded private-copy
   attempts; wait for writes to finish and retry. No plan was returned and source state was not
   opened by SQLite or modified by resolution.
+- `database_snapshot_busy`: an active SQLite writer holds a main or WAL lock; wait for it to finish
+  and retry. This includes unsafe journal-less MEMORY/OFF transactions with dirty spilled pages.
+- `database_snapshot_lock_unavailable`: the platform, runtime, or filesystem cannot provide the
+  required no-write SQLite-compatible OFD locks. No source copy was accepted and no plan returned.
 - `invalid_barcode` / `barcode_not_found` / `barcode_nutrition_incomplete`: correct the barcode or
   request a package photo; failed captures write nothing.
 - `invalid_source_note` / `invalid_nutrition`: correct the extracted label facts; failed captures

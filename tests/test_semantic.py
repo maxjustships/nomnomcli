@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -871,6 +872,145 @@ os._exit(0)
         tmp_path.chmod(original_directory_mode)
 
 
+@pytest.mark.parametrize("journal_mode", ["MEMORY", "OFF"])
+def test_cli_resolve_refuses_dirty_spilled_journal_less_writer_without_source_changes(
+    tmp_path, monkeypatch, capsys, journal_mode
+):
+    database = tmp_path / f"{journal_mode.lower()}-source.sqlite3"
+    original = f"Committed {journal_mode} chicken"
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA page_size = 512")
+        connection.execute("VACUUM")
+    with connect(database) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, lookup_query,
+             resolution_mode, source_id, provenance)
+            VALUES (?, 165, 31, 3.6, 1, 'user', ?,
+                    'exact_product', 'committed-pin', 'user')""",
+            (original, original),
+        )
+        connection.execute(
+            "CREATE TABLE spill_pages (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO spill_pages (id, payload) VALUES (?, ?)",
+            ((index, f"committed-{index:04d}-" + "c" * 1800) for index in range(300)),
+        )
+
+    writer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            """
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+mode = sys.argv[3]
+assert connection.execute(f"PRAGMA journal_mode = {mode}").fetchone()[0] == mode.lower()
+connection.execute("PRAGMA synchronous = OFF")
+connection.execute("PRAGMA cache_size = 5")
+connection.execute("PRAGMA cache_spill = ON")
+connection.execute("BEGIN IMMEDIATE")
+connection.execute(
+    "UPDATE food_cache SET source_id = 'uncommitted-pin' WHERE name = ?",
+    (sys.argv[2],),
+)
+connection.execute(
+    "UPDATE spill_pages SET payload = ? || printf('%04d', id)",
+    ("dirty-" + "d" * 1800,),
+)
+assert connection.in_transaction
+print("ready", flush=True)
+sys.stdin.readline()
+connection.rollback()
+connection.close()
+""",
+            str(database),
+            original,
+            journal_mode,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert writer.stdout is not None
+        assert writer.stdout.readline().strip() == "ready"
+        with sqlite3.connect(
+            f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True
+        ) as dirty_main:
+            assert (
+                dirty_main.execute(
+                    "SELECT source_id FROM food_cache WHERE name = ?", (original,)
+                ).fetchone()[0]
+                == "uncommitted-pin"
+            )
+        assert not Path(f"{database}-journal").exists()
+        original_files = _directory_file_state(tmp_path)
+        original_fingerprint = database_module._source_snapshot_fingerprint(database)
+        monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+        monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+        code = main(
+            [
+                "resolve",
+                "--food",
+                original,
+                "--intent-json",
+                json.dumps(_intent(original, [])),
+                "--json",
+            ]
+        )
+        error = json.loads(capsys.readouterr().err)
+
+        assert code == 2
+        assert error["error"]["code"] == "database_snapshot_busy"
+        assert error["error"]["would_write"] is False
+        assert error["error"]["details"]["lock_target"] == "main"
+        assert _directory_file_state(tmp_path) == original_files
+        assert database_module._source_snapshot_fingerprint(database) == original_fingerprint
+    finally:
+        if writer.poll() is None:
+            assert writer.stdin is not None
+            writer.stdin.write("finish\n")
+            writer.stdin.flush()
+        return_code = writer.wait(timeout=10)
+        if return_code != 0:
+            assert writer.stderr is not None
+            pytest.fail(writer.stderr.read())
+
+
+def test_cli_snapshot_lock_unavailable_is_structured_and_does_not_copy(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    monkeypatch.setattr(database_module, "_ofd_locks_supported", lambda: False)
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "database_snapshot_lock_unavailable"
+    assert error["error"]["would_write"] is False
+    assert _directory_file_state(user_db.parent) == before
+
+
 def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     tmp_path, monkeypatch, capsys
 ):
@@ -960,7 +1100,7 @@ def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
     assert _directory_file_state(user_db.parent) == original_files
 
 
-def test_cli_snapshot_copy_retries_after_wal_checkpoint_transition(
+def test_cli_snapshot_lock_blocks_wal_checkpoint_during_copy(
     tmp_path, monkeypatch, capsys
 ):
     database = tmp_path / "checkpoint-source.sqlite3"
@@ -981,7 +1121,6 @@ def test_cli_snapshot_copy_retries_after_wal_checkpoint_transition(
     writer.commit()
     wal_path = tmp_path / f"{database.name}-wal"
     assert wal_path.exists()
-    wal_before_checkpoint = wal_path.read_bytes()
     with sqlite3.connect(
         f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True
     ) as main_only:
@@ -992,44 +1131,49 @@ def test_cli_snapshot_copy_retries_after_wal_checkpoint_transition(
             == 0
         )
 
-    real_copyfile = database_module.shutil.copyfile
+    original_files = _directory_file_state(tmp_path)
+    source_inode = database.stat().st_ino
+    real_copy_open_file = database_module._copy_open_file
     main_copy_count = 0
-    state_after_writer = None
+    checkpoint_result = None
 
-    def checkpoint_after_first_main_copy(source, destination):
-        nonlocal main_copy_count, state_after_writer
-        result = real_copyfile(source, destination)
-        if source == database.resolve():
+    def checkpoint_during_locked_copy(source_descriptor, destination):
+        nonlocal main_copy_count, checkpoint_result
+        result = real_copy_open_file(source_descriptor, destination)
+        if database_module.os.fstat(source_descriptor).st_ino == source_inode:
             main_copy_count += 1
             if main_copy_count == 1:
-                assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
-                writer.close()
-                state_after_writer = _directory_file_state(tmp_path)
-                assert state_after_writer.get(wal_path.name) != wal_before_checkpoint
+                checkpoint_result = writer.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                ).fetchone()
         return result
 
-    monkeypatch.setattr(database_module.shutil, "copyfile", checkpoint_after_first_main_copy)
+    monkeypatch.setattr(database_module, "_copy_open_file", checkpoint_during_locked_copy)
     monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
 
-    code = main(
-        [
-            "resolve",
-            "--food",
-            original,
-            "--intent-json",
-            json.dumps(_intent(original, [])),
-            "--json",
-        ]
-    )
-    output = json.loads(capsys.readouterr().out)
+    try:
+        code = main(
+            [
+                "resolve",
+                "--food",
+                original,
+                "--intent-json",
+                json.dumps(_intent(original, [])),
+                "--json",
+            ]
+        )
+        output = json.loads(capsys.readouterr().out)
 
-    assert code == 0
-    assert output["would_write"] is False
-    assert output["source_id"] == "checkpoint-pin"
-    assert main_copy_count == 2
-    assert state_after_writer is not None
-    assert _directory_file_state(tmp_path) == state_after_writer
+        assert code == 0
+        assert output["would_write"] is False
+        assert output["source_id"] == "checkpoint-pin"
+        assert main_copy_count == 1
+        assert checkpoint_result is not None
+        assert checkpoint_result[0] == 1
+        assert _directory_file_state(tmp_path) == original_files
+    finally:
+        writer.close()
 
 
 def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
