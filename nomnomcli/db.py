@@ -10,6 +10,7 @@ import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -217,28 +218,6 @@ def default_db_path() -> Path:
     return Path.home() / ".local" / "share" / "nomnomcli" / "nomnom.sqlite3"
 
 
-def _source_snapshot_fingerprint(
-    source_path: Path,
-) -> dict[str, tuple[int, int, int, int] | None]:
-    """Capture existence, identity, size, and mtime for all SQLite source files."""
-    fingerprint: dict[str, tuple[int, int, int, int] | None] = {}
-    for suffix in _SNAPSHOT_SUFFIXES:
-        try:
-            stat = Path(f"{source_path}{suffix}").stat()
-        except FileNotFoundError:
-            fingerprint[suffix] = None
-        except OSError as error:
-            raise _snapshot_read_error(suffix, error) from error
-        else:
-            fingerprint[suffix] = (
-                stat.st_dev,
-                stat.st_ino,
-                stat.st_size,
-                stat.st_mtime_ns,
-            )
-    return fingerprint
-
-
 def _ofd_locks_supported() -> bool:
     """Return whether this runtime has the Linux lock ABI used by SQLite's unix VFS."""
     return (
@@ -290,6 +269,142 @@ def _snapshot_noatime_error(suffix: str, error: OSError | None = None) -> Nomnom
     )
 
 
+def _snapshot_unsafe_path_error(
+    component: str, *, suffix: str = "", parent: bool = False
+) -> NomnomError:
+    return _snapshot_lock_error(
+        "database_snapshot_unsafe_path",
+        "SQLite snapshot paths must not contain symbolic links",
+        snapshot_target="parent" if parent else suffix.removeprefix("-") or "main",
+        path_component=component,
+        action="Use a database path whose parent directories and SQLite files are not symlinks.",
+    )
+
+
+def _snapshot_unstable_path_error() -> NomnomError:
+    return _snapshot_lock_error(
+        "database_snapshot_unstable",
+        "Database path changed while creating a read-only snapshot",
+        attempts=_SNAPSHOT_COPY_ATTEMPTS,
+        action="Wait for database path changes to finish, then retry resolution.",
+    )
+
+
+def _snapshot_open_capabilities() -> tuple[int, int, int, int]:
+    noatime = getattr(os, "O_NOATIME", None)
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    path_only = getattr(os, "O_PATH", None)
+    if (
+        not sys.platform.startswith("linux")
+        or noatime is None
+        or nofollow is None
+        or directory is None
+        or path_only is None
+    ):
+        raise _snapshot_noatime_error("")
+    return noatime, nofollow, directory, path_only
+
+
+def _snapshot_directory_flags() -> int:
+    _, nofollow, directory, path_only = _snapshot_open_capabilities()
+    # O_PATH obtains only a reference to the directory inode: it does not open
+    # the directory for data access and therefore does not require ownership to
+    # suppress atime updates on root-owned ancestors.
+    return path_only | os.O_CLOEXEC | nofollow | directory
+
+
+def _descriptor_identity(file_descriptor: int) -> tuple[int, int]:
+    metadata = os.fstat(file_descriptor)
+    return metadata.st_dev, metadata.st_ino
+
+
+def _open_snapshot_directory(
+    component: str, *, directory_descriptor: int | None = None
+) -> int:
+    try:
+        if directory_descriptor is None:
+            return os.open(component, _snapshot_directory_flags())
+        return os.open(
+            component,
+            _snapshot_directory_flags(),
+            dir_fd=directory_descriptor,
+        )
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise _snapshot_unsafe_path_error(component, parent=True) from error
+        if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
+            raise _snapshot_noatime_error("", error) from error
+        raise _snapshot_lock_error(
+            "database_snapshot_unreadable",
+            "A database parent directory cannot be opened safely",
+            snapshot_target="parent",
+            path_component=component,
+            os_error=error.errno,
+            action="Restore access to a non-symlink database parent directory.",
+        ) from error
+
+
+@dataclass(slots=True)
+class _SnapshotSource:
+    directory_descriptor: int
+    filename: str
+    parent_chain: tuple[tuple[int, str, tuple[int, int]], ...]
+
+    def validate_parent_chain(self) -> None:
+        """Prove every retained parent still names the directory inode we opened."""
+        for parent_descriptor, component, expected in self.parent_chain:
+            try:
+                descriptor = _open_snapshot_directory(
+                    component, directory_descriptor=parent_descriptor
+                )
+            except NomnomError as error:
+                if error.code == "database_snapshot_unreadable":
+                    raise _snapshot_unstable_path_error() from error
+                raise
+            try:
+                if _descriptor_identity(descriptor) != expected:
+                    raise _snapshot_unstable_path_error()
+            finally:
+                os.close(descriptor)
+
+
+@contextmanager
+def _open_snapshot_source_path(source_path: Path) -> Iterator[_SnapshotSource]:
+    """Walk a Linux path without following or touching symlink metadata."""
+    _snapshot_open_capabilities()
+    components = list(source_path.parts)
+    absolute = source_path.is_absolute()
+    if absolute:
+        components = components[1:]
+    if not components or components[-1] in {"", ".", ".."}:
+        raise _snapshot_unsafe_path_error(components[-1] if components else "")
+    filename = components.pop()
+
+    with ExitStack() as stack:
+        current_descriptor = _open_snapshot_directory("/" if absolute else ".")
+        stack.callback(os.close, current_descriptor)
+        parent_chain: list[tuple[int, str, tuple[int, int]]] = []
+        for component in components:
+            if component in {"", "."}:
+                continue
+            child_descriptor = _open_snapshot_directory(
+                component, directory_descriptor=current_descriptor
+            )
+            stack.callback(os.close, child_descriptor)
+            parent_chain.append(
+                (current_descriptor, component, _descriptor_identity(child_descriptor))
+            )
+            current_descriptor = child_descriptor
+        source = _SnapshotSource(
+            directory_descriptor=current_descriptor,
+            filename=filename,
+            parent_chain=tuple(parent_chain),
+        )
+        source.validate_parent_chain()
+        yield source
+
+
 def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target: str) -> None:
     """Take a nonblocking Linux OFD lock that conflicts with SQLite POSIX writes."""
     if not _ofd_locks_supported():
@@ -320,24 +435,48 @@ def _acquire_ofd_read_lock(file_descriptor: int, start: int, length: int, target
         ) from error
 
 
-def _open_snapshot_source(path: Path, suffix: str) -> int:
-    noatime = getattr(os, "O_NOATIME", None)
-    if not sys.platform.startswith("linux") or noatime is None:
-        raise _snapshot_noatime_error(suffix)
-    flags = os.O_RDONLY
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    flags |= noatime
+def _open_snapshot_source(source: _SnapshotSource, suffix: str) -> int:
+    noatime, nofollow, _, _ = _snapshot_open_capabilities()
+    flags = os.O_RDONLY | os.O_CLOEXEC | nofollow | noatime
+    filename = f"{source.filename}{suffix}"
     try:
-        return os.open(path, flags)
+        return os.open(filename, flags, dir_fd=source.directory_descriptor)
     except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise _snapshot_unsafe_path_error(filename, suffix=suffix) from error
         if error.errno in _NOATIME_UNAVAILABLE_ERRNOS:
             raise _snapshot_noatime_error(suffix, error) from error
         raise
 
 
+def _source_snapshot_fingerprint(
+    source_path: Path | _SnapshotSource,
+) -> dict[str, tuple[int, int, int, int] | None]:
+    """Capture source identity from no-follow/no-atime descriptors only."""
+    if isinstance(source_path, Path):
+        with _open_snapshot_source_path(source_path) as source:
+            return _source_snapshot_fingerprint(source)
+
+    fingerprint: dict[str, tuple[int, int, int, int] | None] = {}
+    for suffix in _SNAPSHOT_SUFFIXES:
+        try:
+            descriptor = _open_snapshot_source(source_path, suffix)
+        except FileNotFoundError:
+            fingerprint[suffix] = None
+            continue
+        except OSError as error:
+            raise _snapshot_read_error(suffix, error) from error
+        try:
+            fingerprint[suffix] = _descriptor_fingerprint(descriptor)
+        finally:
+            os.close(descriptor)
+    return fingerprint
+
+
 @contextmanager
-def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | None] | None]:
+def _sqlite_snapshot_boundary(
+    source: _SnapshotSource,
+) -> Iterator[tuple[int, int | None] | None]:
     """Freeze SQLite main-file writes and WAL coordination using OS locks only.
 
     Linux open-file-description locks conflict with SQLite's POSIX locks even
@@ -347,7 +486,7 @@ def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | No
     checkpoints, and recovery. Other platforms fail closed before any copy.
     """
     try:
-        main_descriptor = _open_snapshot_source(source_path, "")
+        main_descriptor = _open_snapshot_source(source, "")
     except FileNotFoundError:
         yield None
         return
@@ -368,9 +507,7 @@ def _sqlite_snapshot_boundary(source_path: Path) -> Iterator[tuple[int, int | No
             "main",
         )
         try:
-            shm_descriptor = _open_snapshot_source(
-                Path(f"{source_path}-shm"), "-shm"
-            )
+            shm_descriptor = _open_snapshot_source(source, "-shm")
         except FileNotFoundError:
             pass
         except OSError as error:
@@ -409,7 +546,7 @@ def _copy_open_file(file_descriptor: int, destination: Path) -> None:
 
 @contextmanager
 def _open_snapshot_file_set(
-    source_path: Path,
+    source: _SnapshotSource,
     fingerprint: dict[str, tuple[int, int, int, int] | None],
     locked_descriptors: tuple[int, int | None],
 ) -> Iterator[dict[str, int] | None]:
@@ -424,9 +561,7 @@ def _open_snapshot_file_set(
             if fingerprint[suffix] is None:
                 continue
             try:
-                descriptor = _open_snapshot_source(
-                    Path(f"{source_path}{suffix}"), suffix
-                )
+                descriptor = _open_snapshot_source(source, suffix)
             except FileNotFoundError:
                 yield None
                 return
@@ -458,22 +593,25 @@ def _snapshot_descriptors_match(
     return True
 
 
-def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Path | None:
+def _copy_stable_database_snapshot(
+    source: _SnapshotSource, private_root: Path
+) -> Path | None:
     """Copy a locked SQLite file set that remains unchanged across the complete copy."""
     for attempt in range(1, _SNAPSHOT_COPY_ATTEMPTS + 1):
         attempt_directory = private_root / f"attempt-{attempt}"
         attempt_directory.mkdir()
         private_path = attempt_directory / "snapshot.sqlite3"
         copy_succeeded = True
-        with _sqlite_snapshot_boundary(source_path) as descriptors:
-            before = _source_snapshot_fingerprint(source_path)
+        source.validate_parent_chain()
+        with _sqlite_snapshot_boundary(source) as descriptors:
+            before = _source_snapshot_fingerprint(source)
             copied_suffix = ""
             try:
                 if descriptors is None:
                     copy_succeeded = before[""] is None
                 else:
                     with _open_snapshot_file_set(
-                        source_path, before, descriptors
+                        source, before, descriptors
                     ) as source_descriptors:
                         copy_succeeded = (
                             source_descriptors is not None
@@ -493,21 +631,14 @@ def _copy_stable_database_snapshot(source_path: Path, private_root: Path) -> Pat
                 copy_succeeded = False
             except OSError as error:
                 raise _snapshot_read_error(copied_suffix, error) from error
-            after = _source_snapshot_fingerprint(source_path)
+            after = _source_snapshot_fingerprint(source)
+        source.validate_parent_chain()
 
         if copy_succeeded and before == after:
             return private_path if before[""] is not None else None
         shutil.rmtree(attempt_directory)
 
-    raise NomnomError(
-        "database_snapshot_unstable",
-        "Database changed while creating a read-only snapshot",
-        details={
-            "attempts": _SNAPSHOT_COPY_ATTEMPTS,
-            "would_write": False,
-            "action": "Wait for active database writes to finish, then retry resolution.",
-        },
-    )
+    raise _snapshot_unstable_path_error()
 
 
 @contextmanager
@@ -530,10 +661,12 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
     db_path = Path(path) if path is not None else default_db_path()
     connection = sqlite3.connect(":memory:")
     try:
-        source_path = db_path.resolve()
-        with tempfile.TemporaryDirectory(
-            prefix="nomnomcli-read-only-"
-        ) as temporary_directory:
+        with (
+            _open_snapshot_source_path(db_path) as source_path,
+            tempfile.TemporaryDirectory(
+                prefix="nomnomcli-read-only-"
+            ) as temporary_directory,
+        ):
             private_path = _copy_stable_database_snapshot(
                 source_path, Path(temporary_directory)
             )

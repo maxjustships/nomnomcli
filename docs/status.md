@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: final semantic planning review complete
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Fixed final-review P1 by requiring exact name/lookup/alias, barcode/SKU, or matching-brand identity before any raw `exact_product` plan; conflicting partial pins now continue to safe candidates or refuse without writes.
+- Fixed final-review P2 with Linux descriptor-relative no-follow traversal, no-atime SQLite opens, descriptor fingerprints, and parent-chain race validation; final, parent, and sidecar symlinks refuse without metadata/content changes.
+- Passed 96 semantic tests, 320 full tests, Ruff, diff checks, source-traversal audit, and historical-document absence audit.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,12 +33,14 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- None; the final-review fixes are verified and ready in the requested local commit.
 
 ## Next
 - Do not push, merge, or open a pull request unless the user requests it separately.
 
 ## Decisions Made
+- Final review: raw exact identity must be proven independently of ranked-cache confidence before semantic planning can emit `exact_product`.
+- Final review: snapshot traversal will use descriptor-relative Linux opens for every component and source file; no `Path.resolve()` or path-based source `stat()` is allowed.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -97,6 +102,7 @@ ruff check .
 | 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
 | 2026-07-21 | M28 | issue #31 tests and planning records | targeted pytest before production edits | RED: 16 expected failures; 1 strict-path pass | M29 |
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
+| 2026-07-21 | M31–M33 | resolver identity, descriptor snapshots, regressions, planning records | `rtk pytest -q tests/test_semantic.py`; `rtk pytest -q`; `rtk ruff check .`; diff/docs audit | 96 semantic; 320 full; clean | local commit, no push |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.
@@ -119,3 +125,5 @@ ruff check .
 - [x] Issue #29 literal six-item temp-data smoke returns only explicit generic proxies with audited OFF candidate identity.
 - [x] Issue #31 exact breakfast logs atomically with four explicit agent estimates and two unflagged explicit-gram items.
 - [x] Issue #31 date stats preserve the four portion provenance objects and one concise correction route.
+- [x] Conflicting partial branded pins cannot surface as raw exact plans; exact pin/alias/barcode/brand identity remains green.
+- [x] Final, parent, and sidecar symlinks preserve stale metadata/content on structured refusal; ordinary/OFD/WAL/rollback/MEMORY/OFF paths remain green.

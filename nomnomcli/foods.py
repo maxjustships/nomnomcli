@@ -751,6 +751,8 @@ class FoodRepository:
     def _raw_record_satisfies_exact_intent(self, query: str, food: Food) -> bool:
         if food.resolution_mode != "exact_product":
             return False
+        if normalize_name(food.name) == normalize_name(query):
+            return True
         if _exact_product_intent(query, food):
             return True
         alias = self._alias_target(query)
@@ -875,6 +877,20 @@ class FoodRepository:
                 evidence=evidence,
             )
             self._validate_plan_confidence(food, confidence)
+            if (
+                food.resolution_mode == "exact_product"
+                and not self._raw_record_satisfies_exact_intent(original_query, food)
+            ):
+                raise NomnomError(
+                    "exact_resolution_required",
+                    f"Exact product identity does not match: {original_query}",
+                    details={
+                        "would_write": False,
+                        "original": original_query,
+                        "candidate": _candidate_details(food, confidence),
+                        "action": EXACT_CAPTURE_ACTION,
+                    },
+                )
         except NomnomError as exc:
             if exc.code == "provider_confidence_invalid":
                 raise

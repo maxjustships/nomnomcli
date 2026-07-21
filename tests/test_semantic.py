@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -1024,7 +1025,7 @@ def test_cli_unreadable_snapshot_sidecar_is_structured_without_source_writes(
     real_open = database_module.os.open
 
     def refuse_sidecar_read(path, flags, *args, **kwargs):
-        if Path(path) == sidecar:
+        if path == sidecar.name and kwargs.get("dir_fd") is not None:
             assert flags & database_module.os.O_NOATIME
             raise PermissionError(errno.EACCES, "sidecar is unreadable", path)
         return real_open(path, flags, *args, **kwargs)
@@ -1140,6 +1141,139 @@ def test_cli_resolve_preserves_stale_source_atime_mtime_and_content(
         writer.close()
 
 
+@pytest.mark.parametrize("symlink_kind", ["final", "parent"])
+def test_cli_resolve_rejects_stale_atime_symlink_without_metadata_or_source_changes(
+    tmp_path, monkeypatch, capsys, symlink_kind
+):
+    source_directory = tmp_path / "source"
+    source_directory.mkdir()
+    database = source_directory / "safe.sqlite3"
+    original = "Symlink-safe chicken"
+    with connect(database) as connection:
+        pinned = Food(
+            name=original,
+            kcal=165,
+            protein=31,
+            fat=3.6,
+            carbs=1,
+            source="user",
+            resolution_mode="exact_product",
+            source_id="symlink-safe-pin",
+            provenance="user",
+        )
+        FoodRepository(connection)._cache_food(pinned, lookup_query=original)
+
+    if symlink_kind == "final":
+        supplied_path = tmp_path / "supplied.sqlite3"
+        supplied_path.symlink_to(database)
+        symlink = supplied_path
+        snapshot_target = "main"
+    else:
+        linked_directory = tmp_path / "linked-source"
+        linked_directory.symlink_to(source_directory, target_is_directory=True)
+        supplied_path = linked_directory / database.name
+        symlink = linked_directory
+        snapshot_target = "parent"
+
+    link_content = os.readlink(symlink)
+    source_content = database.read_bytes()
+    stale_atime_ns = 946_684_800_000_000_000
+    initial = os.lstat(symlink)
+    os.utime(
+        symlink,
+        ns=(stale_atime_ns, initial.st_mtime_ns),
+        follow_symlinks=False,
+    )
+    before = os.lstat(symlink)
+    before_metadata = (
+        before.st_atime_ns,
+        before.st_mtime_ns,
+        before.st_size,
+        before.st_ino,
+    )
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(supplied_path))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    after = os.lstat(symlink)
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["error"]["code"] == "database_snapshot_unsafe_path"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["snapshot_target"] == snapshot_target
+    assert (
+        after.st_atime_ns,
+        after.st_mtime_ns,
+        after.st_size,
+        after.st_ino,
+    ) == before_metadata
+    assert database.read_bytes() == source_content
+    assert os.readlink(symlink) == link_content
+
+
+def test_cli_resolve_rejects_stale_atime_sidecar_symlink_without_changes(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "safe.sqlite3"
+    with connect(database):
+        pass
+    sidecar_target = tmp_path / "foreign-wal"
+    sidecar_target.write_bytes(b"not a SQLite WAL")
+    sidecar = Path(f"{database}-wal")
+    sidecar.symlink_to(sidecar_target)
+    link_content = os.readlink(sidecar)
+    source_content = database.read_bytes()
+    target_content = sidecar_target.read_bytes()
+    stale_atime_ns = 946_684_800_000_000_000
+    initial = os.lstat(sidecar)
+    os.utime(
+        sidecar,
+        ns=(stale_atime_ns, initial.st_mtime_ns),
+        follow_symlinks=False,
+    )
+    before = os.lstat(sidecar)
+    before_metadata = (before.st_atime_ns, before.st_mtime_ns, before.st_size)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "Safe chicken",
+            "--intent-json",
+            json.dumps(_intent("Safe chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)
+
+    after = os.lstat(sidecar)
+    assert code == 2
+    assert captured.out == ""
+    assert error["error"]["code"] == "database_snapshot_unsafe_path"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["snapshot_target"] == "wal"
+    assert (after.st_atime_ns, after.st_mtime_ns, after.st_size) == before_metadata
+    assert database.read_bytes() == source_content
+    assert sidecar_target.read_bytes() == target_content
+    assert os.readlink(sidecar) == link_content
+
+
 @pytest.mark.parametrize(
     ("suffix", "snapshot_target"),
     [("", "main"), ("-wal", "wal")],
@@ -1158,7 +1292,7 @@ def test_cli_snapshot_noatime_unavailable_is_structured_and_does_not_copy(
     source_open_flags = []
 
     def refuse_noatime(path, flags, *args, **kwargs):
-        if Path(path) == denied_path:
+        if path == denied_path.name and kwargs.get("dir_fd") is not None:
             source_open_flags.append(flags)
             if flags & getattr(database_module.os, "O_NOATIME", 0):
                 raise OSError(open_errno, "O_NOATIME unavailable", path)
@@ -1793,6 +1927,108 @@ def test_exact_local_barcode_or_pin_still_returns_raw_plan(repository, original,
     assert plan["resolution_mode"] == "exact_product"
     assert plan["source_id"] == food.source_id
     assert plan["would_write"] is False
+
+
+def test_exact_local_alias_still_returns_raw_plan(repository):
+    canonical = Food(
+        name="Pinned Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="pin-acme-alias",
+        provenance="user",
+    )
+    repository._cache_food(canonical, lookup_query=canonical.name)
+    repository.add_alias("my chicken", canonical.name)
+    intent = parse_resolution_intent(
+        json.dumps(_intent("my chicken", [])),
+        expected_original="my chicken",
+    )
+
+    plan = repository.plan_resolution("my chicken", intent=intent, allow_remote=False)
+
+    assert plan["retrieval_query"] == "my chicken"
+    assert plan["resolution_mode"] == "exact_product"
+    assert plan["source_id"] == canonical.source_id
+    assert plan["would_write"] is False
+
+
+def test_conflicting_partial_pinned_brand_never_returns_raw_exact_plan(repository):
+    original = "Other chicken"
+    conflicting = Food(
+        name="Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="pin-acme-conflict",
+        provenance="user",
+    )
+    repository._cache_food(conflicting, lookup_query=conflicting.name)
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(_intent(original, [])),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert caught.value.code in {"exact_resolution_required", "semantic_resolution_not_found"}
+    assert caught.value.details["would_write"] is False
+    assert _counts(repository) == before
+
+
+def test_conflicting_partial_pinned_brand_continues_to_safe_semantic_candidate(
+    repository,
+):
+    original = "Other chicken"
+    conflicting = Food(
+        name="Acme chicken",
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="user",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="pin-acme-conflict",
+        provenance="user",
+    )
+    proxy, _ = _generic_food("tofu")
+    proxy = replace(
+        proxy,
+        resolution_mode="generic_proxy",
+        assumption="Used declared semantic food candidate: tofu.",
+    )
+    repository._cache_food(conflicting, lookup_query=conflicting.name)
+    repository._cache_food(proxy, lookup_query="tofu")
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": "tofu", "relation": "lexical_equivalent"}],
+            )
+        ),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert plan["retrieval_query"] == "tofu"
+    assert plan["resolution_mode"] == "generic_proxy"
+    assert plan["would_write"] is False
+    assert _counts(repository) == before
 
 
 def test_nonmatching_raw_cache_brand_does_not_infer_exact_intent(repository):
