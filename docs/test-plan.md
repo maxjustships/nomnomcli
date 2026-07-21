@@ -1,25 +1,5 @@
 # Test Plan
 
-## Architecture guardrail P2 follow-up
-- In scope: sdist inclusion of canonical contracts and the tiny food fixture, Git-index scanning in checkouts, filesystem scanning in Git-free archives, generated-artifact exclusions, and stable installed Hermes skill links.
-- Out of scope: runtime food resolution, CLI behavior, schemas, providers, live traffic, user databases, and production food payloads.
-- The archive regression builds from a Git-free source copy, extracts the sdist, checks required members, and runs the shipped `tests/test_data_quality.py` in place.
-
-### Acceptance Gates
-- [x] Focused data-quality and sdist regression tests pass — 15 passed.
-- [x] Real isolated sdist/extract data-quality smoke passes without Git metadata — 14 passed.
-- [x] Full `PYTHONPATH=. pytest -q` passes — 232 passed.
-- [x] `ruff check .` and `git diff --check` pass.
-- [x] Complete diff/status audit shows only scoped docs, packaging, and tests; one conventional local commit is the final step and nothing is pushed.
-
-### Command Matrix
-```sh
-PYTHONPATH=. pytest -q tests/test_data_quality.py tests/test_sdist.py
-PYTHONPATH=. pytest -q
-ruff check .
-git diff --check
-```
-
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.

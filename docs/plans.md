@@ -1,27 +1,5 @@
 # Plans
 
-## Architecture guardrail follow-up
-- Task: Fix all P2 review findings for sdist completeness, Git-free data-quality checks, and installed skill links.
-- Scope: packaging metadata, architecture tests, and documentation links only; no runtime resolver, CLI, semantic, provider, schema, or food-data changes.
-- Last updated: 2026-07-21
-
-| ID | Title | Depends on | Status |
-| --- | --- | --- | --- |
-| M31 | Ship architecture contracts and test fixtures in sdist | M30 | [x] |
-| M32 | Support strict Git checkout and Git-free archive scans | M31 | [x] |
-| M33 | Repair installed skill links, verify, and commit | M32 | [x] |
-
-### Validation
-```sh
-PYTHONPATH=. pytest -q tests/test_data_quality.py tests/test_sdist.py
-PYTHONPATH=. pytest -q
-ruff check .
-git diff --check
-```
-
-### Stop-and-Fix Rule
-- Do not commit until an isolated sdist extraction contains the contracts and fixture, its shipped data-quality tests pass without Git, and all repository gates are green.
-
 ## Issue #31 Source
 - Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
 - Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.
