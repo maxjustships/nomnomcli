@@ -131,20 +131,27 @@ def _query_has_sku(query: str) -> bool:
     normalized = normalize_name(query)
     if re.search(r"(?<!\w)\d{4,}(?!\w)", normalized):
         return True
-    if re.search(
-        r"(?<!\w)sku(?:\s*:\s*|\s+)(?=[a-z0-9_-]*\d)"
-        r"[a-z0-9]+(?:[-_][a-z0-9]+)*(?!\w)",
+    separated_sku = re.search(
+        r"(?<!\w)sku(?:\s*:\s*|\s+)"
+        r"(?P<identifier>[^\W_]+(?:[-_][^\W_]+)*)(?!\w)",
         normalized,
+    )
+    if separated_sku and any(
+        character.isdigit() for character in separated_sku.group("identifier")
     ):
         return True
-    if re.search(r"(?<!\w)sku[a-z0-9_-]*\d[a-z0-9_-]*(?!\w)", normalized):
-        return True
     identifiers = re.findall(
-        r"(?<!\w)[a-z0-9]+(?:[-_][a-z0-9]+)*(?!\w)", normalized
+        r"(?<!\w)[^\W_]+(?:[-_][^\W_]+)*(?!\w)", normalized
     )
     return any(
-        sum(character.isalpha() for character in identifier) >= 2
-        and sum(character.isdigit() for character in identifier) >= 4
+        (
+            identifier.startswith("sku")
+            and any(character.isdigit() for character in identifier[3:])
+        )
+        or (
+            sum(character.isalpha() for character in identifier) >= 2
+            and sum(character.isdigit() for character in identifier) >= 4
+        )
         for identifier in identifiers
     )
 
@@ -156,7 +163,11 @@ def _semantic_rewrite_drops_original_tokens(
     original_tokens = _name_tokens(original)
     return any(
         (candidate_tokens := _name_tokens(candidate.query))
-        and bool(original_tokens & candidate_tokens)
+        and any(
+            character.isalpha()
+            for token in original_tokens & candidate_tokens
+            for character in token
+        )
         and bool(original_tokens - candidate_tokens)
         for candidate in candidates
     )

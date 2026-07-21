@@ -865,6 +865,7 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
         "SKUABC123",
         "курица SKU 12345",
         "курица SKU: ABC-123",
+        "курица АБ12345",
     ],
 )
 def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
@@ -1041,6 +1042,7 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
         "курица SKU : ABC_123",
         "курица ABC-12345",
         "курица ABC_12345",
+        "курица АБ12345",
     ],
 )
 def test_alphanumeric_sku_variants_require_exact_resolution(
@@ -1081,6 +1083,8 @@ def test_alphanumeric_sku_variants_require_exact_resolution(
         ("milk 3%", "dairy drink"),
         ("3 eggs", "omelette"),
         ("vitamin B12", "cobalamin"),
+        ("vitamin D3", "cholecalciferol"),
+        ("soup, 3 portions", "broth"),
         ("SKU chicken", "poultry"),
         ("chicken SKU", "poultry"),
         ("SKU: chicken", "poultry"),
@@ -1115,6 +1119,60 @@ def test_ordinary_food_expression_is_not_treated_as_sku(
     assert plan["resolution_mode"] == "generic_proxy"
     assert plan["would_write"] is False
     assert _counts(repository) == before
+
+
+def test_cli_cross_language_numeric_overlap_uses_visible_proxy_without_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "молоко 3%"
+    semantic_query = "milk 3%"
+    cached, _ = _generic_food(semantic_query, source_id="171265")
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: milk 3%.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query=semantic_query)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": semantic_query, "relation": "lexical_equivalent"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    plan = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert plan["would_write"] is False
+    assert plan["original"] == original
+    assert plan["retrieval_query"] == semantic_query
+    assert plan["candidate_index"] == 0
+    assert plan["relation"] == "lexical_equivalent"
+    assert plan["provider_assumption"] == (
+        "Brand not specified; used USDA generic proxy: milk 3%."
+    )
+    assert plan["provider"] == "usda"
+    assert plan["source"] == "usda"
+    assert plan["source_id"] == "171265"
+    assert plan["resolution_mode"] == "generic_proxy"
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
 
 
 def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
