@@ -81,6 +81,14 @@ def _candidate_details(food: Food, confidence: float) -> dict:
     }
 
 
+def _confidence_error_details(
+    confidence: float, *, rounded: bool = False
+) -> dict[str, float | str]:
+    if math.isfinite(confidence):
+        return {"confidence": round(confidence, 2) if rounded else confidence}
+    return {"reason": "non_finite_confidence"}
+
+
 def _brand_matches_query(food: Food, query: str) -> bool:
     if not food.brand:
         return False
@@ -450,7 +458,7 @@ class FoodRepository:
                         "source_id": str(food.fdc_id) if food.fdc_id is not None else None,
                         "data_type": food.provider_data_type,
                         "brand": food.brand,
-                        "confidence": round(confidence, 2),
+                        **_confidence_error_details(confidence, rounded=True),
                     },
                     "action": EXACT_CAPTURE_ACTION,
                 },
@@ -868,6 +876,8 @@ class FoodRepository:
             )
             self._validate_plan_confidence(food, confidence)
         except NomnomError as exc:
+            if exc.code == "provider_confidence_invalid":
+                raise
             original_error = exc
         else:
             raw_resolution = (food, confidence)
@@ -911,6 +921,8 @@ class FoodRepository:
                         details={"resolution_mode": food.resolution_mode},
                     )
             except NomnomError as exc:
+                if exc.code == "provider_confidence_invalid":
+                    raise
                 failures.append(
                     {
                         "candidate_index": index,
@@ -965,7 +977,12 @@ class FoodRepository:
             raise NomnomError(
                 "provider_confidence_invalid",
                 "Provider confidence must be finite and between 0 and 1",
-                details={"confidence": confidence},
+                details={
+                    "would_write": False,
+                    **_confidence_error_details(confidence),
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
             )
         threshold = (
             USDA_CONFIDENCE_FLOOR

@@ -238,6 +238,54 @@ def test_cli_rejects_non_finite_intent_constants_with_strict_json_error(
     assert not database.exists()
 
 
+@pytest.mark.parametrize(
+    "confidence",
+    [float("nan"), float("inf"), float("-inf")],
+    ids=("nan", "positive-infinity", "negative-infinity"),
+)
+def test_cli_rejects_non_finite_provider_confidence_with_strict_json_error(
+    user_db, monkeypatch, capsys, confidence
+):
+    original = "chicken breast roasted"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "test-key")
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(
+        "nomnomcli.usda.USDAClient.resolve",
+        lambda client, query, api_key: _generic_food(query, confidence=confidence),
+    )
+    with connect(user_db):
+        pass
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert error["code"] == "provider_confidence_invalid"
+    assert error["would_write"] is False
+    assert error["details"] == {
+        "would_write": False,
+        "reason": "non_finite_confidence",
+        "minimum": 0.0,
+        "maximum": 1.0,
+    }
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
 def test_raw_original_safe_resolution_wins_without_trying_semantic_candidates(
     repository, monkeypatch
 ):
