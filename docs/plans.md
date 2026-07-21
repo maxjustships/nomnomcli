@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Raw-Brand Boundary Source
+- Task: Treat a matching brand on raw local or migrated legacy cache results as hard exact intent at the central planning boundary.
+- Canonical input: Final-review P2 with raw branded-cache refusal, exact local pin/barcode preservation, nonmatching-brand controls, full validation, local commit, and no push/PR.
+- Repo context: `FoodRepository._protect_original_intent`, runtime brand-token matching, semantic CLI regressions, and Phase A no-write guarantees.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Raw-Brand Boundary Assumptions
+- Raw cache brand evidence uses the same token-normalizing helper as remote provider brand evidence; no static brand corpus or source mutation is introduced.
+- A matching raw brand creates hard exact intent regardless of `legacy` or `generic_proxy` mode, but a matching `exact_product` local pin/barcode remains valid through `_raw_record_satisfies_exact_intent`.
+- A nonmatching raw brand does not create hard exact intent, so existing ordinary raw-first behavior remains unchanged.
+
+## Issue #33 Phase A Raw-Brand Boundary Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M49 | Reproduce raw branded-cache bypass and freeze controls | M48 | [x] |
+| M50 | Add raw brand evidence to the central intent boundary | M49 | [x] |
+| M51 | Run full gates, audit, and commit | M50 | [x] |
+
+## M49. Reproduce raw branded-cache bypass and freeze controls `[x]`
+### Goal
+- Raw local/migrated cache rows branded `Acme` for original `Acme chicken` fail RED when non-exact, while matching exact pins and nonmatching brand rows keep their current behavior.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'raw_cache_brand or exact_local_barcode_or_pin'
+```
+
+### Stop-and-Fix Rule
+- Do not change production behavior until the matching-brand regression fails for the reviewed early-return reason and both controls remain green.
+
+## M50. Protect raw matching brands centrally `[x]`
+### Goal
+- `_protect_original_intent` treats a matching `raw_food.brand` as hard exact intent using the existing runtime brand-token helper, then delegates valid exact records to the existing exact-intent predicate.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any false block for a nonmatching brand, rejection of a matching exact pin/barcode, source mutation, or unrelated Phase A behavior change blocks M51.
+
+## M51. Verify and commit the raw-brand boundary fix `[x]`
+### Goal
+- Targeted and full pytest, repository-wide Ruff, diff checks, and scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass and the diff contains only the raw-brand exact-intent fix, regressions, and execution records.
+
 ## Issue #33 Phase A Exact-Intent Boundary Follow-up Source
 - Task: Fix raw-cache dropped-token and OFF-brand-evidence exact-intent bypasses without changing Phase A persistence or application behavior.
 - Canonical input: Two independent-review P2 findings plus targeted/full pytest, Ruff, diff, no-write smoke, local commit, and no-push requirements.

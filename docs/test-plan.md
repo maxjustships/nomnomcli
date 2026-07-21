@@ -1,5 +1,31 @@
 # Test Plan
 
+## Issue #33 Phase A Raw-Brand Boundary Validation
+- In scope: matching brand metadata on raw local/migrated legacy cache results, non-exact generic planning, matching exact local pins/barcodes, nonmatching raw brands, raw-first behavior, and source immutability.
+- Out of scope: provider ordering changes, schema/policy/log changes, static brand data, live providers, push, or PR operations.
+- Fixtures: synthetic `Acme chicken` cache rows with `brand=Acme`, a matching `exact_product` pin, a disjoint cached candidate, and byte-audited temporary SQLite state.
+
+### Critical Scenarios
+- Original `Acme chicken`, `brand_intent:false`, and a raw migrated `legacy` cache hit carrying brand `Acme` refuses with `exact_resolution_required` before a non-exact raw plan can return; source files remain identical.
+- A matching local `exact_product` pin/barcode continues to return a raw read-only plan through `_raw_record_satisfies_exact_intent`.
+- A raw row whose brand does not match the original does not falsely create hard exact intent and retains ordinary raw-first planning behavior.
+
+### Acceptance Gates
+- [x] Matching-brand raw-cache regression observed RED; four exact-pin/barcode and nonmatching-brand controls remained green.
+- [x] Targeted semantic/food/CLI tests pass — 118 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 263 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] One conventional local commit contains only the scoped fix and execution records; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'raw_cache_brand or exact_local_barcode_or_pin'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Exact-Intent Boundary Follow-up Validation
 - In scope: raw-cache dropped-token specificity, matching OFF brand evidence across USDA failure/not-found, nonmatching provider-brand control behavior, actual exact local pins/barcodes, ordinary raw-first behavior, and Phase A no-write guarantees.
 - Out of scope: Phase B plan/log application, schema or policy changes, static brand/synonym datasets, live providers, push, or PR operations.

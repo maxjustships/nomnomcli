@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A exact-intent boundary follow-up completed
+- Current phase: issue #33 Phase A raw-brand exact-intent boundary completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Fixed the final raw-brand P2 by treating matching brand metadata on raw local/migrated cache results as hard exact intent in `_protect_original_intent`, using the same normalized runtime helper as provider evidence.
+- Added a migrated legacy branded-cache CLI refusal with exact source-state preservation, strengthened the matching exact local-pin control, and added a nonmatching raw-brand control.
+- Recorded the matching-brand regression RED with four controls green, then passed 5 focused tests, 118 targeted tests, 263 full tests, repository-wide Ruff, and diff checks.
 - Centralized original-intent inference/protection before raw-plan return or semantic-candidate acceptance, including declared brand/SKU intent, dropped-token specificity, and provider-observed matching-brand evidence.
 - Added raw legacy/generic cache and OFF-brand-plus-USDA-failure CLI regressions with exact byte/schema/count/directory no-write assertions; preserved ordinary raw-first behavior, exact local pins/barcodes, and the nonmatching-brand control.
 - Recorded both regressions RED, then passed 116 targeted tests, 261 full tests, repository-wide Ruff, diff checks, and a disposable subprocess refusal smoke with identical source bytes and entries.
@@ -51,9 +54,11 @@
 - No implementation work pending.
 
 ## Next
-- None; create the requested local conventional commit, with no push or pull request.
+- Create the requested local conventional commit, then stop without pushing or opening a PR.
 
 ## Decisions Made
+- Raw cache brands will use `_provider_brand_evidence_matches_query`, keeping runtime brand-token semantics identical across raw and remote evidence.
+- The existing `_raw_record_satisfies_exact_intent` remains the sole positive escape hatch for matching local `exact_product` pins/barcodes.
 - Exact-intent follow-up: infer all original specificity at one planner boundary before returning a raw plan or considering semantic candidates.
 - Exact-intent follow-up: carry matching OFF brand evidence as resolution-attempt state so later USDA exceptions cannot erase it; do not infer from unrelated provider brands.
 - Exact-intent follow-up: hard exact evidence requires a matching `exact_product`; conservative dropped-token inference may also pass a raw generic result that preserves every original query token.
@@ -103,6 +108,8 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M50–M51 raw-brand boundary | `nomnomcli/foods.py`, semantic regressions, execution docs | 5 focused; 118 targeted; 263 full; Ruff; diff check | pass; matching brand refuses without writes, exact/nonmatching controls green | local commit |
+| 2026-07-21 | M49 raw-brand boundary | semantic regressions and execution docs | focused pytest | RED: matching legacy brand returned a raw plan; four exact/nonmatching controls passed | M50 |
 | 2026-07-21 | M46–M48 exact-intent follow-up | `nomnomcli/foods.py`, semantic regressions, execution docs | focused RED/GREEN; 116 targeted; 261 full; Ruff; diff check; disposable no-write smoke | pass; exact refusal and source bytes/entries unchanged | local commit |
 | 2026-07-21 | M45 final safety findings | scoped production/test/docs diff | 258 full pytest; full Ruff; diff check; disposable hot-journal CLI smoke | pass; committed row recovered and exact source main/journal hashes and entries unchanged | local commit |
 | 2026-07-21 | M44 final safety findings | `nomnomcli/db.py`, `nomnomcli/foods.py`, regressions, docs | 122 targeted pytest; focused Ruff; pending-WAL regression | pass; rollback recovery and brand-only exact refusal green; non-brand control green | M45 |

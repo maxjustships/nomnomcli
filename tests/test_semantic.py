@@ -143,6 +143,17 @@ def _create_legacy_sku_cache_database(path) -> None:
         )
 
 
+def _create_legacy_brand_cache_database(path) -> None:
+    _create_legacy_database(path, 2)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, brand, lookup_query)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("Acme chicken", 165, 31, 3.6, 1, "legacy fixture", "Acme", "Acme chicken"),
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -807,6 +818,43 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     } == original_files
 
 
+def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
+    tmp_path, monkeypatch, capsys
+):
+    database = tmp_path / "legacy-brand.sqlite3"
+    _create_legacy_brand_cache_database(database)
+    original_state = _database_state(database)
+    original_files = _directory_file_state(tmp_path)
+    original = "Acme chicken"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": "tofu", "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(database) == original_state
+    assert _directory_file_state(tmp_path) == original_files
+
+
 @pytest.mark.parametrize(
     ("original", "food"),
     [
@@ -848,6 +896,7 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
                 fat=3.6,
                 carbs=1,
                 source="user",
+                brand="Acme",
                 resolution_mode="exact_product",
                 source_id="pin-acme-chicken",
                 provenance="user",
@@ -870,6 +919,43 @@ def test_exact_local_barcode_or_pin_still_returns_raw_plan(repository, original,
     assert plan["resolution_mode"] == "exact_product"
     assert plan["source_id"] == food.source_id
     assert plan["would_write"] is False
+
+
+def test_nonmatching_raw_cache_brand_does_not_infer_exact_intent(repository):
+    original = "Other chicken"
+    cached = Food(
+        name=original,
+        kcal=165,
+        protein=31,
+        fat=3.6,
+        carbs=1,
+        source="legacy fixture",
+        brand="Acme",
+        resolution_mode="legacy",
+        source_id="legacy-other-chicken",
+        provenance="legacy fixture",
+    )
+    repository._cache_food(cached, lookup_query=original)
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": "tofu", "relation": "same_form"}],
+                brand_intent=False,
+            )
+        ),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert plan["retrieval_query"] == original
+    assert plan["resolution_mode"] == "legacy"
+    assert plan["source_id"] == cached.source_id
+    assert plan["would_write"] is False
+    assert _counts(repository) == before
 
 
 def test_cli_raw_cache_dropped_token_requires_exact_resolution_without_source_writes(

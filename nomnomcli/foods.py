@@ -723,10 +723,14 @@ class FoodRepository:
         evidence: _ResolutionEvidence,
         raw_food: Food | None,
     ) -> None:
+        raw_brand_matches = raw_food is not None and _provider_brand_evidence_matches_query(
+            raw_food.brand, original_query
+        )
         hard_exact_intent = (
             intent.brand_intent
             or _query_has_sku(original_query)
             or evidence.matching_provider_brand
+            or raw_brand_matches
         )
         dropped_token_specificity = _semantic_rewrite_drops_original_tokens(
             original_query, intent.candidates
