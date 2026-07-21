@@ -1461,6 +1461,112 @@ finally:
     assert _directory_file_state(user_db.parent) == before
 
 
+def test_cli_snapshot_helper_ignores_hostile_cwd_imports(
+    tmp_path, monkeypatch, capsys
+):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    database = source_root / "food.sqlite3"
+    original = "Trusted helper chicken"
+    with connect(database) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, lookup_query,
+             resolution_mode, source_id, provenance)
+            VALUES (?, 165, 31, 3.6, 1, 'user', ?,
+                    'exact_product', 'trusted-helper-pin', 'user')""",
+            (original, original),
+        )
+    original_state = _database_state(database)
+    original_files = _directory_file_state(source_root)
+
+    hostile_cwd = tmp_path / "hostile-cwd"
+    shadow_package = hostile_cwd / "nomnomcli"
+    shadow_package.mkdir(parents=True)
+    site_marker = tmp_path / "sitecustomize-ran"
+    shadow_marker = tmp_path / "shadow-helper-ran"
+    (hostile_cwd / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(site_marker)!r}).write_text('ran')\n"
+    )
+    (shadow_package / "__init__.py").write_text("")
+    (shadow_package / "_snapshot_helper.py").write_text(
+        f"from pathlib import Path\nPath({str(shadow_marker)!r}).write_text('ran')\n"
+        "raise SystemExit(73)\n"
+    )
+
+    monkeypatch.chdir(hostile_cwd)
+    monkeypatch.setenv("PYTHONPATH", str(hostile_cwd))
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert output["would_write"] is False
+    assert output["source_id"] == "trusted-helper-pin"
+    assert not site_marker.exists()
+    assert not shadow_marker.exists()
+    assert _database_state(database) == original_state
+    assert _directory_file_state(source_root) == original_files
+
+
+def test_cli_snapshot_missing_trusted_helper_is_structured_without_source_changes(
+    user_db, tmp_path, monkeypatch, capsys
+):
+    with connect(user_db):
+        pass
+    before = _directory_file_state(user_db.parent)
+    missing_package = tmp_path / "missing-package"
+    missing_package.mkdir()
+    fake_db_module = missing_package / "db.py"
+    fake_db_module.write_text("# loaded-module path fixture\n")
+    monkeypatch.setattr(
+        database_module,
+        "__file__",
+        str(fake_db_module),
+    )
+    monkeypatch.setattr(
+        database_module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(
+            "snapshot subprocess started without a trusted helper"
+        ),
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            "missing helper chicken",
+            "--intent-json",
+            json.dumps(_intent("missing helper chicken", [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "database_snapshot_helper_failed"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert _directory_file_state(user_db.parent) == before
+
+
 def test_cli_snapshot_helper_timeout_is_structured_without_source_changes(
     user_db, monkeypatch, capsys
 ):
@@ -1469,8 +1575,15 @@ def test_cli_snapshot_helper_timeout_is_structured_without_source_changes(
     before = _directory_file_state(user_db.parent)
 
     def time_out(*args, **kwargs):
+        command = args[0]
+        assert command[0] == sys.executable
+        assert command[1:3] == ["-I", "-S"]
+        assert command[-1].endswith("nomnomcli/_snapshot_helper.py")
+        assert kwargs["close_fds"] is True
+        assert kwargs["env"].get("PYTHONPATH") is None
+        assert kwargs["env"].get("PYTHONHOME") is None
         raise subprocess.TimeoutExpired(
-            args[0] if args else "snapshot-helper",
+            command,
             kwargs["timeout"],
         )
 
@@ -2293,9 +2406,15 @@ def test_cli_snapshot_unstable_returns_structured_refusal_without_source_writes(
         "курица SKU: ABC-123",
         "курица SKU : ABC_123",
         "курица SKU: ABC/123",
+        "курица SKU#ABC123",
+        "курица SKU(ABC/123)",
+        "курица SKU_АБВ123",
         "курица ABC-12345",
         "курица ABC_12345",
+        "курица ABC12345",
         "курица АБ12345",
+        "курица АБВ1234",
+        "0123456789012",
     ],
 )
 def test_alphanumeric_sku_variants_require_exact_resolution(
@@ -2341,10 +2460,18 @@ def test_alphanumeric_sku_variants_require_exact_resolution(
         ("SKU chicken", "poultry"),
         ("chicken SKU", "poultry"),
         ("SKU: chicken", "poultry"),
+        ("milk 1000ml", "dairy drink"),
+        ("supplement 5000mg", "nutrient powder"),
+        ("olive oil 1200kJ", "lipid food"),
+        ("vitamin D 5000IU", "cholecalciferol"),
+        ("кефир 1000мл", "fermented dairy"),
+        ("рацион 2000ккал", "daily food"),
+        ("meal 1000grams", "prepared food"),
+        ("яйца 1000штук", "eggs"),
     ],
 )
 def test_ordinary_food_expression_is_not_treated_as_sku(
-    repository, original, semantic_query
+    repository, user_db, original, semantic_query
 ):
     cached, _ = _generic_food(semantic_query)
     cached = replace(
@@ -2365,6 +2492,8 @@ def test_ordinary_food_expression_is_not_treated_as_sku(
         expected_original=original,
     )
     before = _counts(repository)
+    before_state = _database_state(user_db)
+    before_files = _directory_file_state(user_db.parent)
 
     plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
 
@@ -2372,6 +2501,8 @@ def test_ordinary_food_expression_is_not_treated_as_sku(
     assert plan["resolution_mode"] == "generic_proxy"
     assert plan["would_write"] is False
     assert _counts(repository) == before
+    assert _database_state(user_db) == before_state
+    assert _directory_file_state(user_db.parent) == before_files
 
 
 def test_cli_cross_language_numeric_overlap_uses_visible_proxy_without_writes(

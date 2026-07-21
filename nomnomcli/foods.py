@@ -25,6 +25,85 @@ EXACT_CAPTURE_ACTION = (
     "Provide the package barcode or photo so the agent can run nomnom capture "
     "barcode or nomnom capture label"
 )
+_QUANTITY_UNIT_SUFFIXES = frozenset(
+    {
+        "cal",
+        "cl",
+        "cup",
+        "dl",
+        "floz",
+        "g",
+        "gr",
+        "gram",
+        "grams",
+        "iu",
+        "kcal",
+        "kg",
+        "kilogram",
+        "kilograms",
+        "kj",
+        "l",
+        "lb",
+        "lbs",
+        "liter",
+        "liters",
+        "litre",
+        "litres",
+        "mcg",
+        "mg",
+        "microgram",
+        "micrograms",
+        "milligram",
+        "milligrams",
+        "milliliter",
+        "milliliters",
+        "millilitre",
+        "millilitres",
+        "ml",
+        "mm",
+        "oz",
+        "pc",
+        "pcs",
+        "piece",
+        "pieces",
+        "portion",
+        "portions",
+        "tbsp",
+        "tsp",
+        "ug",
+        "μg",
+        "г",
+        "гр",
+        "грамм",
+        "грамма",
+        "граммов",
+        "ед",
+        "кал",
+        "кг",
+        "килограмм",
+        "килограмма",
+        "килограммов",
+        "кдж",
+        "ккал",
+        "кусок",
+        "куска",
+        "кусков",
+        "л",
+        "мг",
+        "мкг",
+        "мл",
+        "миллилитр",
+        "миллилитра",
+        "миллилитров",
+        "порция",
+        "порции",
+        "порций",
+        "шт",
+        "штук",
+        "штука",
+        "штуки",
+    }
+)
 
 
 def normalize_name(value: str) -> str:
@@ -140,7 +219,7 @@ def _query_has_sku(query: str) -> bool:
     if re.search(r"(?<!\w)\d{4,}(?!\w)", normalized):
         return True
     separated_sku = re.search(
-        r"(?<!\w)sku(?:\s*:\s*|\s+)"
+        r"(?<!\w)sku(?:(?:\s*(?:[^\w\s]|_)+\s*)|\s+)"
         r"(?P<identifier>[^\W_]+(?:[-_./][^\W_]+)*)(?!\w)",
         normalized,
     )
@@ -151,17 +230,20 @@ def _query_has_sku(query: str) -> bool:
     identifiers = re.findall(
         r"(?<!\w)[^\W_]+(?:[-_][^\W_]+)*(?!\w)", normalized
     )
-    return any(
-        (
-            identifier.startswith("sku")
-            and any(character.isdigit() for character in identifier[3:])
-        )
-        or (
+    for identifier in identifiers:
+        if identifier.startswith("sku") and any(
+            character.isdigit() for character in identifier[3:]
+        ):
+            return True
+        quantity = re.fullmatch(r"\d+(?P<unit>[^\W\d_]+)", identifier)
+        if quantity and quantity.group("unit") in _QUANTITY_UNIT_SUFFIXES:
+            continue
+        if (
             sum(character.isalpha() for character in identifier) >= 2
             and sum(character.isdigit() for character in identifier) >= 4
-        )
-        for identifier in identifiers
-    )
+        ):
+            return True
+    return False
 
 
 def _semantic_rewrite_drops_original_tokens(

@@ -28,6 +28,14 @@ V1_TABLES = frozenset({"food_cache", "log_entries", "recipes"})
 _SNAPSHOT_SUFFIXES = ("", "-journal", "-wal", "-shm")
 _SNAPSHOT_COPY_ATTEMPTS = 3
 _SNAPSHOT_HELPER_TIMEOUT_SECONDS = 10.0
+_SNAPSHOT_HELPER_BOOTSTRAP = """\
+import runpy
+import sys
+
+trusted_root, helper_path = sys.argv[1:]
+sys.path.insert(0, trusted_root)
+runpy.run_path(helper_path, run_name="__main__")
+"""
 _SQLITE_LOCK_BYTE = 0x40000000
 _SQLITE_LOCK_BYTE_COUNT = 512
 _SQLITE_SHM_LOCK_OFFSET = 120
@@ -467,19 +475,60 @@ def _snapshot_helper_error(
     )
 
 
+def _trusted_snapshot_helper_command() -> tuple[list[str], Path]:
+    try:
+        package_directory = Path(__file__).resolve(strict=True).parent
+        helper_path = (package_directory / "_snapshot_helper.py").resolve(strict=True)
+        helper_metadata = helper_path.stat()
+    except OSError as error:
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The trusted isolated SQLite snapshot helper is unavailable",
+            os_error=error.errno,
+        ) from error
+
+    if helper_path.parent != package_directory or not stat.S_ISREG(
+        helper_metadata.st_mode
+    ):
+        raise _snapshot_helper_error(
+            "database_snapshot_helper_failed",
+            "The trusted isolated SQLite snapshot helper is unavailable",
+        )
+
+    trusted_package_root = package_directory.parent
+    return (
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            _SNAPSHOT_HELPER_BOOTSTRAP,
+            os.fspath(trusted_package_root),
+            os.fspath(helper_path),
+        ],
+        trusted_package_root,
+    )
+
+
 def _run_snapshot_helper(source_path: Path, private_root: Path) -> Path | None:
     """Acquire a source snapshot in a fresh exec process with no inherited DB FDs."""
     request = json.dumps(
         {"source_path": os.fspath(source_path), "private_root": os.fspath(private_root)},
         allow_nan=False,
     )
+    command, trusted_package_root = _trusted_snapshot_helper_command()
+    environment = os.environ.copy()
+    environment.pop("PYTHONHOME", None)
+    environment.pop("PYTHONPATH", None)
     try:
         completed = subprocess.run(
-            [sys.executable, "-m", "nomnomcli._snapshot_helper"],
+            command,
             input=request,
             capture_output=True,
             check=False,
             close_fds=True,
+            cwd=trusted_package_root,
+            env=environment,
             text=True,
             timeout=_SNAPSHOT_HELPER_TIMEOUT_SECONDS,
         )
