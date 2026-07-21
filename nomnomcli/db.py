@@ -537,6 +537,8 @@ class _SnapshotSource:
                 descriptor = _open_snapshot_directory(
                     component, directory_descriptor=parent_descriptor
                 )
+            except FileNotFoundError as error:
+                raise _snapshot_unstable_path_error() from error
             except NomnomError as error:
                 if error.code == "database_snapshot_unreadable":
                     raise _snapshot_unstable_path_error() from error

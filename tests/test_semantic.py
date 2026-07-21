@@ -473,6 +473,61 @@ def test_cli_resolve_fails_closed_if_missing_parent_appears_during_confirmation(
     assert not database.exists()
 
 
+def test_cli_resolve_parent_renamed_during_revalidation_is_structured_without_writes(
+    tmp_path, monkeypatch, capsys
+):
+    source_parent = tmp_path / "source-parent"
+    relocated_parent = tmp_path / "relocated-parent"
+    database = source_parent / "nomnom.sqlite3"
+    original = "parent churn chicken"
+    source_parent.mkdir()
+    with connect(database):
+        pass
+    original_state = _database_state(database)
+    original_files = _directory_file_state(source_parent)
+    real_open_directory = database_module._open_snapshot_directory
+    target_open_count = 0
+
+    def open_directory_with_race(component, *, directory_descriptor=None):
+        nonlocal target_open_count
+        if component == source_parent.name:
+            target_open_count += 1
+            if target_open_count == 2:
+                source_parent.rename(relocated_parent)
+        return real_open_directory(component, directory_descriptor=directory_descriptor)
+
+    monkeypatch.setattr(
+        database_module, "_open_snapshot_directory", open_directory_with_race
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(_intent(original, [])),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    error = _strict_json_loads(captured.err)["error"]
+    relocated_database = relocated_parent / database.name
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert error["code"] == "database_snapshot_unstable"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert target_open_count == 2
+    assert not source_parent.exists()
+    assert _database_state(relocated_database) == original_state
+    assert _directory_file_state(relocated_parent) == original_files
+
+
 @pytest.mark.parametrize(
     "confidence",
     [float("nan"), float("inf"), float("-inf")],
