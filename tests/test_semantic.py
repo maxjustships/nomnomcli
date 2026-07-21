@@ -818,6 +818,122 @@ def test_cli_resolve_rejects_legacy_non_exact_sku_cache_without_source_writes(
     } == original_files
 
 
+def test_cli_alphanumeric_sku_refuses_semantic_candidate_without_source_writes(
+    user_db, monkeypatch, capsys
+):
+    original = "курица SKU12345"
+    semantic_query = "chicken"
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    with connect(user_db) as connection:
+        FoodRepository(connection)._cache_food(cached, lookup_query=semantic_query)
+
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    original_state = _database_state(user_db)
+    original_files = _directory_file_state(user_db.parent)
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            json.dumps(
+                _intent(
+                    original,
+                    [{"query": semantic_query, "relation": "same_form"}],
+                    brand_intent=False,
+                )
+            ),
+            "--json",
+        ]
+    )
+
+    assert code == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"]["code"] == "exact_resolution_required"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"]["original"] == original
+    assert _database_state(user_db) == original_state
+    assert _directory_file_state(user_db.parent) == original_files
+
+
+@pytest.mark.parametrize(
+    "original",
+    ["курица SKU12345", "курица ABC-12345", "курица ABC_12345"],
+)
+def test_alphanumeric_sku_variants_require_exact_resolution(
+    repository, original
+):
+    semantic_query = "chicken"
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used USDA generic proxy: chicken.",
+    )
+    repository._cache_food(cached, lookup_query=semantic_query)
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "same_form"}],
+                brand_intent=False,
+            )
+        ),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    with pytest.raises(NomnomError) as caught:
+        repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert caught.value.code == "exact_resolution_required"
+    assert caught.value.details["would_write"] is False
+    assert _counts(repository) == before
+
+
+@pytest.mark.parametrize(
+    ("original", "semantic_query"),
+    [("milk 3%", "dairy drink"), ("3 eggs", "omelette"), ("vitamin B12", "cobalamin")],
+)
+def test_ordinary_food_expression_is_not_treated_as_sku(
+    repository, original, semantic_query
+):
+    cached, _ = _generic_food(semantic_query)
+    cached = replace(
+        cached,
+        resolution_mode="generic_proxy",
+        assumption=f"Used declared semantic food candidate: {semantic_query}.",
+    )
+    repository._cache_food(cached, lookup_query=semantic_query)
+    repository.user_connection.commit()
+    intent = parse_resolution_intent(
+        json.dumps(
+            _intent(
+                original,
+                [{"query": semantic_query, "relation": "lexical_equivalent"}],
+                brand_intent=False,
+            )
+        ),
+        expected_original=original,
+    )
+    before = _counts(repository)
+
+    plan = repository.plan_resolution(original, intent=intent, allow_remote=False)
+
+    assert plan["retrieval_query"] == semantic_query
+    assert plan["resolution_mode"] == "generic_proxy"
+    assert plan["would_write"] is False
+    assert _counts(repository) == before
+
+
 def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
     tmp_path, monkeypatch, capsys
 ):
@@ -884,6 +1000,20 @@ def test_cli_raw_cache_brand_requires_exact_resolution_without_source_writes(
                 source="user",
                 resolution_mode="exact_product",
                 source_id="pin-12345",
+                provenance="user",
+            ),
+        ),
+        (
+            "курица SKU12345",
+            Food(
+                name="Pinned alphanumeric SKU chicken",
+                kcal=165,
+                protein=31,
+                fat=3.6,
+                carbs=1,
+                source="user",
+                resolution_mode="exact_product",
+                source_id="pin-sku12345",
                 provenance="user",
             ),
         ),

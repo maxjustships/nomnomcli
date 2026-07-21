@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #33 Phase A raw-brand exact-intent boundary completed
+- Current phase: issue #33 Phase A alphanumeric-SKU P2 completed
 - Plan file: `docs/plans.md`
 - Status: green
 - Last updated: 2026-07-21
 
 ## Done
+- Fixed alphanumeric SKU exact-intent detection for explicit `SKU` markers and conservative joined/hyphen/underscore letter-digit identifiers while retaining standalone numeric 4+ behavior.
+- Added the Cyrillic `курица SKU12345` CLI/repository refusal with exact database/file immutability, ordinary `milk 3%`/`3 eggs`/`vitamin B12` controls, and a matching exact local SKU pin control.
+- Recorded the requested RED (3 failures, 8 controls green), then passed 11 focused tests, 126 targeted tests, 271 full tests, repository-wide Ruff, and diff checks.
 - Fixed the final raw-brand P2 by treating matching brand metadata on raw local/migrated cache results as hard exact intent in `_protect_original_intent`, using the same normalized runtime helper as provider evidence.
 - Added a migrated legacy branded-cache CLI refusal with exact source-state preservation, strengthened the matching exact local-pin control, and added a nonmatching raw-brand control.
 - Recorded the matching-brand regression RED with four controls green, then passed 5 focused tests, 118 targeted tests, 263 full tests, repository-wide Ruff, and diff checks.
@@ -54,9 +57,11 @@
 - No implementation work pending.
 
 ## Next
-- Create the requested local conventional commit, then stop without pushing or opening a PR.
+- Stop after the requested local conventional commit; do not push or open a PR.
 
 ## Decisions Made
+- Alphanumeric-SKU P2: recognize explicit standalone `SKU` markers containing digits; otherwise require at least two ASCII letters and four digits, allow optional internal `-`/`_`, and retain standalone numeric 4+ detection.
+- Alphanumeric-SKU P2: use semantic-planning behavior controls for `milk 3%`, `3 eggs`, and `vitamin B12`, with disjoint candidates so the existing same-language dropped-token guard does not confound SKU classification.
 - Raw cache brands will use `_provider_brand_evidence_matches_query`, keeping runtime brand-token semantics identical across raw and remote evidence.
 - The existing `_raw_record_satisfies_exact_intent` remains the sole positive escape hatch for matching local `exact_product` pins/barcodes.
 - Exact-intent follow-up: infer all original specificity at one planner boundary before returning a raw plan or considering semantic candidates.
@@ -108,6 +113,9 @@ ruff check .
 ## Audit Log
 | Date | Milestone | Files | Commands | Result | Next |
 | --- | --- | --- | --- | --- | --- |
+| 2026-07-21 | M54 alphanumeric-SKU P2 | scoped production/test/docs diff | 271 full pytest; full Ruff; diff check; scoped audit | pass; exact refusal/no-write behavior and all controls green | local commit, then stop |
+| 2026-07-21 | M53 alphanumeric-SKU P2 | `nomnomcli/foods.py`, semantic regressions, execution docs | 11 focused; 126 targeted; focused Ruff | pass; joined/separated identifiers refuse, ordinary expressions and exact local pin remain accepted | M54 |
+| 2026-07-21 | M52 alphanumeric-SKU P2 | semantic regressions and execution docs | focused pytest | RED: 3 joined/underscore SKU paths accepted a semantic plan; 8 ordinary/numeric/hyphen/exact-pin controls passed | M53 |
 | 2026-07-21 | M50–M51 raw-brand boundary | `nomnomcli/foods.py`, semantic regressions, execution docs | 5 focused; 118 targeted; 263 full; Ruff; diff check | pass; matching brand refuses without writes, exact/nonmatching controls green | local commit |
 | 2026-07-21 | M49 raw-brand boundary | semantic regressions and execution docs | focused pytest | RED: matching legacy brand returned a raw plan; four exact/nonmatching controls passed | M50 |
 | 2026-07-21 | M46–M48 exact-intent follow-up | `nomnomcli/foods.py`, semantic regressions, execution docs | focused RED/GREEN; 116 targeted; 261 full; Ruff; diff check; disposable no-write smoke | pass; exact refusal and source bytes/entries unchanged | local commit |

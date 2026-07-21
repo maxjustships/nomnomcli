@@ -1,5 +1,61 @@
 # Plans
 
+## Issue #33 Phase A Alphanumeric-SKU P2 Source
+- Task: Treat common alphanumeric SKU tokens as exact intent during semantic planning without overblocking ordinary food quantities or nutrient terms.
+- Canonical input: Final-review P2 requiring Cyrillic `SKU12345` refusal, source immutability, ordinary-food controls, exact local pin preservation, full validation, a local conventional commit, and no push/PR.
+- Repo context: `_query_has_sku`, semantic CLI/repository regressions, exact local pin handling, and Phase A no-write guarantees.
+- Last updated: 2026-07-21
+
+## Issue #33 Phase A Alphanumeric-SKU P2 Assumptions
+- Alphanumeric identifiers are standalone ASCII letter/digit tokens with optional internal hyphen/underscore separators; explicit `SKU` markers containing digits are protected, otherwise at least two letters and four digits are required. Standalone numeric 4+ detection remains unchanged.
+- The letter/digit thresholds intentionally exclude ordinary expressions such as percentages, counted foods, `B12`, `D3`, and `omega-3` while covering `SKU12345`, `ABC-12345`, and comparable common codes.
+- Existing matching local `exact_product` lookup pins remain the only valid non-provider escape hatch for protected SKU originals.
+
+## Issue #33 Phase A Alphanumeric-SKU P2 Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M52 | Reproduce alphanumeric-SKU semantic bypass and freeze controls | M51 | [x] |
+| M53 | Extend conservative SKU detection | M52 | [x] |
+| M54 | Run full gates, audit, and commit | M53 | [x] |
+
+## M52. Reproduce alphanumeric-SKU bypass and freeze controls `[x]`
+### Goal
+- Cyrillic `курица SKU12345` with `brand_intent:false` cannot accept a disjoint translated generic candidate, while normal food expressions and matching exact local pins retain current behavior.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'alphanumeric_sku or ordinary_food_expression or exact_local_barcode_or_pin'
+```
+
+### Stop-and-Fix Rule
+- Do not change production detection until the requested bypass fails for the reviewed reason and ordinary-expression/exact-pin controls remain green.
+
+## M53. Detect conservative alphanumeric SKU tokens `[x]`
+### Goal
+- `_query_has_sku` recognizes common joined/separated letter-digit identifiers and existing numeric codes without classifying short nutrient/portion forms as exact intent.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+```
+
+### Stop-and-Fix Rule
+- Any false block for the selected ordinary food controls, rejection of a matching exact local pin, or Phase A source mutation blocks M54.
+
+## M54. Verify and commit the alphanumeric-SKU P2 `[x]`
+### Goal
+- Full pytest, repository-wide Ruff, diff checks, and a scoped audit pass before one conventional local commit with no push or PR.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until all gates pass and the diff contains only the detector, regressions, and execution records.
+
 ## Issue #33 Phase A Raw-Brand Boundary Source
 - Task: Treat a matching brand on raw local or migrated legacy cache results as hard exact intent at the central planning boundary.
 - Canonical input: Final-review P2 with raw branded-cache refusal, exact local pin/barcode preservation, nonmatching-brand controls, full validation, local commit, and no push/PR.

@@ -1,5 +1,32 @@
 # Test Plan
 
+## Issue #33 Phase A Alphanumeric-SKU P2 Validation
+- In scope: `SKU12345`/`ABC-12345`-style exact intent, existing numeric 4+ identifiers, Cyrillic originals with translated candidates, ordinary percentage/count/nutrient controls, matching exact local pins, and exact source immutability.
+- Out of scope: parser grammar changes, static SKU/brand dictionaries, schema/policy/log changes, live providers, push, or PR operations.
+- Fixtures: a byte-audited current-schema SQLite source with a cached disjoint semantic generic candidate, parameterized ordinary expressions, and matching local `exact_product` pins.
+
+### Critical Scenarios
+- Original `курица SKU12345`, `brand_intent:false`, failed literal resolution, and cached semantic candidate `chicken` refuses with structured `exact_resolution_required`, `would_write:false`, and unchanged source bytes/schema/counts/directory entries.
+- Joined and hyphen/underscore alphanumeric codes are classified conservatively; standalone numeric 4+ barcode/SKU behavior remains protected.
+- `milk 3%`, `3 eggs`, and `vitamin B12` can still use declared safe semantic candidates and are not classified as SKU exact intent.
+- A matching local `exact_product` pin for an alphanumeric-SKU original still returns the original raw read-only plan.
+
+### Acceptance Gates
+- [x] Requested alphanumeric-SKU regression observed RED before production changes — 3 failures; 8 ordinary/numeric/hyphen/exact-pin controls green.
+- [x] Targeted semantic/food/CLI tests pass — 126 passed.
+- [x] Full `PYTHONPATH=. pytest -q` passes — 271 passed.
+- [x] `ruff check .` and `git diff --check` pass.
+- [x] One conventional local commit contains only the scoped P2 fix and execution records; nothing is pushed and no PR is created.
+
+### Command Matrix
+```sh
+PYTHONPATH=. pytest -q tests/test_semantic.py -k 'alphanumeric_sku or ordinary_food_expression or exact_local_barcode_or_pin'
+PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py tests/test_cli.py
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
 ## Issue #33 Phase A Raw-Brand Boundary Validation
 - In scope: matching brand metadata on raw local/migrated legacy cache results, non-exact generic planning, matching exact local pins/barcodes, nonmatching raw brands, raw-first behavior, and source immutability.
 - Out of scope: provider ordering changes, schema/policy/log changes, static brand data, live providers, push, or PR operations.
