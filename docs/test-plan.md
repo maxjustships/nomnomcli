@@ -1,31 +1,5 @@
 # Test Plan
 
-## Snapshot isolation and OFF fallback validation
-- In scope: exec-isolated source path access, close-inherited-FD behavior, bounded helper timeout, structured failures, same-process SQLite lock retention, source immutability, and OFF fallback after USDA identity rejection.
-- Out of scope: Phase B behavior, historical documentation, schema changes, live provider calls, and source database writes.
-- Fixtures: disposable SQLite databases, independent spawned lock checkers, synthetic OFF/USDA foods, and deterministic helper fault injection only.
-
-### Snapshot isolation and OFF fallback negative cases
-- A parent-held active write transaction makes resolve return busy/refusal and an independent checker must still observe the writer lock afterward.
-- Helper timeout, nonzero exit, malformed protocol, unsafe returned path, symlink/nonregular inputs, parent churn, unavailable no-atime/OFD capability, WAL checkpoint conflict, and MEMORY/OFF dirty writers must fail closed without source mutation.
-- Invalid OFF is never rescued; safe OFF is retained only when USDA was configured but its result fails generic-proxy preparation or identity validation.
-
-### Snapshot isolation and OFF fallback acceptance gates
-- [x] Focused lock/fallback regressions pass.
-- [x] Existing semantic snapshot protection suite passes under the helper boundary — 161 passed.
-- [x] Full `PYTHONPATH=. pytest -q` passes — 390 passed.
-- [x] `ruff check .` and `git diff --check` pass.
-- [x] Historical Phase B docs are absent and the scoped diff contains no historical-doc churn.
-- [x] One conventional local commit exists; nothing is pushed or opened remotely.
-
-### Snapshot isolation and OFF fallback command matrix
-```sh
-PYTHONPATH=. pytest -q tests/test_semantic.py tests/test_foods.py
-PYTHONPATH=. pytest -q
-ruff check .
-git diff --check
-```
-
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.
