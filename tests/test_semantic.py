@@ -298,6 +298,45 @@ def test_cli_rejects_non_finite_intent_numbers_with_strict_json_error(
     assert not database.exists()
 
 
+@pytest.mark.parametrize(
+    ("version", "parsed_version"),
+    [("true", True), ("1.0", 1.0), ("1e0", 1.0)],
+    ids=["boolean", "decimal", "exponent"],
+)
+def test_cli_rejects_non_integer_intent_version_with_strict_json_error(
+    tmp_path, monkeypatch, capsys, version, parsed_version
+):
+    database = tmp_path / "non-integer-version.sqlite3"
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(database))
+    original = "chicken"
+    raw_intent = (
+        f'{{"version": {version}, "original": "{original}", '
+        '"brand_intent": false, "candidates": []}'
+    )
+
+    code = main(
+        [
+            "resolve",
+            "--food",
+            original,
+            "--intent-json",
+            raw_intent,
+            "--json",
+        ]
+    )
+    error = _strict_json_loads(capsys.readouterr().err)
+
+    assert code == 2
+    assert error["error"]["code"] == "invalid_resolution_intent"
+    assert error["error"]["would_write"] is False
+    assert error["error"]["details"] == {
+        "would_write": False,
+        "original": original,
+        "version": parsed_version,
+    }
+    assert not database.exists()
+
+
 def test_cli_resolve_missing_nested_database_uses_empty_snapshot_without_creating_source(
     tmp_path, monkeypatch, capsys
 ):
@@ -1374,6 +1413,34 @@ def test_cli_invalid_regular_database_is_structured_without_source_changes(tmp_p
     ) == before_metadata
     assert database.read_bytes() == content
     assert {child.name for child in tmp_path.iterdir()} == {database.name}
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["DROP TABLE food_aliases", "DROP INDEX idx_log_entries_logged_at"],
+    ids=["missing-food-aliases", "missing-required-index"],
+)
+def test_cli_incomplete_current_schema_is_structured_without_source_changes(
+    tmp_path, damage
+):
+    database = tmp_path / "incomplete-v4.sqlite3"
+    with connect(database) as connection:
+        connection.execute(damage)
+    before = _database_state(database)
+    before_files = _directory_file_state(tmp_path)
+
+    completed = _run_resolve_cli(database, "Incomplete schema chicken")
+    error = _strict_json_loads(completed.stderr)["error"]
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Traceback" not in completed.stderr
+    assert error["code"] == "database_snapshot_invalid"
+    assert error["would_write"] is False
+    assert error["details"]["would_write"] is False
+    assert error["details"]["snapshot_target"] == "main"
+    assert _database_state(database) == before
+    assert _directory_file_state(tmp_path) == before_files
 
 
 @pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])

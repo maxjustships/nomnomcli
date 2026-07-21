@@ -123,7 +123,7 @@ def parse_resolution_intent(raw_json: str, *, expected_original: str) -> Resolut
             expected_original=expected_original,
             details={"missing_fields": missing, "unknown_fields": unknown},
         )
-    if isinstance(payload["version"], bool) or payload["version"] != 1:
+    if type(payload["version"]) is not int or payload["version"] != 1:
         _intent_error(
             "Resolution intent version must be exactly 1",
             expected_original=expected_original,

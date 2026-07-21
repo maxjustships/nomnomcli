@@ -95,6 +95,66 @@ LATEST_SCHEMA = (
 )""",
 )
 
+_REQUIRED_CURRENT_SCHEMA_COLUMNS = {
+    "food_cache": frozenset(
+        {
+            "name",
+            "kcal",
+            "protein",
+            "fat",
+            "carbs",
+            "piece_grams",
+            "density_g_ml",
+            "source",
+            "fdc_id",
+            "barcode",
+            "brand",
+            "lookup_query",
+            "alternatives_json",
+            "piece_grams_source",
+            "piece_grams_source_value",
+            "resolution_mode",
+            "source_id",
+            "source_note",
+            "provenance",
+            "assumption",
+        }
+    ),
+    "log_entries": frozenset(
+        {
+            "id",
+            "logged_at",
+            "kind",
+            "label",
+            "items_json",
+            "kcal",
+            "protein",
+            "fat",
+            "carbs",
+        }
+    ),
+    "recipes": frozenset(
+        {
+            "id",
+            "name",
+            "source_url",
+            "servings",
+            "ingredients_json",
+            "kcal_per_serving",
+            "protein_per_serving",
+            "fat_per_serving",
+            "carbs_per_serving",
+            "created_at",
+        }
+    ),
+    "food_aliases": frozenset(
+        {"phrase", "normalized_phrase", "canonical_name"}
+    ),
+}
+_REQUIRED_CURRENT_SCHEMA_INDEXES = {
+    "idx_log_entries_logged_at": ("log_entries", ("logged_at",)),
+}
+
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
     rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -107,6 +167,59 @@ def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
 
 def _set_user_version(connection: sqlite3.Connection, version: int) -> None:
     connection.execute(f"PRAGMA user_version = {version}")
+
+
+def _validate_current_schema(connection: sqlite3.Connection) -> None:
+    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if version != LATEST_SCHEMA_VERSION:
+        raise sqlite3.DatabaseError(
+            f"database schema version {version} is not current version "
+            f"{LATEST_SCHEMA_VERSION}"
+        )
+
+    integrity = connection.execute("PRAGMA quick_check").fetchall()
+    if len(integrity) != 1 or str(integrity[0][0]).casefold() != "ok":
+        raise sqlite3.DatabaseError("database integrity check failed")
+
+    tables = _table_names(connection)
+    missing_tables = _REQUIRED_CURRENT_SCHEMA_COLUMNS.keys() - tables
+    if missing_tables:
+        raise sqlite3.DatabaseError(
+            "current schema is missing tables: " + ", ".join(sorted(missing_tables))
+        )
+    for table, required_columns in _REQUIRED_CURRENT_SCHEMA_COLUMNS.items():
+        missing_columns = required_columns - _column_names(connection, table)
+        if missing_columns:
+            raise sqlite3.DatabaseError(
+                f"current schema table {table} is missing columns: "
+                + ", ".join(sorted(missing_columns))
+            )
+
+    indexes = {
+        str(row[0]): str(row[1])
+        for row in connection.execute(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
+        ).fetchall()
+    }
+    for index, (table, required_columns) in _REQUIRED_CURRENT_SCHEMA_INDEXES.items():
+        if indexes.get(index) != table:
+            raise sqlite3.DatabaseError(
+                f"current schema is missing index {index} on table {table}"
+            )
+        columns = tuple(
+            str(row[2]) for row in connection.execute(f"PRAGMA index_info({index})")
+        )
+        if columns != required_columns:
+            raise sqlite3.DatabaseError(
+                f"current schema index {index} has unexpected columns"
+            )
+
+
+def _ensure_required_current_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_log_entries_logged_at "
+        "ON log_entries(logged_at)"
+    )
 
 
 def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
@@ -174,7 +287,9 @@ def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
 MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4}
 
 
-def _initialize_database(connection: sqlite3.Connection) -> None:
+def _initialize_database(
+    connection: sqlite3.Connection, *, reject_incomplete_current: bool = False
+) -> None:
     connection.execute("BEGIN IMMEDIATE")
     try:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -183,6 +298,9 @@ def _initialize_database(connection: sqlite3.Connection) -> None:
                 f"database schema version {version} is newer than supported "
                 f"version {LATEST_SCHEMA_VERSION}"
             )
+
+        if reject_incomplete_current and version == LATEST_SCHEMA_VERSION:
+            _validate_current_schema(connection)
 
         if version == 0 and _table_names(connection) & V1_TABLES:
             version = 1
@@ -206,6 +324,9 @@ def _initialize_database(connection: sqlite3.Connection) -> None:
                     connection.execute(statement)
         if "food_cache" in _table_names(connection):
             _ensure_v4_food_cache(connection)
+        _ensure_required_current_indexes(connection)
+        if reject_incomplete_current:
+            _validate_current_schema(connection)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -801,10 +922,10 @@ def connect_read_only(path: str | Path | None = None) -> Iterator[sqlite3.Connec
         # private file set proven stable across copying, so concurrent churn
         # fails safely and source sidecars cannot be created or modified.
         if private_path is None:
-            _initialize_database(connection)
+            _initialize_database(connection, reject_incomplete_current=True)
         else:
             try:
-                _initialize_database(connection)
+                _initialize_database(connection, reject_incomplete_current=True)
             except sqlite3.ProgrammingError:
                 raise
             except sqlite3.DatabaseError as error:
