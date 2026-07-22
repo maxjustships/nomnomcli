@@ -32,7 +32,10 @@ Resolution is ordered and deterministic:
 
 Every accepted runtime result retains its resolution mode and source evidence. Relevant output and
 cache records keep provider/source identity, provenance, confidence, and explicit assumptions.
-Rejected, incomplete, unsafe, or unconfirmed results are not cached or logged.
+Rejected or unsafe source results are not cached or logged as resolved nutrition. An agent intake
+may explicitly journal an unresolved exact item as `pending_capture`; that item retains raw input
+and an actionable photo/barcode state, contributes no invented nutrition, and makes the meal and
+period totals explicitly incomplete.
 
 Local identity is established only by an exact normalized cache name, an explicit user alias, an
 exact barcode, or existing explicit source-backed identity that satisfies the same exact-product or
@@ -65,6 +68,21 @@ Raw voice, text, or photo is the primary user interface. A surrounding system tr
 captures that input through validated CLI paths rather than demanding manual nutrition lookup or
 database operation; this principle does not add an orchestration runtime to the CLI.
 
+The approved agent-first runtime contract has two CLI phases:
+
+1. `nomnom agent candidates --input ... --json` queries runtime providers without opening SQLite.
+   It returns deterministically ordered source-backed identity metadata and opaque `off:BARCODE` or
+   `usda:FDC_ID` references, never nutrition facts for the agent to copy into a plan.
+2. `nomnom agent intake --plan ... --json` accepts a strict versioned plan containing only raw item
+   input, quantity or the existing external portion estimate, and either one source reference or an
+   explicit pending-capture state. The CLI re-fetches every selected reference, validates identity
+   and nutrition, applies generic/exact policy, calculates totals, and writes one journal event.
+
+Discovery never reads or writes the user cache. Commit never trusts cached nutrition or agent
+ranking: a source reference is re-fetched through its provider adapter, and a branded discovery
+result without capture evidence is rejected in favor of explicit pending capture. Pending output
+includes stable event/item identifiers so correction remains an explicit remove-and-replace flow.
+
 An external agent may translate language into the canonical CLI input and may read a supplied
 package image. It may propose fuzzy gram estimates only through the existing validated estimate
 contract. Such estimates are explicitly approximate and never provide nutrition facts.
@@ -73,10 +91,9 @@ An agent/LLM is not part of the CLI runtime. It must not invent nutrition, silen
 different food, bypass confirmation, access SQLite directly, or introduce an embedded model,
 credential, prompt corpus, API, or retrieval corpus.
 
-Semantic-retrieval Phase A is read-only proposal work. It may define structured candidates for a
-separately approved validated CLI contract, but it does not select nutrition, mutate cache/logs or
-aliases, access user SQLite, or change current resolution. Plans or experiments do not authorize a
-runtime feature.
+Semantic-retrieval Phase A remains read-only proposal work outside this approved, validated agent
+intake contract. It does not mutate cache/logs or aliases, access user SQLite, or change current
+resolution. Plans or experiments do not authorize additional runtime behavior.
 
 ## Change boundary and non-goals
 

@@ -13,6 +13,7 @@ from nomnomcli.models import Food
 from nomnomcli.providers import RetryPolicy, request_with_retry
 
 USDA_SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
+USDA_FOOD_URL = "https://api.nal.usda.gov/fdc/v1/food/{fdc_id}"
 USDA_CONFIDENCE_FLOOR = 0.8
 
 _NUTRIENT_SPECS = {
@@ -263,6 +264,102 @@ class USDAClient:
     def probe(self, api_key: str) -> bool:
         self._payload("a", api_key, 1)
         return True
+
+    def candidates(self, query: str, api_key: str) -> list[tuple[Food, float]]:
+        records = self._payload(
+            query,
+            api_key,
+            10,
+            data_types=["Foundation", "SR Legacy"],
+        )["foods"]
+        candidates = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            food, missing = _normalize_record(record)
+            if food is None or missing:
+                continue
+            data_type = str(record.get("dataType") or "").strip()
+            candidates.append((food, _confidence(query, food, data_type)))
+        candidates.sort(
+            key=lambda item: (
+                0
+                if item[0].brand is None
+                and (item[0].provider_data_type or "").casefold() in {"foundation", "sr legacy"}
+                else 1,
+                -item[1],
+                -_DATA_TYPE_QUALITY.get((item[0].provider_data_type or "").casefold(), 0.5),
+                item[0].name,
+                item[0].fdc_id or 0,
+            )
+        )
+        return candidates
+
+    def food_by_fdc_id(self, fdc_id: int, api_key: str) -> Food:
+        if isinstance(fdc_id, bool) or not isinstance(fdc_id, int) or fdc_id <= 0:
+            raise NomnomError("invalid_fdc_id", "FDC id must be a positive integer")
+        details = {"fdc_id": fdc_id}
+        response = request_with_retry(
+            provider="usda",
+            code="usda_unavailable",
+            message="USDA FoodData Central lookup is unavailable",
+            request_get=self._request_get or requests.get,
+            url=USDA_FOOD_URL.format(fdc_id=fdc_id),
+            request_kwargs={"params": {"api_key": api_key}, "timeout": 15},
+            details=details,
+            retry_policy=self.retry_policy,
+            sleep=self.sleep,
+        )
+        if response.status_code in {401, 403}:
+            raise NomnomError(
+                "usda_key_invalid",
+                "USDA FoodData Central rejected the API key",
+                details={"setup_url": "https://fdc.nal.usda.gov/api-key-signup.html"},
+            )
+        if response.status_code == 404:
+            raise NomnomError(
+                "usda_food_not_found",
+                f"USDA has no food for FDC id: {fdc_id}",
+                details=details,
+            )
+        try:
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ProviderUnavailableError(
+                "usda",
+                "usda_unavailable",
+                "USDA FoodData Central lookup is unavailable",
+                retryable=False,
+                details={**details, "status": response.status_code, "reason": "http_error"},
+            ) from exc
+        try:
+            record = response.json()
+        except ValueError as exc:
+            raise NomnomError(
+                "usda_invalid_response",
+                "USDA FoodData Central returned malformed JSON",
+                details=details,
+            ) from exc
+        if not isinstance(record, dict):
+            raise NomnomError(
+                "usda_invalid_response",
+                "USDA FoodData Central returned an invalid food payload",
+                details=details,
+            )
+        food, missing = _normalize_record(record)
+        if food is None:
+            raise NomnomError(
+                "usda_invalid_nutrition",
+                "USDA food lacks complete positive core nutrition",
+                details={**details, "missing_or_nonpositive_core": missing},
+            )
+        if food.fdc_id != fdc_id:
+            raise NomnomError(
+                "usda_food_mismatch",
+                "USDA food id does not match the requested FDC id",
+                details={**details, "returned_fdc_id": food.fdc_id},
+            )
+        return food
 
     def resolve(self, query: str, api_key: str) -> tuple[Food, float]:
         records = self._payload(

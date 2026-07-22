@@ -315,11 +315,14 @@ def get_stats(
         ).fetchall()
     meals = []
     totals = {key: 0.0 for key in ("kcal", "protein", "fat", "carbs")}
+    pending_count = 0
     for row in rows:
         meal_totals = {key: round(float(row[key]), 2) for key in totals}
         for key, value in meal_totals.items():
             totals[key] += value
         items = json.loads(row["items_json"])
+        meal_pending_count = sum(item.get("status") == "pending_capture" for item in items)
+        pending_count += meal_pending_count
         meals.append(
             {
                 "id": row["id"],
@@ -329,14 +332,23 @@ def get_stats(
                 "items": items,
                 "totals": meal_totals,
                 "approximate": any(item.get("approximate") is True for item in items),
+                "complete": meal_pending_count == 0,
+                "nutrition_status": ("incomplete" if meal_pending_count else "complete"),
+                "pending_count": meal_pending_count,
             }
         )
+    rounded_totals = {key: round(value, 2) for key, value in totals.items()}
+    if pending_count:
+        rounded_totals["complete"] = False
     result = {
         "period": period,
         "from": start.isoformat(timespec="seconds"),
-        "totals": {key: round(value, 2) for key, value in totals.items()},
+        "totals": rounded_totals,
         "meals": meals,
         "approximate": any(meal["approximate"] for meal in meals),
+        "complete": pending_count == 0,
+        "nutrition_status": "incomplete" if pending_count else "complete",
+        "pending_count": pending_count,
     }
     if end is not None:
         result["to"] = end.isoformat(timespec="seconds")

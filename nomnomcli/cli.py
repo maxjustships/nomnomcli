@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 
 from nomnomcli import __version__
+from nomnomcli.agent import discover_candidates, parse_agent_plan, resolve_agent_plan
 from nomnomcli.config import ProviderConfig
 from nomnomcli.db import connect, get_stats, remove_log, store_log
 from nomnomcli.errors import NomnomError
@@ -126,6 +127,9 @@ def _print_log(result: dict, as_json: bool) -> None:
         return
     print("Logged:")
     for item in result["items"]:
+        if item.get("status") == "pending_capture":
+            print(f"  {item['input']:<38} pending photo/barcode capture")
+            continue
         marker = " (approx.)" if item.get("approximate") else ""
         print(
             f"  {item['name'] + marker:<38} "
@@ -142,7 +146,8 @@ def _print_log(result: dict, as_json: bool) -> None:
         print("Assumptions:")
         for assumption in result["assumptions"]:
             print(f"  - {assumption}")
-    print(f"Total: {_nutrition_line(result['totals'])}")
+    total_label = "Resolved total (incomplete)" if not result.get("complete", True) else "Total"
+    print(f"{total_label}: {_nutrition_line(result['totals'])}")
     if result.get("approximate"):
         print(PORTION_CORRECTION)
 
@@ -155,13 +160,15 @@ def _print_stats(result: dict, as_json: bool) -> None:
     if not result["meals"]:
         print("  No meals logged.")
     for meal in result["meals"]:
-        label = meal["label"] or ", ".join(item["name"] for item in meal["items"])
-        marker = " (approx.)" if meal.get("approximate") else ""
-        print(
-            f"  {meal['logged_at']}  {label}{marker}  "
-            f"{_nutrition_line(meal['totals'])}"
+        label = meal["label"] or ", ".join(
+            item.get("name") or item["input"] for item in meal["items"]
         )
-    print(f"Total: {_nutrition_line(result['totals'])}")
+        marker = " (approx.)" if meal.get("approximate") else ""
+        if not meal.get("complete", True):
+            marker += f" (incomplete: {meal['pending_count']} pending)"
+        print(f"  {meal['logged_at']}  {label}{marker}  {_nutrition_line(meal['totals'])}")
+    total_label = "Resolved total (incomplete)" if not result.get("complete", True) else "Total"
+    print(f"{total_label}: {_nutrition_line(result['totals'])}")
     if result.get("approximate"):
         print(PORTION_CORRECTION)
 
@@ -252,6 +259,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="machine-readable JSON output"
     )
 
+    agent = commands.add_parser("agent", help="discover sources and commit validated intake plans")
+    agent_commands = agent.add_subparsers(dest="agent_command", required=True)
+    agent_candidates = agent_commands.add_parser(
+        "candidates", help="discover source-backed candidates without opening the diary"
+    )
+    agent_candidates.add_argument("--input", required=True, help="one raw user-visible item")
+    agent_candidates.add_argument(
+        "--json", action="store_true", help="machine-readable JSON output"
+    )
+    agent_intake = agent_commands.add_parser(
+        "intake", help="validate, re-fetch, calculate, and persist one versioned plan"
+    )
+    agent_intake.add_argument("--plan", required=True, help="strict versioned inline JSON plan")
+    agent_intake.add_argument(
+        "--date", help="local calendar date in YYYY-MM-DD; stored at local noon"
+    )
+    agent_intake.add_argument("--json", action="store_true", help="machine-readable JSON output")
+
     alias = commands.add_parser("alias", help="manage user food aliases")
     alias_commands = alias.add_subparsers(dest="alias_command", required=True)
     alias_add = alias_commands.add_parser("add", help="map a phrase to a cached food")
@@ -280,6 +305,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> int:
     portion_policy = None
     portion_estimates = None
+    agent_plan = None
+    resolved_agent_plan = None
     if args.command == "log":
         removing_log = args.log_action == "remove"
         if removing_log:
@@ -368,6 +395,22 @@ def _run(args: argparse.Namespace) -> int:
                 details={"action": "Use nomnom stats date YYYY-MM-DD."},
             )
 
+    if args.command == "agent":
+        if args.agent_command == "candidates":
+            result = discover_candidates(args.input)
+            if args.json:
+                print(_json_output(result))
+            else:
+                for candidate in result["candidates"]:
+                    print(
+                        f"{candidate['source_ref']:<24} "
+                        f"{candidate['candidate_status']:<28} {candidate['canonical_name']}"
+                    )
+            return 0
+        agent_plan = parse_agent_plan(args.plan)
+        log_time = _effective_log_time(args.date)
+        resolved_agent_plan = resolve_agent_plan(agent_plan)
+
     if args.command == "setup":
         if args.status:
             result = setup_status_report()
@@ -454,6 +497,43 @@ def _run(args: argparse.Namespace) -> int:
                 print(_json_output(result))
             else:
                 print(f"Removed log #{result['log_id']}.")
+            return 0
+
+        if args.command == "agent":
+            assert resolved_agent_plan is not None
+            numeric_totals = {
+                key: resolved_agent_plan["totals"][key]
+                for key in ("kcal", "protein", "fat", "carbs")
+            }
+            log_id = store_log(
+                connection,
+                resolved_agent_plan["items"],
+                numeric_totals,
+                kind="agent_intake",
+                logged_at=log_time,
+            )
+            result = {
+                **resolved_agent_plan,
+                "log_id": log_id,
+                "logged_at": log_time.isoformat(timespec="seconds"),
+                "local_date": log_time.date().isoformat(),
+            }
+            result["pending_items"] = [
+                {
+                    "event_id": log_id,
+                    "item_id": f"{log_id}:{item['item_index']}",
+                    "input": item["input"],
+                    "action": item["capture"]["action"],
+                }
+                for item in result["items"]
+                if item["status"] == "pending_capture"
+            ]
+            assumptions = [item["assumption"] for item in result["items"] if item.get("assumption")]
+            if assumptions:
+                result["assumptions"] = assumptions
+            if result["approximate"]:
+                result["portion_correction"] = PORTION_CORRECTION
+            _print_log(result, args.json)
             return 0
 
         repository = FoodRepository(connection)

@@ -251,6 +251,48 @@ an existing phrase returns `alias_exists`; removing a missing phrase returns `al
 
 ## Canonical agent input contract
 
+For one unstructured diary meal, use the versioned agent-first flow. Discover each raw item without
+opening the diary:
+
+```sh
+nomnom agent candidates --input "raw tomato 60 g" --json
+```
+
+Discovery returns deterministic provider metadata, candidate status, and opaque references such as
+`usda:123` or `off:0123456789012`; it returns no nutrition fields for an agent plan. Only
+`generic_proxy_eligible` may be selected. `pending_capture_required` must become an explicit pending
+item, and `identity_rejected` must not be selected.
+
+Commit all items as one strict plan and one journal event:
+
+```sh
+nomnom agent intake --plan '{
+  "version": 1,
+  "items": [
+    {"input": "raw tomato 60 g", "grams": 60, "source_ref": "usda:123"},
+    {
+      "input": "Example Brand bread two slices",
+      "pending_capture": {"status": "pending_capture", "action": "photo_or_barcode"}
+    }
+  ]
+}' --json
+```
+
+The item key allowlist is `input`, optional positive `grams`, and exactly one of `source_ref` or
+`pending_capture`. The top level allows only `version`, `items`, and optional
+`portion_estimates`, whose shape is the existing external estimate contract below. Calories,
+macros, nutrition, source facts, unknown keys, duplicate refs, non-finite numbers, and mismatched
+estimates reject the whole plan before a journal write.
+
+On commit, nomnom re-fetches every selected source ref, validates returned identity and complete
+nutrition, applies exact/generic policy, calculates, and persists. It never uses a cache hit in place
+of the ref. A text-discovered brand is not exact evidence: preserve it with `pending_capture`, then
+use barcode/photo capture and explicit `nomnom log remove LOG_ID --confirm --json` plus a replacement
+entry when corrected. Intake output exposes `log_id` and each pending `item_id`. Pending items have
+no nutrition fields; intake and stats report `nutrition_status=incomplete` and resolved-only totals.
+
+### Legacy canonical text input
+
 The canonical shape supplied to nomnom is **food name + quantity + unit + optional modifiers**.
 For example: `egg 3 pieces`, `rice 150 g`, or `bread 2 pieces at 40 g`. Quantity and unit are
 required; modifiers may express a fraction, size, or explicit per-piece mass.

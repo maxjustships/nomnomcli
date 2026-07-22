@@ -54,20 +54,20 @@ Follow this exact sequence:
 
 ## Log free text
 
-1. Treat raw voice, text, or photo as primary input; preserve it and resolve or capture it safely instead of demanding manual nutrition lookup or database operation.
-2. Translate each item to food name + quantity + unit + optional modifiers; translate language,
-   not nutrition.
-3. Run `nomnom log --parse "FOOD QUANTITY UNIT, FOOD QUANTITY UNIT" --json`.
-   For a remembered prior local day, append `--date YYYY-MM-DD`; never infer a date or time.
-4. Show returned names, grams, confidence, totals, alternatives, assumptions, and date fields.
-5. Ask the user to confirm the resolution before relying on it.
+1. Preserve each raw voice/text/photo item phrase.
+2. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Use only
+   `generic_proxy_eligible`; convert exact/uncertain results to pending and never select rejected refs.
+3. Build one version-1 plan with `input`, optional measured positive `grams`, and exactly one of
+   `source_ref` or `{"pending_capture":{"status":"pending_capture","action":"photo_or_barcode"}}`.
+   Never include nutrition or copied provider facts.
+4. Run `nomnom agent intake --plan 'JSON' --json`; optionally append an explicit prior `--date YYYY-MM-DD`. nomnom re-fetches, validates, calculates, and writes one event.
+5. Show provenance, assumptions, resolved-only totals, completeness, and pending IDs; request a barcode/photo for pending items and say the meal is incomplete.
 
-Successful logs are stored immediately. Do not silently correct or rerun one; tell the user first.
-Remove only an explicitly chosen entry with `nomnom log remove LOG_ID --confirm --json`, then create
-any replacement. Never manipulate SQLite directly; use the CLI for every user data operation.
+Use the existing `nomnom log --parse ...` path for legacy canonical-text flows. Successful logs are
+stored immediately. Do not silently correct or rerun one; tell the user first. Remove only an
+explicitly chosen entry with `nomnom log remove LOG_ID --confirm --json`, then replace it. Never manipulate SQLite directly.
 
-Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words
-are parser syntax. Default `strict` behavior asks for grams when no piece weight exists.
+Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words are parser syntax; `strict` asks for grams when piece weight is absent.
 
 ## External fuzzy portions
 
