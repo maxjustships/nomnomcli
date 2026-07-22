@@ -110,6 +110,59 @@ def test_cli_capture_barcode_caches_exact_product_provenance(
         )
 
 
+def test_cli_barcode_recapture_consolidates_duplicate_rows_and_preserves_alias(
+    user_db, monkeypatch, capsys
+):
+    barcode = "0123456789012"
+    with connect(user_db) as connection:
+        for name, kcal in (("Stale product", 100), ("Other stale product", 150)):
+            connection.execute(
+                """INSERT INTO food_cache
+                (name, kcal, protein, fat, carbs, source, barcode, resolution_mode,
+                 source_id, provenance)
+                VALUES (?, ?, 10, 5, 20, 'openfoodfacts', ?, 'exact_product', ?,
+                        'openfoodfacts')""",
+                (name, kcal, barcode, barcode),
+            )
+        connection.execute(
+            """INSERT INTO food_aliases (phrase, normalized_phrase, canonical_name)
+            VALUES ('my bar', 'my bar', 'Stale product')"""
+        )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        OpenFoodFactsClient,
+        "product_by_barcode",
+        lambda self, code: Food(
+            "Current product — Acme",
+            250,
+            9,
+            4,
+            45,
+            source="openfoodfacts",
+            barcode=code,
+            brand="Acme",
+        ),
+    )
+
+    assert main(["capture", "barcode", barcode, "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["name"] == "Current product — Acme"
+
+    with connect(user_db) as connection:
+        rows = connection.execute(
+            """SELECT name, kcal, resolution_mode, source_id, provenance
+            FROM food_cache WHERE barcode = ?""",
+            (barcode,),
+        ).fetchall()
+        alias = connection.execute(
+            "SELECT canonical_name FROM food_aliases WHERE normalized_phrase = 'my bar'"
+        ).fetchone()
+    assert [tuple(row) for row in rows] == [
+        ("Current product — Acme", 250.0, "exact_product", barcode, "openfoodfacts")
+    ]
+    assert alias[0] == "Current product — Acme"
+
+
 def test_cli_capture_barcode_incomplete_product_is_never_cached(
     user_db, monkeypatch, capsys
 ):

@@ -13,6 +13,9 @@ database, synonym corpus, or piece-weight table is hidden in the package. It res
 runtime, performs nutrition arithmetic in code, and stores successful logs plus a user-owned cache
 in SQLite. There is no LLM in the program and no invented nutrition fallback.
 
+Raw voice, text, or photo is the primary user interface: the surrounding system should resolve or
+capture it safely instead of asking the user to research nutrition facts or operate a database.
+
 ```mermaid
 flowchart LR
     A[Human or agent] -->|food and quantity| N[nomnom CLI]

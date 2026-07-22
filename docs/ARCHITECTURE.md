@@ -61,6 +61,10 @@ The CLI owns deterministic parsing, contract validation, provider safety checks,
 nutrition arithmetic, policy enforcement, persistence, and structured errors. Provider clients
 only fetch and normalize runtime source responses; they are not packaged catalogs.
 
+Raw voice, text, or photo is the primary user interface. A surrounding system translates or
+captures that input through validated CLI paths rather than demanding manual nutrition lookup or
+database operation; this principle does not add an orchestration runtime to the CLI.
+
 An external agent may translate language into the canonical CLI input and may read a supplied
 package image. It may propose fuzzy gram estimates only through the existing validated estimate
 contract. Such estimates are explicitly approximate and never provide nutrition facts.

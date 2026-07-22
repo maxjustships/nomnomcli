@@ -54,7 +54,7 @@ Follow this exact sequence:
 
 ## Log free text
 
-1. Preserve every food and quantity the user supplied.
+1. Treat raw voice, text, or photo as primary input; preserve it and resolve or capture it safely instead of demanding manual nutrition lookup or database operation.
 2. Translate each item to food name + quantity + unit + optional modifiers; translate language,
    not nutrition.
 3. Run `nomnom log --parse "FOOD QUANTITY UNIT, FOOD QUANTITY UNIT" --json`.

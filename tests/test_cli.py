@@ -773,6 +773,41 @@ def test_cli_log_never_uses_poisoned_lookup_query_as_identity(
     assert logged[0]["name"] == "Sample grain"
 
 
+def test_cli_log_duplicate_barcode_fails_without_provider_or_log_write(
+    user_db, monkeypatch, capsys
+):
+    barcode = "0123456789012"
+    with connect(user_db) as connection:
+        for name, kcal in (("Stale product", 100), ("Newer product", 250)):
+            connection.execute(
+                """INSERT INTO food_cache
+                (name, kcal, protein, fat, carbs, source, barcode, resolution_mode,
+                 source_id, provenance)
+                VALUES (?, ?, 10, 5, 20, 'openfoodfacts', ?, 'exact_product', ?,
+                        'openfoodfacts')""",
+                (name, kcal, barcode, barcode),
+            )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        OpenFoodFactsClient,
+        "search",
+        lambda *args, **kwargs: pytest.fail("barcode conflicts must not use providers"),
+    )
+
+    assert main(["log", "--food", barcode, "--grams", "100", "--json"]) == 2
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert captured.out == ""
+    assert error["error"]["code"] == "barcode_cache_conflict"
+    assert error["error"]["details"]["match_count"] == 2
+    with connect(user_db) as connection:
+        assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT count(*) FROM food_cache WHERE barcode = ?", (barcode,)
+        ).fetchone()[0] == 2
+
+
 def test_cli_remove_log_requires_confirmation_validates_id_and_updates_stats(
     user_db, monkeypatch, capsys
 ):
@@ -816,3 +851,30 @@ def test_cli_remove_log_requires_confirmation_validates_id_and_updates_stats(
     stats = json.loads(capsys.readouterr().out)
     assert stats["totals"] == second_totals
     assert [meal["id"] for meal in stats["meals"]] == [second_id]
+
+
+def test_cli_remove_log_enforces_sqlite_integer_range_without_mutation(
+    user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    with connect(user_db) as connection:
+        existing_id = store_log(
+            connection,
+            [{"name": "keep"}],
+            {"kcal": 1, "protein": 0, "fat": 0, "carbs": 0},
+        )
+
+    assert main(["log", "remove", str(2**63 - 1), "--confirm", "--json"]) == 2
+    max_error = json.loads(capsys.readouterr().err)
+    assert max_error["error"]["code"] == "log_not_found"
+
+    for value in (str(2**63), "9" * 100):
+        assert main(["log", "remove", value, "--confirm", "--json"]) == 2
+        error = json.loads(capsys.readouterr().err)
+        assert error["error"]["code"] == "invalid_log_id"
+        assert error["error"]["details"]["value"] == value
+
+    with connect(user_db) as connection:
+        assert [
+            row[0] for row in connection.execute("SELECT id FROM log_entries ORDER BY id")
+        ] == [existing_id]

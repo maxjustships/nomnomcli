@@ -198,6 +198,103 @@ def test_exact_local_alias_name_and_barcode_identities_remain_stable(
     assert (name_confidence, alias_confidence, barcode_confidence) == (1.0, 1.0, 1.0)
 
 
+def test_duplicate_cached_barcode_fails_closed_without_provider_fallback(
+    repository, monkeypatch
+):
+    barcode = "0123456789012"
+    for name, kcal in (("Stale product", 100), ("Newer product", 250)):
+        repository.user_connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, barcode, resolution_mode,
+             source_id, provenance)
+            VALUES (?, ?, 10, 5, 20, 'openfoodfacts', ?, 'exact_product', ?,
+                    'openfoodfacts')""",
+            (name, kcal, barcode, barcode),
+        )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("barcode conflicts must not use providers"),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(barcode)
+
+    assert caught.value.code == "barcode_cache_conflict"
+    assert caught.value.details["barcode"] == barcode
+    assert caught.value.details["match_count"] == 2
+    assert [match["name"] for match in caught.value.details["matches"]] == [
+        "Newer product",
+        "Stale product",
+    ]
+    assert repository.user_connection.execute(
+        "SELECT count(*) FROM food_cache WHERE barcode = ?", (barcode,)
+    ).fetchone()[0] == 2
+
+
+def test_cached_off_proxy_matching_barcode_is_exact_even_under_strict_policy(
+    repository, monkeypatch
+):
+    barcode = "0123456789012"
+    proxy = replace(
+        _off_candidate(
+            "Fixture bar — Acme",
+            brand="Acme",
+            barcode=barcode,
+            categories=("en:snacks",),
+        ),
+        resolution_mode="generic_proxy",
+        assumption="Brand not specified; used a stale generic assumption.",
+    )
+    repository._cache_food(proxy, lookup_query="fixture bar")
+    monkeypatch.setenv("NOMNOM_GENERIC_PROXY_POLICY", "exact_only")
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("an exact cached barcode must stay local"),
+    )
+
+    food, confidence = repository.resolve(barcode)
+
+    assert confidence == 1.0
+    assert food.resolution_mode == "exact_product"
+    assert food.source == "openfoodfacts"
+    assert food.source_id == barcode
+    assert food.provenance == "openfoodfacts"
+    assert food.assumption is None
+    cached = repository.user_connection.execute(
+        "SELECT resolution_mode, assumption FROM food_cache WHERE barcode = ?", (barcode,)
+    ).fetchone()
+    assert tuple(cached) == ("generic_proxy", proxy.assumption)
+
+
+def test_cached_barcode_with_inadequate_source_evidence_fails_closed(
+    repository, monkeypatch
+):
+    barcode = "0123456789012"
+    repository.user_connection.execute(
+        """INSERT INTO food_cache
+        (name, kcal, protein, fat, carbs, source, barcode, resolution_mode,
+         provenance, assumption)
+        VALUES ('Unproven product', 100, 10, 5, 20, 'openfoodfacts', ?,
+                'generic_proxy', 'openfoodfacts', 'stale generic assumption')""",
+        (barcode,),
+    )
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("unsafe barcode evidence must not use providers"),
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        repository.resolve(barcode)
+
+    assert caught.value.code == "barcode_source_inadequate"
+    assert caught.value.details["barcode"] == barcode
+    assert caught.value.details["source"] == "openfoodfacts"
+    assert caught.value.details["source_id"] is None
+
+
 @pytest.mark.parametrize(
     ("query", "candidate"),
     [

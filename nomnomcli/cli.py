@@ -23,6 +23,8 @@ from nomnomcli.portions import (
 )
 from nomnomcli.recipes import fetch_recipe, recipe_portion, save_recipe
 
+SQLITE_MAX_INTEGER = 2**63 - 1
+
 
 def _json_output(payload: dict | list) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
@@ -84,11 +86,11 @@ def _validated_log_id(value: str | None) -> int:
             "Log ID must be a positive integer",
             details={"value": value},
         ) from exc
-    if log_id <= 0 or str(log_id) != value:
+    if log_id <= 0 or log_id > SQLITE_MAX_INTEGER or str(log_id) != value:
         raise NomnomError(
             "invalid_log_id",
-            "Log ID must be a positive integer",
-            details={"value": value},
+            "Log ID must be a positive canonical SQLite integer",
+            details={"value": value, "maximum": SQLITE_MAX_INTEGER},
         )
     return log_id
 

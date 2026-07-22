@@ -411,23 +411,78 @@ class FoodRepository:
         return self._apply_generic_proxy_policy(proxy, confidence)
 
     def _find_explicit_identity(self, query: str) -> Food | None:
+        barcode = self._find_barcode_exact(query)
+        if barcode is not None:
+            return barcode
         exact_name = self._find_name_exact(query)
         if exact_name is not None and _local_cache_match_is_safe(
             query, exact_name, identity="name"
         ):
             return exact_name
-        barcode = self.user_connection.execute(
-            "SELECT * FROM food_cache WHERE barcode = ? LIMIT 1",
-            (normalize_name(query),),
-        ).fetchone()
-        if barcode is None:
+        return None
+
+    def _find_barcode_exact(self, query: str) -> Food | None:
+        barcode = normalize_name(query)
+        rows = self.user_connection.execute(
+            """SELECT * FROM food_cache WHERE barcode = ?
+            ORDER BY name COLLATE NOCASE""",
+            (barcode,),
+        ).fetchall()
+        if not rows:
             return None
-        food = self._row_to_food(barcode)
-        return (
-            food
-            if _local_cache_match_is_safe(query, food, identity="barcode")
-            else None
+        if len(rows) > 1:
+            raise NomnomError(
+                "barcode_cache_conflict",
+                f"Multiple cached foods claim barcode: {barcode}",
+                details={
+                    "barcode": barcode,
+                    "match_count": len(rows),
+                    "matches": [
+                        {
+                            key: value
+                            for key, value in {
+                                "name": str(row["name"]),
+                                "source": str(row["source"]),
+                                "source_id": (
+                                    str(row["source_id"]) if row["source_id"] else None
+                                ),
+                                "provenance": (
+                                    str(row["provenance"]) if row["provenance"] else None
+                                ),
+                                "resolution_mode": str(row["resolution_mode"]),
+                            }.items()
+                            if value is not None
+                        }
+                        for row in rows
+                    ],
+                    "action": f"nomnom capture barcode {barcode} --json",
+                },
+            )
+        food = self._row_to_food(rows[0])
+        source_identity_matches = food.source_id == barcode
+        provenance_matches = bool(
+            food.source
+            and food.source != "unknown"
+            and food.provenance == food.source
         )
+        if (
+            not _local_cache_match_is_safe(query, food, identity="barcode")
+            or not source_identity_matches
+            or not provenance_matches
+        ):
+            raise NomnomError(
+                "barcode_source_inadequate",
+                f"Cached barcode lacks trustworthy source evidence: {barcode}",
+                details={
+                    "barcode": barcode,
+                    "name": food.name,
+                    "source": food.source,
+                    "source_id": food.source_id,
+                    "provenance": food.provenance,
+                    "action": f"nomnom capture barcode {barcode} --json",
+                },
+            )
+        return replace(food, resolution_mode="exact_product", assumption=None)
 
     def _find_name_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
@@ -741,6 +796,33 @@ class FoodRepository:
         return [match[-1] for match in ranked[:limit]]
 
     def _cache_food(self, food: Food, *, lookup_query: str) -> None:
+        self.user_connection.execute("SAVEPOINT cache_food")
+        try:
+            if food.barcode:
+                stale_rows = self.user_connection.execute(
+                    """SELECT name FROM food_cache
+                    WHERE barcode = ? AND name != ? COLLATE NOCASE""",
+                    (food.barcode, food.name),
+                ).fetchall()
+                for row in stale_rows:
+                    self.user_connection.execute(
+                        """UPDATE food_aliases SET canonical_name = ?
+                        WHERE canonical_name = ? COLLATE NOCASE""",
+                        (food.name, row["name"]),
+                    )
+                self.user_connection.execute(
+                    """DELETE FROM food_cache
+                    WHERE barcode = ? AND name != ? COLLATE NOCASE""",
+                    (food.barcode, food.name),
+                )
+            self._upsert_cached_food(food, lookup_query=lookup_query)
+            self.user_connection.execute("RELEASE SAVEPOINT cache_food")
+        except Exception:
+            self.user_connection.execute("ROLLBACK TO SAVEPOINT cache_food")
+            self.user_connection.execute("RELEASE SAVEPOINT cache_food")
+            raise
+
+    def _upsert_cached_food(self, food: Food, *, lookup_query: str) -> None:
         self.user_connection.execute(
             """INSERT INTO food_cache
             (name, kcal, protein, fat, carbs, piece_grams, piece_grams_source,
