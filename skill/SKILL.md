@@ -62,9 +62,9 @@ Follow this exact sequence:
 4. Show returned names, grams, confidence, totals, alternatives, assumptions, and date fields.
 5. Ask the user to confirm the resolution before relying on it.
 
-Successful logs are stored immediately. Do not silently correct or rerun one;
-tell the user before creating a replacement entry. Never read, edit, or manipulate SQLite directly;
-use `nomnom log --date` for remembered meals and the CLI for all user data operations.
+Successful logs are stored immediately. Do not silently correct or rerun one; tell the user first.
+Remove only an explicitly chosen entry with `nomnom log remove LOG_ID --confirm --json`, then create
+any replacement. Never manipulate SQLite directly; use the CLI for every user data operation.
 
 Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words
 are parser syntax. Default `strict` behavior asks for grams when no piece weight exists.

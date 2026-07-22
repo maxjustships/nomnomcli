@@ -34,6 +34,12 @@ Every accepted runtime result retains its resolution mode and source evidence. R
 cache records keep provider/source identity, provenance, confidence, and explicit assumptions.
 Rejected, incomplete, unsafe, or unconfirmed results are not cached or logged.
 
+Local identity is established only by an exact normalized cache name, an explicit user alias, an
+exact barcode, or existing explicit source-backed identity that satisfies the same exact-product or
+generic-proxy safety rules. `lookup_query` is retrieval metadata, never identity proof. A legacy or
+fuzzy record that fails this contract may be shown as a search candidate, but it cannot be logged
+automatically; resolution continues to a runtime provider or an actionable error.
+
 The two identity modes have different guarantees:
 
 - `exact_product` requires a barcode, source-backed label capture, explicit brand/SKU match, or
@@ -44,6 +50,10 @@ The two identity modes have different guarantees:
 A branded or SKU-specific request must resolve exactly or request exact capture. The resolver must
 never silently substitute a generic food or similar product, and a cached generic proxy must not
 later satisfy branded intent.
+
+Journal correction is reversible through `nomnom log remove LOG_ID --confirm --json`. The CLI
+validates the identifier and confirmation, then transactionally removes only that log record; user
+operations never require direct SQLite edits.
 
 ## Responsibility boundaries
 

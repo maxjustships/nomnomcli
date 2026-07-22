@@ -172,12 +172,50 @@ def _off_proxy_assumption(food: Food) -> str:
     )
 
 
-def _cached_food_query_is_safe(query: str, food: Food, *, exact_name: bool = False) -> bool:
+def _has_explicit_source_identity(food: Food) -> bool:
+    return bool(
+        food.source == "user"
+        or food.source_id
+        or food.source_note
+        or food.barcode
+        or food.fdc_id is not None
+    )
+
+
+def _local_cache_match_is_safe(query: str, food: Food, *, identity: str) -> bool:
+    """Apply the sole automatic local-cache identity contract.
+
+    ``lookup_query`` is intentionally absent: it is retrieval metadata, not identity
+    evidence. Public cache search may display records found through that metadata, but
+    resolution may accept them only through one of the explicit identities below.
+    """
+    normalized_query = normalize_name(query)
+    if identity == "alias":
+        return True
+    if identity == "name":
+        exact_name = normalized_query == normalize_name(food.name)
+        if food.resolution_mode == "generic_proxy":
+            return exact_name and _generic_proxy_query_is_safe(query, food)
+        return exact_name
+    if identity == "barcode":
+        return bool(food.barcode and normalized_query == normalize_name(food.barcode))
+    if identity != "safe_search" or not _has_explicit_source_identity(food):
+        return False
+
     if food.resolution_mode == "generic_proxy":
         return _generic_proxy_query_is_safe(query, food)
-    if food.resolution_mode == "exact_product" and food.source == "openfoodfacts":
-        return exact_name or _exact_product_intent(query, food)
-    return True
+
+    if food.resolution_mode == "exact_product" or food.brand:
+        return _exact_product_intent(query, food) and _off_exact_candidate_query_is_safe(
+            query, food
+        )
+
+    query_tokens = _name_tokens(query)
+    return (
+        bool(query_tokens)
+        and not _query_has_sku(query)
+        and query_tokens <= _name_tokens(food.name)
+    )
 
 
 def _food_needs_source_error(
@@ -372,23 +410,24 @@ class FoodRepository:
         )
         return self._apply_generic_proxy_policy(proxy, confidence)
 
-    def _find_exact(self, name: str) -> Food | None:
-        cached = self.user_connection.execute(
-            """SELECT * FROM food_cache
-            WHERE name = ? COLLATE NOCASE OR lookup_query = ? COLLATE NOCASE
-            ORDER BY CASE WHEN lookup_query = ? COLLATE NOCASE THEN 0 ELSE 1 END""",
-            (name, normalize_name(name), normalize_name(name)),
-        ).fetchall()
-        for row in cached:
-            food = self._row_to_food(row)
-            if not _cached_food_query_is_safe(
-                name,
-                food,
-                exact_name=normalize_name(food.name) == normalize_name(name),
-            ):
-                continue
-            return food
-        return None
+    def _find_explicit_identity(self, query: str) -> Food | None:
+        exact_name = self._find_name_exact(query)
+        if exact_name is not None and _local_cache_match_is_safe(
+            query, exact_name, identity="name"
+        ):
+            return exact_name
+        barcode = self.user_connection.execute(
+            "SELECT * FROM food_cache WHERE barcode = ? LIMIT 1",
+            (normalize_name(query),),
+        ).fetchone()
+        if barcode is None:
+            return None
+        food = self._row_to_food(barcode)
+        return (
+            food
+            if _local_cache_match_is_safe(query, food, identity="barcode")
+            else None
+        )
 
     def _find_name_exact(self, name: str) -> Food | None:
         cached = self.user_connection.execute(
@@ -423,6 +462,8 @@ class FoodRepository:
                     "action": "Remove the alias or add the exact canonical food to the user cache",
                 },
             )
+        if not _local_cache_match_is_safe(query, target, identity="alias"):
+            raise AssertionError("explicit aliases must satisfy the local identity contract")
         return target
 
     def resolve(self, query: str, *, allow_remote: bool = True) -> tuple[Food, float]:
@@ -431,12 +472,12 @@ class FoodRepository:
         if alias is not None:
             return self._apply_generic_proxy_policy(alias, 1.0)
 
-        exact = self._find_exact(normalized)
+        exact = self._find_explicit_identity(normalized)
         if exact:
             return self._apply_generic_proxy_policy(exact, 1.0)
 
         canonical = self._canonicalize_query(normalized)
-        exact = self._find_exact(canonical)
+        exact = self._find_explicit_identity(canonical)
         if exact:
             return self._apply_generic_proxy_policy(
                 exact, 0.98 if canonical != normalized else 1.0
@@ -447,14 +488,6 @@ class FoodRepository:
             return self._apply_generic_proxy_policy(
                 self._row_to_food(ranked_cache_matches[0]), 0.85
             )
-
-        matches = self.search(canonical, limit=5)
-        if len(matches) == 1:
-            return matches[0], 0.85
-        if matches:
-            first = normalize_name(matches[0].name)
-            if first.startswith(canonical) or canonical.startswith(first):
-                return matches[0], 0.8
 
         remote_enabled = allow_remote and not os.getenv("NOMNOM_OFFLINE")
         off_enabled = remote_enabled and not os.getenv("NOMNOM_DISABLE_OFF")
@@ -596,8 +629,6 @@ class FoodRepository:
         unique: dict[str, Food] = {}
         for row in rows:
             food = self._row_to_food(row)
-            if not _cached_food_query_is_safe(query, food):
-                continue
             unique.setdefault(normalize_name(food.name), food)
         return list(unique.values())[:limit]
 
@@ -680,12 +711,14 @@ class FoodRepository:
         ).fetchall()
         for row in rows:
             food = self._row_to_food(row)
-            if not _cached_food_query_is_safe(query, food):
+            if not _local_cache_match_is_safe(
+                query, food, identity="safe_search"
+            ):
                 continue
             candidate_tokens = _name_tokens(
                 " ".join(
                     value
-                    for value in (food.name, food.brand, row["lookup_query"])
+                    for value in (food.name, food.brand, food.barcode)
                     if value
                 )
             )

@@ -10,7 +10,7 @@ from datetime import date, datetime
 
 from nomnomcli import __version__
 from nomnomcli.config import ProviderConfig
-from nomnomcli.db import connect, get_stats, store_log
+from nomnomcli.db import connect, get_stats, remove_log, store_log
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import FoodRepository
 from nomnomcli.models import scale_food, total_items
@@ -73,6 +73,24 @@ def _effective_log_time(value: str | None) -> datetime:
         return _local_now()
     local_date = _parse_local_date(value)
     return datetime(local_date.year, local_date.month, local_date.day, 12).astimezone()
+
+
+def _validated_log_id(value: str | None) -> int:
+    try:
+        log_id = int(value or "")
+    except ValueError as exc:
+        raise NomnomError(
+            "invalid_log_id",
+            "Log ID must be a positive integer",
+            details={"value": value},
+        ) from exc
+    if log_id <= 0 or str(log_id) != value:
+        raise NomnomError(
+            "invalid_log_id",
+            "Log ID must be a positive integer",
+            details={"value": value},
+        )
+    return log_id
 
 
 def _nutrition_line(totals: dict) -> str:
@@ -165,7 +183,9 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     log = commands.add_parser("log", help="resolve and store food")
-    form = log.add_mutually_exclusive_group(required=True)
+    log.add_argument("log_action", nargs="?", choices=("remove",))
+    log.add_argument("log_id", nargs="?")
+    form = log.add_mutually_exclusive_group()
     form.add_argument("--parse", metavar="TEXT", help="comma-separated food phrases")
     form.add_argument("--food", metavar="NAME", help="food name for direct logging")
     log.add_argument("--grams", type=float, help="grams for --food")
@@ -179,6 +199,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="inline JSON estimates exactly matched by item_index and input",
     )
     log.add_argument("--date", help="local calendar date in YYYY-MM-DD; stored at local noon")
+    log.add_argument(
+        "--confirm", action="store_true", help="explicitly confirm removal of one log entry"
+    )
     log.add_argument("--json", action="store_true", help="machine-readable JSON output")
 
     stats = commands.add_parser("stats", help="show nutrition totals")
@@ -256,6 +279,45 @@ def _run(args: argparse.Namespace) -> int:
     portion_policy = None
     portion_estimates = None
     if args.command == "log":
+        removing_log = args.log_action == "remove"
+        if removing_log:
+            log_id = _validated_log_id(args.log_id)
+            if not args.confirm:
+                raise NomnomError(
+                    "log_removal_confirmation_required",
+                    f"Explicit confirmation is required to remove log #{log_id}",
+                    details={
+                        "log_id": log_id,
+                        "action": f"nomnom log remove {log_id} --confirm --json",
+                    },
+                )
+            if any(
+                value is not None
+                for value in (
+                    args.food,
+                    args.parse,
+                    args.grams,
+                    args.portion_policy,
+                    args.portion_estimates,
+                    args.date,
+                )
+            ):
+                raise NomnomError(
+                    "invalid_arguments",
+                    "Log removal cannot be combined with food logging options",
+                )
+        else:
+            log_id = None
+            if args.log_id is not None or args.confirm:
+                raise NomnomError(
+                    "invalid_arguments",
+                    "--confirm and a log ID are available only with 'log remove'",
+                )
+            if (args.food is None) == (args.parse is None):
+                raise NomnomError(
+                    "invalid_arguments",
+                    "Choose exactly one logging form: --food or --parse",
+                )
         if args.food and (args.portion_policy is not None or args.portion_estimates is not None):
             raise NomnomError(
                 "invalid_arguments",
@@ -279,7 +341,11 @@ def _run(args: argparse.Namespace) -> int:
                         },
                     )
                 portion_estimates = parse_portion_estimates(args.portion_estimates)
-    log_time = _effective_log_time(args.date) if args.command == "log" else None
+    log_time = (
+        _effective_log_time(args.date)
+        if args.command == "log" and args.log_action != "remove"
+        else None
+    )
     stats_date = None
     if args.command == "stats":
         if args.period == "date":
@@ -373,6 +439,21 @@ def _run(args: argparse.Namespace) -> int:
         return 0
 
     with connect() as connection:
+        if args.command == "log" and args.log_action == "remove":
+            try:
+                result = remove_log(connection, log_id, confirmed=True)
+            except LookupError as exc:
+                raise NomnomError(
+                    "log_not_found",
+                    f"Log entry not found: {log_id}",
+                    details={"log_id": log_id},
+                ) from exc
+            if args.json:
+                print(_json_output(result))
+            else:
+                print(f"Removed log #{result['log_id']}.")
+            return 0
+
         repository = FoodRepository(connection)
         if args.command == "capture":
             if args.capture_command == "barcode":

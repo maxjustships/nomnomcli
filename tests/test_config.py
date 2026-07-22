@@ -7,7 +7,9 @@ import pytest
 
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
+from nomnomcli.off import OFF_PRODUCT_PROBE_URL, OFF_SEARCH_URL, OpenFoodFactsClient
 from nomnomcli.onboarding import doctor_report, setup_providers, setup_status_report
+from nomnomcli.providers import RetryPolicy
 
 
 class HealthyOFF:
@@ -254,6 +256,50 @@ def test_doctor_distinguishes_off_product_reachability_from_full_text_readiness(
         "product_lookup_reachable": True,
         "full_text_search_ready": False,
     }
+
+
+def test_doctor_claims_follow_actual_mocked_off_capability_calls(tmp_path):
+    calls = []
+
+    class Response:
+        headers = {}
+
+        def __init__(self, payload, status_code=200):
+            self.payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise NomnomError("http_error", "mocked HTTP failure")
+
+        def json(self):
+            return self.payload
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs["params"]))
+        if url == OFF_PRODUCT_PROBE_URL:
+            return Response({"status": 0})
+        assert url == OFF_SEARCH_URL
+        return Response({}, status_code=503)
+
+    report = doctor_report(
+        config=ProviderConfig(environ={}, config_path=tmp_path / "missing.toml"),
+        off_client=OpenFoodFactsClient(
+            request_get=get,
+            retry_policy=RetryPolicy(max_attempts=1),
+            sleep=lambda _: None,
+        ),
+        usda_client=HealthyUSDA(),
+    )
+
+    assert report["providers"]["openfoodfacts"] == {
+        "configured": True,
+        "product_lookup_reachable": True,
+        "full_text_search_ready": False,
+    }
+    assert [url for url, _ in calls] == [OFF_PRODUCT_PROBE_URL, OFF_SEARCH_URL]
+    assert "search_terms" not in calls[0][1]
+    assert calls[1][1]["search_terms"] == "nomnom"
 
 
 def test_setup_status_is_actionable_and_never_contains_key(tmp_path):

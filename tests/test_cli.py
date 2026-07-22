@@ -401,6 +401,8 @@ def test_exact_issue_phrase_with_pinned_brand(seeded_user_db, monkeypatch, capsy
         )
         == 0
     )
+    canonical_name = json.loads(capsys.readouterr().out)["name"]
+    assert main(["alias", "add", "хлеб harry's", canonical_name, "--json"]) == 0
     capsys.readouterr()
     monkeypatch.setenv("NOMNOM_OFFLINE", "1")
     phrase = (
@@ -714,3 +716,103 @@ def test_cli_required_harrys_alias_flow(user_db, monkeypatch, capsys):
     assert result["items"][0]["name"] == canonical_name
     assert result["items"][0]["source"] == "user"
     assert result["items"][0]["grams"] == 80
+
+
+def test_cli_log_never_uses_poisoned_lookup_query_as_identity(
+    user_db, monkeypatch, capsys
+):
+    with connect(user_db) as connection:
+        connection.execute(
+            """INSERT INTO food_cache
+            (name, kcal, protein, fat, carbs, source, fdc_id, lookup_query,
+             resolution_mode, source_id, provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "egg",
+                155,
+                12.6,
+                10.6,
+                1.1,
+                "usda",
+                1001,
+                "sample grain",
+                "generic_proxy",
+                "1001",
+                "usda",
+            ),
+        )
+
+    provider_food = Food(
+        "Sample grain",
+        200,
+        20,
+        5,
+        10,
+        source="openfoodfacts",
+        barcode="10000001",
+        categories=("en:sample-grains",),
+        source_id="10000001",
+        provenance="openfoodfacts",
+    )
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setattr(
+        OpenFoodFactsClient,
+        "search",
+        lambda self, query, page_size=5: [provider_food],
+    )
+
+    assert main(["log", "--food", "sample grain", "--grams", "100", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["items"][0]["name"] == "Sample grain"
+    assert result["items"][0]["name"] != "egg"
+    with connect(user_db) as connection:
+        logged = json.loads(
+            connection.execute("SELECT items_json FROM log_entries").fetchone()[0]
+        )
+    assert logged[0]["name"] == "Sample grain"
+
+
+def test_cli_remove_log_requires_confirmation_validates_id_and_updates_stats(
+    user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    first_totals = {"kcal": 55.0, "protein": 2.5, "fat": 2.1, "carbs": 6.4}
+    second_totals = {"kcal": 80.0, "protein": 4.0, "fat": 2.0, "carbs": 12.0}
+    with connect(user_db) as connection:
+        first_id = store_log(connection, [{"name": "first"}], first_totals)
+        second_id = store_log(connection, [{"name": "second"}], second_totals)
+
+    assert main(["log", "remove", str(first_id), "--json"]) == 2
+    missing_confirmation = json.loads(capsys.readouterr().err)
+    assert missing_confirmation["error"]["code"] == "log_removal_confirmation_required"
+
+    assert main(["log", "remove", "not-an-id", "--confirm", "--json"]) == 2
+    invalid_id = json.loads(capsys.readouterr().err)
+    assert invalid_id["error"]["code"] == "invalid_log_id"
+
+    assert main(["log", "remove", "999999", "--confirm", "--json"]) == 2
+    missing_id = json.loads(capsys.readouterr().err)
+    assert missing_id["error"]["code"] == "log_not_found"
+
+    with connect(user_db) as connection:
+        assert [
+            row[0] for row in connection.execute("SELECT id FROM log_entries ORDER BY id")
+        ] == [first_id, second_id]
+
+    assert main(["log", "remove", str(first_id), "--confirm", "--json"]) == 0
+    removed = json.loads(capsys.readouterr().out)
+    assert removed == {
+        "kind": "food",
+        "label": None,
+        "log_id": first_id,
+        "logged_at": removed["logged_at"],
+        "removed": True,
+        "removed_count": 1,
+        "totals": first_totals,
+    }
+
+    assert main(["stats", "today", "--json"]) == 0
+    stats = json.loads(capsys.readouterr().out)
+    assert stats["totals"] == second_totals
+    assert [meal["id"] for meal in stats["meals"]] == [second_id]

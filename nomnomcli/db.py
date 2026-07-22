@@ -231,6 +231,46 @@ def store_log(
     return int(cursor.lastrowid)
 
 
+def remove_log(connection: sqlite3.Connection, log_id: int, *, confirmed: bool) -> dict:
+    if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
+        raise ValueError("log_id must be a positive integer")
+    if confirmed is not True:
+        raise ValueError("log removal requires explicit confirmation")
+
+    connection.execute("SAVEPOINT remove_log")
+    try:
+        row = connection.execute(
+            """SELECT id, logged_at, kind, label, kcal, protein, fat, carbs
+            FROM log_entries WHERE id = ?""",
+            (log_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError(log_id)
+        cursor = connection.execute("DELETE FROM log_entries WHERE id = ?", (log_id,))
+        if cursor.rowcount != 1:
+            raise sqlite3.DatabaseError(
+                f"expected to remove one log entry, removed {cursor.rowcount}"
+            )
+        connection.execute("RELEASE SAVEPOINT remove_log")
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT remove_log")
+        connection.execute("RELEASE SAVEPOINT remove_log")
+        raise
+
+    return {
+        "removed": True,
+        "removed_count": 1,
+        "log_id": int(row["id"]),
+        "logged_at": str(row["logged_at"]),
+        "kind": str(row["kind"]),
+        "label": str(row["label"]) if row["label"] is not None else None,
+        "totals": {
+            key: round(float(row[key]), 2)
+            for key in ("kcal", "protein", "fat", "carbs")
+        },
+    }
+
+
 def period_start(period: str, now: datetime | None = None) -> datetime:
     current = now or datetime.now().astimezone()
     if period == "today":

@@ -11,6 +11,18 @@ from nomnomcli.db import connect
 from nomnomcli.foods import FoodRepository
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "foods.json"
+SYNTHETIC_USER_ALIASES = (
+    ("борщ", "borscht"),
+    ("хлеб", "bread, wheat"),
+    ("гречка", "buckwheat groats, roasted, cooked"),
+    ("яйцо", "egg, whole, boiled"),
+    ("яйца", "egg, whole, boiled"),
+    ("яиц", "egg, whole, boiled"),
+    ("eggs", "egg, whole, boiled"),
+    ("egg", "egg, whole, boiled"),
+    ("egg whole boiled", "egg, whole, boiled"),
+    ("молоко", "milk, whole"),
+)
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +83,11 @@ def seed_food_cache(connection, foods: list[dict]) -> None:
                 ),
             ),
         )
+    connection.executemany(
+        """INSERT INTO food_aliases (phrase, normalized_phrase, canonical_name)
+        VALUES (?, ?, ?)""",
+        ((phrase, phrase.replace("ё", "е"), name) for phrase, name in SYNTHETIC_USER_ALIASES),
+    )
 
 
 @pytest.fixture

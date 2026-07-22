@@ -168,7 +168,7 @@ class OpenFoodFactsClient:
         return True
 
     def probe_product(self) -> bool:
-        request_with_retry(
+        response = request_with_retry(
             provider="openfoodfacts",
             code="openfoodfacts_unavailable",
             message="Open Food Facts product lookup is unavailable",
@@ -183,6 +183,33 @@ class OpenFoodFactsClient:
             retry_policy=self.retry_policy,
             sleep=self.sleep,
         )
+        try:
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ProviderUnavailableError(
+                "openfoodfacts",
+                "openfoodfacts_unavailable",
+                "Open Food Facts product lookup is unavailable",
+                retryable=False,
+                details={
+                    "capability": "product_lookup",
+                    "status": getattr(response, "status_code", None),
+                },
+            ) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise NomnomError(
+                "openfoodfacts_invalid_response",
+                "Open Food Facts returned malformed product-probe JSON",
+                details={"capability": "product_lookup"},
+            ) from exc
+        if not isinstance(payload, dict):
+            raise NomnomError(
+                "openfoodfacts_invalid_response",
+                "Open Food Facts returned an invalid product-probe payload",
+                details={"capability": "product_lookup"},
+            )
         return True
 
     def product_by_barcode(self, barcode: str) -> Food:

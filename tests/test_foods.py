@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -83,6 +84,118 @@ def _off_candidate(
         source_id=barcode,
         provenance="openfoodfacts",
     )
+
+
+@pytest.mark.parametrize("schema_kind", ["latest", "legacy_v2"])
+def test_poisoned_lookup_query_never_establishes_local_identity(
+    tmp_path, monkeypatch, schema_kind
+):
+    database = tmp_path / f"{schema_kind}.sqlite3"
+    if schema_kind == "legacy_v2":
+        with sqlite3.connect(database) as legacy:
+            legacy.executescript(
+                """
+                PRAGMA user_version = 2;
+                CREATE TABLE food_cache (
+                    name TEXT PRIMARY KEY COLLATE NOCASE,
+                    kcal REAL NOT NULL,
+                    protein REAL NOT NULL,
+                    fat REAL NOT NULL,
+                    carbs REAL NOT NULL,
+                    piece_grams REAL,
+                    density_g_ml REAL,
+                    source TEXT NOT NULL,
+                    fdc_id INTEGER,
+                    barcode TEXT,
+                    brand TEXT,
+                    lookup_query TEXT,
+                    alternatives_json TEXT
+                );
+                INSERT INTO food_cache VALUES
+                    ('egg', 155, 12.6, 10.6, 1.1, 50, NULL, 'usda', 1001,
+                     NULL, NULL, 'sample grain', '[]');
+                """
+            )
+    else:
+        with connect(database) as connection:
+            connection.execute(
+                """INSERT INTO food_cache
+                (name, kcal, protein, fat, carbs, piece_grams, source, fdc_id,
+                 lookup_query, resolution_mode, source_id, provenance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "egg",
+                    155,
+                    12.6,
+                    10.6,
+                    1.1,
+                    50,
+                    "usda",
+                    1001,
+                    "sample grain",
+                    "generic_proxy",
+                    "1001",
+                    "usda",
+                ),
+            )
+
+    provider_food = _off_candidate(
+        "Sample grain",
+        brand=None,
+        barcode="10000001",
+        categories=("en:sample-grains",),
+    )
+    provider_calls = []
+    with connect(database) as connection:
+        repository = FoodRepository(connection)
+
+        def search(query, page_size=5):
+            provider_calls.append((query, page_size))
+            return [provider_food]
+
+        monkeypatch.setattr(repository.off_client, "search", search)
+        resolved, confidence = repository.resolve("sample grain")
+
+        assert resolved.name == "Sample grain"
+        assert resolved.name != "egg"
+        assert resolved.resolution_mode == "generic_proxy"
+        assert confidence == 1.0
+        assert provider_calls == [("sample grain", 5)]
+        assert connection.execute(
+            "SELECT lookup_query FROM food_cache WHERE name = 'egg'"
+        ).fetchone()[0] == "sample grain"
+
+
+def test_exact_local_alias_name_and_barcode_identities_remain_stable(
+    repository, monkeypatch
+):
+    exact = Food(
+        "Exact sample — Acme",
+        200,
+        10,
+        5,
+        30,
+        source="openfoodfacts",
+        barcode="12345678",
+        brand="Acme",
+        resolution_mode="exact_product",
+        source_id="12345678",
+        provenance="openfoodfacts",
+    )
+    repository._cache_food(exact, lookup_query="unrelated stale metadata")
+    repository.add_alias("my exact sample", exact.name)
+    monkeypatch.setattr(
+        repository.off_client,
+        "search",
+        lambda *args, **kwargs: pytest.fail("explicit local identity must not use OFF"),
+    )
+
+    by_name, name_confidence = repository.resolve("exact sample — acme")
+    by_alias, alias_confidence = repository.resolve("MY EXACT SAMPLE")
+    by_barcode, barcode_confidence = repository.resolve("12345678")
+
+    assert (by_name, by_alias, by_barcode) == (exact, exact, exact)
+    assert (name_confidence, alias_confidence, barcode_confidence) == (1.0, 1.0, 1.0)
 
 
 @pytest.mark.parametrize(
@@ -886,7 +999,7 @@ def test_off_result_is_cached_with_alternatives(repository, monkeypatch):
     )
     cached, cached_confidence = repository.resolve("Acme bread")
     assert cached == food
-    assert cached_confidence == 1.0
+    assert cached_confidence == 0.85
     assert calls == [("Acme bread", 5)]
 
 
@@ -1036,14 +1149,12 @@ def test_alias_precedes_exact_cache_but_only_for_the_exact_phrase(repository):
     repository.add_alias(shadowed.name, target.name)
 
     aliased, confidence = repository.resolve(shadowed.name, allow_remote=False)
-    longer, longer_confidence = repository.resolve(
-        f"{shadowed.name} bowl", allow_remote=False
-    )
+    with pytest.raises(NomnomError) as longer:
+        repository.resolve(f"{shadowed.name} bowl", allow_remote=False)
 
     assert aliased == target
     assert confidence == 1.0
-    assert longer == shadowed
-    assert longer_confidence == 0.85
+    assert longer.value.code == "food_needs_source"
 
 
 def test_dangling_alias_fails_without_remote_fallback(repository, monkeypatch):

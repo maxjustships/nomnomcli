@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from nomnomcli.db import LATEST_SCHEMA_VERSION, connect, get_stats, store_log
+from nomnomcli.db import LATEST_SCHEMA_VERSION, connect, get_stats, remove_log, store_log
 
 ITEM = {
     "name": "borscht",
@@ -399,6 +399,26 @@ def test_empty_stats(user_db):
         result = get_stats(connection, "today", now)
     assert result["meals"] == []
     assert result["totals"]["kcal"] == 0
+
+
+def test_remove_log_is_single_record_and_transactional(user_db):
+    with connect(user_db) as connection:
+        first_id = store_log(connection, [ITEM], TOTALS)
+        second_id = store_log(connection, [ITEM], TOTALS)
+
+        removed = remove_log(connection, first_id, confirmed=True)
+
+        assert removed["log_id"] == first_id
+        assert removed["removed_count"] == 1
+        assert [
+            row[0] for row in connection.execute("SELECT id FROM log_entries ORDER BY id")
+        ] == [second_id]
+
+        with pytest.raises(LookupError):
+            remove_log(connection, first_id, confirmed=True)
+        assert [
+            row[0] for row in connection.execute("SELECT id FROM log_entries ORDER BY id")
+        ] == [second_id]
 
 
 def test_date_stats_use_exact_local_day_boundaries(user_db, almaty_timezone):

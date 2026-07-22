@@ -96,7 +96,7 @@ Resolution is deterministic and ordered:
 
 1. exact phrase in the user's alias table, pointing to an exact local cache name;
 2. exact match in the user's `food_cache`;
-3. token-overlap search in that cache;
+3. safe cache search backed by canonical name/source identity, never `lookup_query` metadata alone;
 4. an exact Open Food Facts product only when the input explicitly matches its brand/SKU;
 5. a safe USDA FoodData Central Foundation/SR Legacy generic proxy, when a setup key or
    `NOMNOM_USDA_KEY` is configured;
@@ -112,6 +112,11 @@ safe branded OFF candidate used for unbranded text is always a `generic_proxy`, 
 brand, barcode, and explicit assumption, and remains subject to the configured proxy policy. An
 unsafe candidate returns `food_needs_source`. Rejected results are neither cached nor logged, and a
 generic-proxy cache entry cannot satisfy a later branded query.
+
+For every automatic local match, `lookup_query` is retrieval metadata rather than identity proof.
+An exact normalized cache name, explicit alias, exact barcode, or safe existing source-backed
+identity is required. Unsafe fuzzy and legacy hits remain visible through `nomnom search`, but
+resolution falls through to a provider or an actionable refusal instead of silently logging them.
 
 Successful API results are cached in the user's database, so the same food can resolve locally
 later. Existing cache records, logs, recipes, and aliases are preserved when v0.4 opens the
@@ -360,6 +365,9 @@ an `error` object and exit with status 2. Important codes include:
 - `portion_estimates_malformed` / `portion_estimate_invalid` /
   `portion_estimate_mismatch`: correct the complete inline payload and retry.
 - `alias_target_not_found`: add/resolve the exact cached target or remove the stale alias.
+- `invalid_log_id` / `log_not_found`: supply the positive ID of an existing journal record.
+- `log_removal_confirmation_required`: inspect the selected record, then repeat the removal with
+  explicit `--confirm`; no record was deleted.
 - `openfoodfacts_unavailable` / `usda_unavailable`: retry later or use a manual label.
 
 Provider-unavailable errors include a `retryable` boolean. In `nomnom doctor --json`, OFF reports:
@@ -374,6 +382,17 @@ Provider-unavailable errors include a `retryable` boolean. In `nomnom doctor --j
 
 Successful logs are stored immediately. Agents should show the returned names, grams, confidence,
 alternatives, and assumptions before treating the resolution as confirmed.
+
+To reverse one mistaken journal entry, use the public confirmed correction path:
+
+```sh
+nomnom log remove LOG_ID --confirm --json
+```
+
+The ID must be a positive existing log ID. Missing confirmation, invalid IDs, and missing records
+return structured errors without deleting anything. A successful call transactionally removes
+exactly that record and returns its ID, timestamp, kind, label, and totals; subsequent stats exclude
+it. Do not edit the SQLite database directly.
 
 ## Stats and recipes
 

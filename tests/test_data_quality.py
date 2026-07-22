@@ -228,3 +228,16 @@ def test_contract_docs_enforce_critical_data_identity_and_privacy_rules():
         "must never write aliases, cache entries, logs, or user data",
     )
     assert all(rule in contract for rule in required_rules)
+
+
+def test_public_docs_enforce_resolution_integrity_and_reversible_correction():
+    architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skill" / "SKILL.md").read_text(encoding="utf-8")
+
+    normalized_architecture = " ".join(architecture.split())
+    assert "`lookup_query` is retrieval metadata, never identity proof" in normalized_architecture
+    assert "cannot be logged automatically" in normalized_architecture
+    for guidance in (readme, skill):
+        assert "nomnom log remove LOG_ID --confirm --json" in guidance
+        assert "SQLite" in guidance and "directly" in guidance
