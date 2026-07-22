@@ -55,13 +55,12 @@ Follow this exact sequence:
 ## Log free text
 
 1. Preserve each raw voice/text/photo item phrase.
-2. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Use only
-   `generic_proxy_eligible`; convert exact/uncertain results to pending and never select rejected refs.
-3. Build one version-1 plan with `input`, optional measured positive `grams`, and exactly one of
-   `source_ref` or `{"pending_capture":{"status":"pending_capture","action":"photo_or_barcode"}}`.
-   Never include nutrition or copied provider facts.
+2. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Semantically choose only a
+   source-unbranded `agent_selection_eligible` record; pending/rejected refs are never selectable.
+3. Build one version-1 plan with `input`, optional positive `grams`, and exactly one selection
+   (`source_ref`, `relation:"semantic_equivalent"`, human-readable `assumption`), strictly eligible direct `source_ref`, or documented `pending_capture`. Never include nutrition, select a branded/SKU source, or treat OFF text rank as exact evidence.
 4. Run `nomnom agent intake --plan 'JSON' --json`; optionally append an explicit prior `--date YYYY-MM-DD`. nomnom re-fetches, validates, calculates, and writes one event.
-5. Show provenance, assumptions, resolved-only totals, completeness, and pending IDs; request a barcode/photo for pending items and say the meal is incomplete.
+5. Treat selection only as `agent_generic` / `generic_proxy` with `agent_selected` provenance; show source, relation, assumption, resolved-only totals, completeness, and pending capture IDs.
 
 Use the existing `nomnom log --parse ...` path for legacy canonical-text flows. Successful logs are
 stored immediately. Do not silently correct or rerun one; tell the user first. Remove only an

@@ -73,19 +73,29 @@ The approved agent-first runtime contract has two CLI phases:
 1. `nomnom agent candidates --input ... --json` queries runtime providers without opening SQLite.
    It returns deterministically ordered source-backed identity metadata and opaque `off:BARCODE` or
    `usda:FDC_ID` references, never nutrition facts for the agent to copy into a plan.
+   `agent_selection_eligible` identifies source-unbranded generic records that an external agent
+   may assess semantically; `pending_capture_required` and `identity_rejected` are not selectable.
 2. `nomnom agent intake --plan ... --json` accepts a strict versioned plan containing only raw item
-   input, quantity or the existing external portion estimate, and either one source reference or an
-   explicit pending-capture state. The CLI re-fetches every selected reference, validates identity
-   and nutrition, applies generic/exact policy, calculates totals, and writes one journal event.
+   input, quantity or the existing external portion estimate, and exactly one direct source ref,
+   external selection, or explicit pending-capture state. A selection contains only a source ref,
+   `relation=semantic_equivalent`, and a required human-readable assumption. The CLI re-fetches the
+   exact ref, validates source integrity and complete finite nutrition, applies generic policy,
+   calculates totals, and writes one journal event.
 
 Discovery never reads or writes the user cache. Commit never trusts cached nutrition or agent
-ranking: a source reference is re-fetched through its provider adapter, and a branded discovery
-result without capture evidence is rejected in favor of explicit pending capture. Pending output
-includes stable event/item identifiers so correction remains an explicit remove-and-replace flow.
+ranking: a source reference is re-fetched through its provider adapter. An accepted selection must
+be a source-unbranded generic record and is journaled as `selection_mode=agent_generic`,
+`resolution_mode=generic_proxy`, and `provenance=agent_selected`, with raw input, canonical source
+name/ref, relation, and assumption. The older direct `source_ref` form retains strict literal
+identity matching. Any branded/SKU source remains pending photo/barcode, including OFF text-search
+results, and no selection converts it to exact or generic. Pending output includes stable event/item
+identifiers so correction remains an explicit remove-and-replace flow.
 
-An external agent may translate language into the canonical CLI input and may read a supplied
-package image. It may propose fuzzy gram estimates only through the existing validated estimate
-contract. Such estimates are explicitly approximate and never provide nutrition facts.
+An external agent may translate language, choose among eligible source identity metadata, and read
+a supplied package image. Semantic choice remains outside the CLI; the CLI owns provider fetch,
+nutrition validation, arithmetic, policy, and persistence. The agent may propose fuzzy gram
+estimates only through the existing validated estimate contract. Such estimates are explicitly
+approximate and never provide nutrition facts.
 
 An agent/LLM is not part of the CLI runtime. It must not invent nutrition, silently choose a
 different food, bypass confirmation, access SQLite directly, or introduce an embedded model,

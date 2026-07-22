@@ -49,6 +49,13 @@ RAW_TOMATO = {
     "foodCategory": "Vegetables",
     "foodNutrients": nutrients(kcal=18, protein=0.9, fat=0.2, carbs=3.9),
 }
+RIPE_TOMATO = {
+    "fdcId": 105,
+    "description": "Tomatoes, red, ripe, raw, year round average",
+    "dataType": "Foundation",
+    "foodCategory": "Vegetables",
+    "foodNutrients": nutrients(kcal=19, protein=1, fat=0.2, carbs=4.1),
+}
 TOMATO_POWDER = {
     "fdcId": 102,
     "description": "Tomato powder",
@@ -56,12 +63,41 @@ TOMATO_POWDER = {
     "foodCategory": "Vegetable products",
     "foodNutrients": nutrients(kcal=302, protein=13, fat=3, carbs=59),
 }
+UNUSABLE_TOMATO_SNACK = {
+    "fdcId": 106,
+    "description": "Tomato banana snack",
+    "dataType": "Survey (FNDDS)",
+    "foodCategory": "Mixed foods",
+    "foodNutrients": nutrients(kcal=90, protein=1, fat=1, carbs=20),
+}
 GENERIC_MILK = {
     "fdcId": 201,
     "description": "Milk",
     "dataType": "Foundation",
     "foodCategory": "Dairy",
     "foodNutrients": nutrients(kcal=61, protein=3.2, fat=3.3, carbs=4.8),
+}
+FLUID_MILK = {
+    "fdcId": 205,
+    "description": "Milk, whole, fluid, 3.25% milkfat",
+    "dataType": "Foundation",
+    "foodCategory": "Dairy",
+    "foodNutrients": nutrients(kcal=62, protein=3.2, fat=3.4, carbs=4.7),
+}
+BRANDED_MILK = {
+    "fdcId": 206,
+    "description": "Whole milk",
+    "dataType": "Foundation",
+    "brandOwner": "Synthetic Dairy",
+    "foodCategory": "Dairy",
+    "foodNutrients": nutrients(kcal=64, protein=3.1, fat=3.5, carbs=4.8),
+}
+INCOMPLETE_MILK = {
+    "fdcId": 207,
+    "description": "Milk, fluid",
+    "dataType": "Foundation",
+    "foodCategory": "Dairy",
+    "foodNutrients": nutrients(kcal=61, protein=3.2, fat=3.3, carbs=float("nan")),
 }
 CHOCOLATE_MILK = {
     "fdcId": 203,
@@ -103,16 +139,31 @@ def provider_get(url, **kwargs):
     if url == USDA_SEARCH_URL:
         query = kwargs["params"]["query"].casefold()
         if "tomato" in query:
-            return Response({"foods": [TOMATO_POWDER, RAW_TOMATO]})
+            return Response(
+                {"foods": [UNUSABLE_TOMATO_SNACK, TOMATO_POWDER, RIPE_TOMATO, RAW_TOMATO]}
+            )
         if "milk" in query:
             return Response(
-                {"foods": [CHOCOLATE_MILK, CONDENSED_MILK, MILK_CRACKERS, GENERIC_MILK]}
+                {
+                    "foods": [
+                        CHOCOLATE_MILK,
+                        CONDENSED_MILK,
+                        MILK_CRACKERS,
+                        BRANDED_MILK,
+                        FLUID_MILK,
+                        GENERIC_MILK,
+                    ]
+                }
             )
         return Response({"foods": []})
     if url == USDA_FOOD_URL.format(fdc_id=101):
         return Response(RAW_TOMATO)
     if url == USDA_FOOD_URL.format(fdc_id=102):
         return Response(TOMATO_POWDER)
+    if url == USDA_FOOD_URL.format(fdc_id=105):
+        return Response(RIPE_TOMATO)
+    if url == USDA_FOOD_URL.format(fdc_id=106):
+        return Response(UNUSABLE_TOMATO_SNACK)
     if url == USDA_FOOD_URL.format(fdc_id=201):
         return Response(GENERIC_MILK)
     if url == USDA_FOOD_URL.format(fdc_id=202):
@@ -121,6 +172,12 @@ def provider_get(url, **kwargs):
         return Response(CHOCOLATE_MILK)
     if url == USDA_FOOD_URL.format(fdc_id=204):
         return Response(CONDENSED_MILK)
+    if url == USDA_FOOD_URL.format(fdc_id=205):
+        return Response(FLUID_MILK)
+    if url == USDA_FOOD_URL.format(fdc_id=206):
+        return Response(BRANDED_MILK)
+    if url == USDA_FOOD_URL.format(fdc_id=207):
+        return Response(INCOMPLETE_MILK)
     if url.startswith("https://api.nal.usda.gov/fdc/v1/food/"):
         return Response({}, status_code=404)
     if url == OFF_SEARCH_URL:
@@ -174,6 +231,20 @@ def pending(input_phrase):
     }
 
 
+def selected(input_phrase, source_ref, assumption, *, grams=None):
+    item = {
+        "input": input_phrase,
+        "selection": {
+            "source_ref": source_ref,
+            "relation": "semantic_equivalent",
+            "assumption": assumption,
+        },
+    }
+    if grams is not None:
+        item["grams"] = grams
+    return item
+
+
 def test_agent_candidates_are_read_only_deterministic_and_type_safe(
     tmp_path, monkeypatch, synthetic_providers, capsys
 ):
@@ -195,17 +266,27 @@ def test_agent_candidates_are_read_only_deterministic_and_type_safe(
         "brand": None,
         "canonical_name": "raw tomato",
         "category": "Vegetables",
-        "candidate_status": "generic_proxy_eligible",
+        "candidate_status": "agent_selection_eligible",
+        "direct_source_ref_eligible": True,
         "provider": "usda",
         "source_id": "101",
         "source_ref": "usda:101",
         "type": "Foundation",
     }
-    assert by_ref["usda:102"]["candidate_status"] == "identity_rejected"
+    assert by_ref["usda:105"]["candidate_status"] == "agent_selection_eligible"
+    assert by_ref["usda:105"]["direct_source_ref_eligible"] is False
+    assert by_ref["usda:102"]["candidate_status"] == "agent_selection_eligible"
+    assert by_ref["usda:106"]["candidate_status"] == "identity_rejected"
+    assert [candidate["source_ref"] for candidate in first["candidates"]] == [
+        "usda:101",
+        "usda:102",
+        "usda:105",
+        "usda:106",
+    ]
     assert all("kcal" not in json.dumps(candidate) for candidate in first["candidates"])
 
 
-def test_agent_candidates_reject_type_changing_leading_milk_modifiers(
+def test_agent_candidates_distinguish_generic_pending_and_unusable_sources(
     tmp_path, monkeypatch, synthetic_providers, capsys
 ):
     untouched = tmp_path / "discovery.sqlite3"
@@ -218,10 +299,12 @@ def test_agent_candidates_reject_type_changing_leading_milk_modifiers(
         candidate["source_ref"]: candidate["candidate_status"] for candidate in result["candidates"]
     }
     assert statuses == {
-        "usda:201": "generic_proxy_eligible",
-        "usda:202": "identity_rejected",
-        "usda:203": "identity_rejected",
-        "usda:204": "identity_rejected",
+        "usda:201": "agent_selection_eligible",
+        "usda:202": "agent_selection_eligible",
+        "usda:203": "agent_selection_eligible",
+        "usda:204": "agent_selection_eligible",
+        "usda:205": "agent_selection_eligible",
+        "usda:206": "pending_capture_required",
     }
     assert not untouched.exists()
 
@@ -307,6 +390,58 @@ def test_agent_intake_rejects_malformed_or_nutrient_bearing_plan_without_write(
     assert not user_db.exists()
 
 
+@pytest.mark.parametrize(
+    "selection",
+    [
+        None,
+        {},
+        {"source_ref": "usda:105", "relation": "semantic_equivalent"},
+        {
+            "source_ref": "usda:105",
+            "relation": "semantic_equivalent",
+            "assumption": "",
+        },
+        {
+            "source_ref": 105,
+            "relation": "semantic_equivalent",
+            "assumption": "Synthetic semantic selection.",
+        },
+        {
+            "source_ref": "usda:105",
+            "relation": "",
+            "assumption": "Synthetic semantic selection.",
+        },
+        {
+            "source_ref": "usda:105",
+            "relation": "semantic_equivalent",
+            "assumption": "Synthetic semantic selection.",
+            "kcal": 999,
+        },
+    ],
+    ids=(
+        "non-object",
+        "missing-fields",
+        "missing-assumption",
+        "empty-assumption",
+        "non-string-ref",
+        "empty-relation",
+        "nutrition-injection",
+    ),
+)
+def test_agent_intake_rejects_malformed_selection_without_write(
+    selection, user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    payload = plan({"input": "raw tomato", "grams": 60, "selection": selection})
+
+    code, result, captured = invoke_json(["agent", "intake", "--plan", payload], capsys)
+
+    assert code == 2
+    assert captured.out == ""
+    assert result["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
+
+
 def test_agent_intake_refetches_literal_tomato_and_milk_and_writes_one_event(
     user_db, monkeypatch, synthetic_providers, capsys
 ):
@@ -330,6 +465,54 @@ def test_agent_intake_refetches_literal_tomato_and_milk_and_writes_one_event(
         rows = connection.execute("SELECT kind, items_json FROM log_entries").fetchall()
         assert len(rows) == 1
         assert rows[0]["kind"] == "agent_intake"
+        assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+def test_agent_intake_accepts_explicit_semantic_tomato_and_milk_selection(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    payload = plan(
+        selected(
+            "raw tomato 60 g",
+            "usda:105",
+            "Interpreted raw tomato as the source's ripe raw tomato record.",
+            grams=60,
+        ),
+        selected(
+            "raw milk 200 g",
+            "usda:205",
+            "Interpreted raw milk as the source's whole fluid milk record.",
+            grams=200,
+        ),
+    )
+
+    code, result, _ = invoke_json(["agent", "intake", "--plan", payload], capsys)
+
+    assert code == 0
+    assert [item["name"] for item in result["items"]] == [
+        "tomatoes, red, ripe, raw, year round average",
+        "milk, whole, fluid, 3.25% milkfat",
+    ]
+    for item, ref in zip(result["items"], ("usda:105", "usda:205"), strict=True):
+        assert item["status"] == "resolved"
+        assert item["selection_mode"] == "agent_generic"
+        assert item["selection_relation"] == "semantic_equivalent"
+        assert item["selected_source_ref"] == ref
+        assert item["source"] == "usda"
+        assert item["provenance"] == "agent_selected"
+        assert item["resolution_mode"] == "generic_proxy"
+        assert item["assumption"]
+    serialized = json.dumps(result).casefold()
+    assert "powder" not in serialized
+    assert "banana" not in serialized
+    assert "cracker" not in serialized
+    assert "chocolate" not in serialized
+    assert "condensed" not in serialized
+    with connect(user_db) as connection:
+        stored = json.loads(connection.execute("SELECT items_json FROM log_entries").fetchone()[0])
+        assert [item["input"] for item in stored] == ["raw tomato 60 g", "raw milk 200 g"]
+        assert [item["selected_source_ref"] for item in stored] == ["usda:105", "usda:205"]
         assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
 
@@ -491,7 +674,7 @@ def test_agent_intake_pending_exact_brand_is_preserved_and_stats_are_incomplete(
     assert stats["meals"][0]["pending_count"] == 2
 
 
-def test_agent_intake_rejects_text_discovered_brand_as_exact_without_write(
+def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write(
     user_db, monkeypatch, synthetic_providers, capsys
 ):
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
@@ -511,11 +694,12 @@ def test_agent_intake_rejects_text_discovered_brand_as_exact_without_write(
             "intake",
             "--plan",
             plan(
-                {
-                    "input": "Harry's sandwich bread 80 g",
-                    "grams": 80,
-                    "source_ref": "off:0123456789012",
-                }
+                selected(
+                    "Harry's sandwich bread 80 g",
+                    "off:0123456789012",
+                    "The text-ranked candidate appears related to the branded request.",
+                    grams=80,
+                )
             ),
         ],
         capsys,
@@ -526,6 +710,37 @@ def test_agent_intake_rejects_text_discovered_brand_as_exact_without_write(
     assert error["error"]["details"]["action"] == "photo_or_barcode"
     with connect(user_db) as connection:
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+
+
+def test_agent_intake_rejects_agent_selected_branded_usda_source_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+
+    code, error, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan(
+                selected(
+                    "raw milk 200 g",
+                    "usda:206",
+                    "The candidate text appears related to milk.",
+                    grams=200,
+                )
+            ),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] in {
+        "agent_source_identity_rejected",
+        "exact_resolution_required",
+    }
+    assert error["error"]["details"]["action"] == "photo_or_barcode"
+    assert not user_db.exists()
 
 
 @pytest.mark.parametrize(
@@ -554,6 +769,33 @@ def test_agent_intake_rejects_tampered_or_wrong_type_ref_atomically(
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
 
 
+def test_agent_intake_rejects_incomplete_refetched_nutrition_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+
+    code, error, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan(
+                selected(
+                    "raw milk 200 g",
+                    "usda:207",
+                    "Interpreted raw milk as the returned generic milk source.",
+                    grams=200,
+                )
+            ),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "usda_invalid_nutrition"
+    assert not user_db.exists()
+
+
 def test_agent_intake_rejects_duplicate_refs_without_write(
     user_db, monkeypatch, synthetic_providers, capsys
 ):
@@ -576,7 +818,17 @@ def test_agent_intake_ignores_poisoned_cache_and_refetches_source(
             """INSERT INTO food_cache
             (name, kcal, protein, fat, carbs, source, lookup_query, resolution_mode, source_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            ("raw tomato", 999, 99, 99, 99, "poison", "raw tomato", "legacy", "101"),
+            (
+                "tomatoes, red, ripe, raw, year round average",
+                999,
+                99,
+                99,
+                99,
+                "poison",
+                "raw tomato",
+                "legacy",
+                "105",
+            ),
         )
 
     code, result, _ = invoke_json(
@@ -584,122 +836,246 @@ def test_agent_intake_ignores_poisoned_cache_and_refetches_source(
             "agent",
             "intake",
             "--plan",
-            plan({"input": "raw tomato 60 g", "grams": 60, "source_ref": "usda:101"}),
+            plan(
+                selected(
+                    "raw tomato 60 g",
+                    "usda:105",
+                    "Interpreted raw tomato as the source's ripe raw tomato record.",
+                    grams=60,
+                )
+            ),
         ],
         capsys,
     )
 
     assert code == 0
-    assert result["items"][0]["kcal"] == 10.8
+    assert result["items"][0]["kcal"] == 11.4
     assert result["items"][0]["source"] == "usda"
 
 
-VOICE_PLAN_CASES = [
+def tomato_selection(input_phrase, *, grams=None):
+    return selected(
+        input_phrase,
+        "usda:105",
+        "Interpreted the tomato phrase as the source's ripe raw tomato record.",
+        grams=grams,
+    )
+
+
+def milk_selection(input_phrase, *, grams=None):
+    return selected(
+        input_phrase,
+        "usda:205",
+        "Interpreted the milk phrase as the source's whole fluid milk record.",
+        grams=grams,
+    )
+
+
+AGENT_ACCEPTANCE_CASES = [
     (
         "tomato sixty grams",
-        [{"input": "raw tomato 60 g", "grams": 60, "source_ref": "usda:101"}],
+        [tomato_selection("raw tomato 60 g", grams=60)],
+        None,
+        None,
         None,
     ),
     (
         "half a tomato",
-        [{"input": "half raw tomato", "source_ref": "usda:101"}],
+        [tomato_selection("half raw tomato")],
         [(0, "half raw tomato", 60)],
+        None,
+        None,
     ),
     (
         "quarter tomato",
-        [{"input": "quarter raw tomato", "source_ref": "usda:101"}],
+        [tomato_selection("quarter raw tomato")],
         [(0, "quarter raw tomato", 30)],
+        None,
+        None,
     ),
     (
         "one tomato",
-        [{"input": "1 raw tomato", "source_ref": "usda:101"}],
+        [tomato_selection("1 raw tomato")],
         [(0, "1 raw tomato", 120)],
+        None,
+        None,
+    ),
+    (
+        "large tomato",
+        [tomato_selection("large raw tomato")],
+        [(0, "large raw tomato", 180)],
+        None,
+        None,
+    ),
+    (
+        "medium tomato",
+        [tomato_selection("medium raw tomato")],
+        [(0, "medium raw tomato", 120)],
+        None,
+        None,
     ),
     (
         "milk two hundred grams",
-        [{"input": "milk 200 g", "grams": 200, "source_ref": "usda:201"}],
+        [milk_selection("raw milk 200 g", grams=200)],
+        None,
+        None,
         None,
     ),
     (
         "half glass milk",
-        [{"input": "half milk", "source_ref": "usda:201"}],
-        [(0, "half milk", 120)],
+        [milk_selection("half raw milk")],
+        [(0, "half raw milk", 120)],
+        None,
+        None,
     ),
     (
         "quarter glass milk",
-        [{"input": "quarter milk", "source_ref": "usda:201"}],
-        [(0, "quarter milk", 60)],
+        [milk_selection("quarter raw milk")],
+        [(0, "quarter raw milk", 60)],
+        None,
+        None,
     ),
     (
         "tomato and milk",
         [
-            {"input": "raw tomato 80 g", "grams": 80, "source_ref": "usda:101"},
-            {"input": "milk 150 g", "grams": 150, "source_ref": "usda:201"},
+            tomato_selection("raw tomato 80 g", grams=80),
+            milk_selection("raw milk 150 g", grams=150),
         ],
+        None,
+        None,
         None,
     ),
     (
         "small tomato, milk",
         [
-            {"input": "small raw tomato", "source_ref": "usda:101"},
-            {"input": "milk 100 g", "grams": 100, "source_ref": "usda:201"},
+            tomato_selection("small raw tomato"),
+            milk_selection("raw milk 100 g", grams=100),
         ],
         [(0, "small raw tomato", 75)],
-    ),
-    (
-        "large tomato",
-        [{"input": "large raw tomato", "source_ref": "usda:101"}],
-        [(0, "large raw tomato", 180)],
-    ),
-    (
-        "medium tomato",
-        [{"input": "medium raw tomato", "source_ref": "usda:101"}],
-        [(0, "medium raw tomato", 120)],
+        None,
+        None,
     ),
     (
         "a tomato and a branded bread",
         [
-            {"input": "raw tomato 60 g", "grams": 60, "source_ref": "usda:101"},
+            tomato_selection("raw tomato 60 g", grams=60),
             pending("Harry's bread"),
         ],
         None,
+        None,
+        None,
     ),
-    ("doctor johnson milk", [pending("Dr Johnson milk")], None),
-    ("harrys bread", [pending("Harry's bread")], None),
-    ("unknown exact carton", [pending("Example carton SKU 778899")], None),
-    ("photo missing brand bar", [pending("Brand bar from unclear photo")], None),
+    ("doctor johnson milk", [pending("Dr Johnson milk")], None, None, None),
+    ("harrys bread", [pending("Harry's bread")], None, None, None),
+    ("unknown exact carton", [pending("Example carton SKU 778899")], None, None, None),
+    ("photo missing brand bar", [pending("Brand bar from unclear photo")], None, None, None),
     (
         "tomato plus unknown bottle",
         [
-            {"input": "raw tomato 100 g", "grams": 100, "source_ref": "usda:101"},
+            tomato_selection("raw tomato 100 g", grams=100),
             pending("Unknown bottle"),
         ],
+        None,
+        None,
         None,
     ),
     (
         "milk plus exact crackers",
-        [{"input": "milk 100 g", "grams": 100, "source_ref": "usda:201"}, pending("Acme crackers")],
+        [milk_selection("raw milk 100 g", grams=100), pending("Acme crackers")],
+        None,
+        None,
         None,
     ),
     (
         "two fuzzy items",
         [
-            {"input": "small raw tomato", "source_ref": "usda:101"},
-            {"input": "half milk", "source_ref": "usda:201"},
+            tomato_selection("small raw tomato"),
+            milk_selection("half raw milk"),
         ],
-        [(0, "small raw tomato", 75), (1, "half milk", 120)],
+        [(0, "small raw tomato", 75), (1, "half raw milk", 120)],
+        None,
+        None,
     ),
-    ("pending meal", [pending("Harry's sandwich"), pending("Dr Johnson drink")], None),
+    (
+        "pending meal",
+        [pending("Harry's sandwich"), pending("Dr Johnson drink")],
+        None,
+        None,
+        None,
+    ),
+    (
+        "poisoned cache is ignored",
+        [tomato_selection("raw tomato 60 g", grams=60)],
+        None,
+        "poisoned_cache",
+        None,
+    ),
+    (
+        "malformed semantic selection",
+        [
+            {
+                "input": "raw tomato 60 g",
+                "grams": 60,
+                "selection": {"source_ref": "usda:105", "relation": "semantic_equivalent"},
+            }
+        ],
+        None,
+        None,
+        "agent_plan_invalid",
+    ),
+    (
+        "disabled USDA provider",
+        [tomato_selection("raw tomato 60 g", grams=60)],
+        None,
+        "offline",
+        "provider_disabled",
+    ),
+    (
+        "disabled OFF provider",
+        [
+            selected(
+                "unbranded bread 80 g",
+                "off:0123456789012",
+                "Interpreted the bread phrase as the source record.",
+                grams=80,
+            )
+        ],
+        None,
+        "disable_off",
+        "provider_disabled",
+    ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("voice", "items", "estimates"), VOICE_PLAN_CASES, ids=[case[0] for case in VOICE_PLAN_CASES]
+    ("voice", "items", "estimates", "setup", "expected_error"),
+    AGENT_ACCEPTANCE_CASES,
+    ids=[case[0] for case in AGENT_ACCEPTANCE_CASES],
 )
-def test_synthetic_voice_plan_fuzz_harness_has_no_false_substitutions(
-    voice, items, estimates, user_db, monkeypatch, synthetic_providers, capsys
+def test_agent_intake_synthetic_end_to_end_acceptance_matrix(
+    voice,
+    items,
+    estimates,
+    setup,
+    expected_error,
+    user_db,
+    monkeypatch,
+    synthetic_providers,
+    capsys,
 ):
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    if setup == "offline":
+        monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    elif setup == "disable_off":
+        monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    elif setup == "poisoned_cache":
+        with connect(user_db) as connection:
+            connection.execute(
+                """INSERT INTO food_cache
+                (name, kcal, protein, fat, carbs, source, lookup_query, resolution_mode, source_id)
+                VALUES (?, ?, 99, 99, 99, 'poison', 'raw tomato', 'legacy', '105')""",
+                ("tomatoes, red, ripe, raw, year round average", 999),
+            )
     portion_estimates = (
         [estimate(index, input_phrase, grams) for index, input_phrase, grams in estimates]
         if estimates
@@ -711,11 +1087,35 @@ def test_synthetic_voice_plan_fuzz_harness_has_no_false_substitutions(
         capsys,
     )
 
+    if expected_error:
+        assert code == 2, voice
+        assert result["error"]["code"] == expected_error
+        if user_db.exists():
+            with connect(user_db) as connection:
+                assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+        return
+
     assert code == 0, voice
     assert all(item["status"] in {"resolved", "pending_capture"} for item in result["items"])
-    resolved_names = {item["name"] for item in result["items"] if item["status"] == "resolved"}
-    assert resolved_names <= {"raw tomato", "milk"}
-    assert not any("powder" in name or "cracker" in name for name in resolved_names)
+    resolved = [item for item in result["items"] if item["status"] == "resolved"]
+    resolved_names = {item["name"] for item in resolved}
+    assert resolved_names <= {
+        "tomatoes, red, ripe, raw, year round average",
+        "milk, whole, fluid, 3.25% milkfat",
+    }
+    assert not any(
+        forbidden in name
+        for name in resolved_names
+        for forbidden in ("banana", "powder", "cracker", "chocolate", "condensed")
+    )
+    assert all(
+        item["selection_mode"] == "agent_generic"
+        and item["resolution_mode"] == "generic_proxy"
+        and item["provenance"] == "agent_selected"
+        and item["source"] == "usda"
+        and item["assumption"]
+        for item in resolved
+    )
     assert all(
         "kcal" not in item for item in result["items"] if item["status"] == "pending_capture"
     )

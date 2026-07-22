@@ -36,6 +36,11 @@ Never add a hidden fallback, packaged lookup table, generated corpus, or invente
   a generic food, similar product, or unconfirmed provider result for a branded/SKU request.
 - Unbranded input may use a source-backed `generic_proxy` only under the approved policy and safety
   checks. Keep provider, source identifier, provenance, confidence, and assumption visible.
+- The versioned agent-intake contract may accept an explicit external semantic selection of a
+  source-unbranded generic provider record. nomnom must re-fetch and validate the exact source ref,
+  persist the raw input, canonical source identity, relation, human-readable assumption, and
+  `agent_selected` provenance, and return `generic_proxy`; direct/automatic resolution remains
+  subject to strict identity matching.
 - A generic proxy never becomes exact through caching, ranking, agent wording, or user-interface
   presentation, and must not satisfy a later branded query.
 

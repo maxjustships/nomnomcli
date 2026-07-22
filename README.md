@@ -259,9 +259,11 @@ nomnom agent candidates --input "raw tomato 60 g" --json
 ```
 
 Discovery returns deterministic provider metadata, candidate status, and opaque references such as
-`usda:123` or `off:0123456789012`; it returns no nutrition fields for an agent plan. Only
-`generic_proxy_eligible` may be selected. `pending_capture_required` must become an explicit pending
-item, and `identity_rejected` must not be selected.
+`usda:123` or `off:0123456789012`; it returns no nutrition fields for an agent plan.
+`agent_selection_eligible` means the provider record is source-unbranded and structurally valid for
+an external agent's explicit semantic choice. `pending_capture_required` must become an explicit
+pending item, and `identity_rejected` must not be selected. Candidate output also reports whether
+the older direct `source_ref` form satisfies strict literal identity.
 
 Commit all items as one strict plan and one journal event:
 
@@ -269,7 +271,15 @@ Commit all items as one strict plan and one journal event:
 nomnom agent intake --plan '{
   "version": 1,
   "items": [
-    {"input": "raw tomato 60 g", "grams": 60, "source_ref": "usda:123"},
+    {
+      "input": "raw tomato 60 g",
+      "grams": 60,
+      "selection": {
+        "source_ref": "usda:123",
+        "relation": "semantic_equivalent",
+        "assumption": "Interpreted raw tomato as the source's ripe raw tomato record."
+      }
+    },
     {
       "input": "Example Brand bread two slices",
       "pending_capture": {"status": "pending_capture", "action": "photo_or_barcode"}
@@ -278,18 +288,23 @@ nomnom agent intake --plan '{
 }' --json
 ```
 
-The item key allowlist is `input`, optional positive `grams`, and exactly one of `source_ref` or
-`pending_capture`. The top level allows only `version`, `items`, and optional
-`portion_estimates`, whose shape is the existing external estimate contract below. Calories,
-macros, nutrition, source facts, unknown keys, duplicate refs, non-finite numbers, and mismatched
-estimates reject the whole plan before a journal write.
+The item key allowlist is `input`, optional positive `grams`, and exactly one of direct `source_ref`,
+`selection`, or `pending_capture`. A selection contains exactly `source_ref`,
+`relation="semantic_equivalent"`, and a nonempty human-readable `assumption`. The top level allows
+only `version`, `items`, and optional `portion_estimates`, whose shape is the existing external
+estimate contract below. Calories, macros, nutrition, source facts, unknown keys, duplicate refs,
+non-finite numbers, and mismatched estimates reject the whole plan before a journal write.
 
-On commit, nomnom re-fetches every selected source ref, validates returned identity and complete
-nutrition, applies exact/generic policy, calculates, and persists. It never uses a cache hit in place
-of the ref. A text-discovered brand is not exact evidence: preserve it with `pending_capture`, then
-use barcode/photo capture and explicit `nomnom log remove LOG_ID --confirm --json` plus a replacement
-entry when corrected. Intake output exposes `log_id` and each pending `item_id`. Pending items have
-no nutrition fields; intake and stats report `nutrition_status=incomplete` and resolved-only totals.
+On commit, nomnom re-fetches every chosen ref, validates source identity plus complete finite
+nutrition, applies generic policy, calculates, and persists. It never uses a cache hit or agent
+nutrition. An accepted external choice is always `selection_mode=agent_generic`,
+`resolution_mode=generic_proxy`, and `provenance=agent_selected`; output and the journal retain raw
+input, canonical source name/ref, relation, and assumption. Direct `source_ref` keeps strict literal
+identity behavior. A branded/SKU source—including an OFF text-ranked result—cannot be selected as
+exact or generic: preserve it with `pending_capture`, then use barcode/photo capture and explicit
+`nomnom log remove LOG_ID --confirm --json` plus a replacement entry when corrected. Intake output
+exposes `log_id` and each pending `item_id`. Pending items have no nutrition fields; intake and stats
+report `nutrition_status=incomplete` and resolved-only totals.
 
 ### Legacy canonical text input
 

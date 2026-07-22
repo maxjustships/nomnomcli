@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
-from nomnomcli.foods import _brand_matches_query, _comparison_token, _query_has_sku
+from nomnomcli.foods import _comparison_token, _query_has_sku
 from nomnomcli.models import Food, scale_food, total_items
 from nomnomcli.off import OpenFoodFactsClient
 from nomnomcli.parser import (
@@ -25,12 +25,20 @@ from nomnomcli.usda import USDAClient
 
 AGENT_PLAN_VERSION = 1
 PENDING_CAPTURE = {"status": "pending_capture", "action": "photo_or_barcode"}
+AGENT_SELECTION_RELATION = "semantic_equivalent"
 GENERIC_USDA_TYPES = frozenset({"foundation", "sr legacy"})
 STATUS_ORDER = {
-    "generic_proxy_eligible": 0,
+    "agent_selection_eligible": 0,
     "pending_capture_required": 1,
     "identity_rejected": 2,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSelection:
+    source_ref: str
+    relation: str
+    assumption: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +46,7 @@ class AgentPlanItem:
     input: str
     grams: float | None
     source_ref: str | None
+    selection: AgentSelection | None
     pending_capture: bool
     portion_estimate: PortionEstimate | None
 
@@ -50,7 +59,14 @@ class AgentPlan:
 def _invalid_plan(message: str, *, item_index: int | None = None) -> NomnomError:
     details = {
         "version": AGENT_PLAN_VERSION,
-        "allowed_item_fields": ["grams", "input", "pending_capture", "source_ref"],
+        "allowed_item_fields": [
+            "grams",
+            "input",
+            "pending_capture",
+            "selection",
+            "source_ref",
+        ],
+        "selection_fields": ["assumption", "relation", "source_ref"],
         "prohibited": ["calories", "carbs", "fat", "kcal", "macros", "nutrition", "protein"],
     }
     if item_index is not None:
@@ -98,6 +114,39 @@ def _validate_source_ref(value, *, item_index: int) -> str:
     return value
 
 
+def _parse_selection(value, *, item_index: int) -> AgentSelection:
+    required = {"source_ref", "relation", "assumption"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise _invalid_plan(
+            "selection must contain only source_ref, relation, and assumption",
+            item_index=item_index,
+        )
+    source_ref = value["source_ref"]
+    relation = value["relation"]
+    assumption = value["assumption"]
+    if not isinstance(source_ref, str) or not source_ref:
+        raise _invalid_plan("selection source_ref must be a nonempty string", item_index=item_index)
+    if not isinstance(relation, str) or relation != AGENT_SELECTION_RELATION:
+        raise _invalid_plan(
+            f"selection relation must be {AGENT_SELECTION_RELATION}", item_index=item_index
+        )
+    if (
+        not isinstance(assumption, str)
+        or not assumption.strip()
+        or assumption != assumption.strip()
+        or len(assumption) > 1000
+    ):
+        raise _invalid_plan(
+            "selection assumption must be a nonempty trimmed human-readable string",
+            item_index=item_index,
+        )
+    return AgentSelection(
+        source_ref=_validate_source_ref(source_ref, item_index=item_index),
+        relation=relation,
+        assumption=assumption,
+    )
+
+
 def parse_agent_plan(value: str) -> AgentPlan:
     try:
         payload = json.loads(value)
@@ -124,7 +173,7 @@ def parse_agent_plan(value: str) -> AgentPlan:
 
     parsed = []
     seen_refs: set[str] = set()
-    allowed_item = {"input", "grams", "source_ref", "pending_capture"}
+    allowed_item = {"input", "grams", "source_ref", "selection", "pending_capture"}
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict) or set(entry) - allowed_item or "input" not in entry:
             raise _invalid_plan(
@@ -141,10 +190,11 @@ def parse_agent_plan(value: str) -> AgentPlan:
                 "input must be a nonempty trimmed user-visible string", item_index=index
             )
         has_ref = "source_ref" in entry
+        has_selection = "selection" in entry
         has_pending = "pending_capture" in entry
-        if has_ref == has_pending:
+        if sum((has_ref, has_selection, has_pending)) != 1:
             raise _invalid_plan(
-                "Each item requires exactly one source_ref or pending_capture state",
+                "Each item requires exactly one source_ref, selection, or pending_capture state",
                 item_index=index,
             )
         if has_pending and entry["pending_capture"] != PENDING_CAPTURE:
@@ -153,17 +203,21 @@ def parse_agent_plan(value: str) -> AgentPlan:
                 item_index=index,
             )
 
+        selection = (
+            _parse_selection(entry["selection"], item_index=index) if has_selection else None
+        )
         source_ref = (
             _validate_source_ref(entry["source_ref"], item_index=index) if has_ref else None
         )
-        if source_ref is not None:
-            if source_ref in seen_refs:
+        selected_ref = selection.source_ref if selection is not None else source_ref
+        if selected_ref is not None:
+            if selected_ref in seen_refs:
                 raise NomnomError(
                     "agent_source_ref_duplicate",
                     "A source reference may appear only once in an intake plan",
-                    details={"item_index": index, "source_ref": source_ref},
+                    details={"item_index": index, "source_ref": selected_ref},
                 )
-            seen_refs.add(source_ref)
+            seen_refs.add(selected_ref)
 
         grams = _positive_number(entry["grams"], item_index=index) if "grams" in entry else None
         portion_estimate = estimates.entry_for(index, input_phrase) if estimates else None
@@ -173,7 +227,7 @@ def parse_agent_plan(value: str) -> AgentPlan:
             )
         if grams is None and portion_estimate is not None:
             estimates.mark_used(index)
-        if has_ref and grams is None and portion_estimate is None:
+        if (has_ref or has_selection) and grams is None and portion_estimate is None:
             raise _invalid_plan(
                 "A resolved source item requires grams or an external portion estimate",
                 item_index=index,
@@ -183,6 +237,7 @@ def parse_agent_plan(value: str) -> AgentPlan:
                 input=input_phrase,
                 grams=grams,
                 source_ref=source_ref,
+                selection=selection,
                 pending_capture=has_pending,
                 portion_estimate=portion_estimate,
             )
@@ -226,23 +281,40 @@ def _generic_identity_is_safe(query: str, food: Food) -> bool:
     return bool(query_tokens) and candidate_tokens == query_tokens
 
 
-def _candidate_status(query: str, food: Food) -> str:
-    if food.brand and _brand_matches_query(food, query) or _query_has_sku(query):
-        return "pending_capture_required"
+def _source_supports_agent_generic(food: Food) -> bool:
+    if food.brand:
+        return False
     if food.source == "usda":
-        eligible = (
-            food.brand is None
-            and food.fdc_id is not None
+        return (
+            food.fdc_id is not None
+            and food.source_id == str(food.fdc_id)
             and (food.provider_data_type or "").casefold() in GENERIC_USDA_TYPES
-            and _generic_identity_is_safe(query, food)
         )
-    else:
-        eligible = bool(food.barcode) and _generic_identity_is_safe(query, food)
-    return "generic_proxy_eligible" if eligible else "identity_rejected"
+    if food.source == "openfoodfacts":
+        return bool(food.barcode and food.source_id == food.barcode)
+    return False
+
+
+def _candidate_status(query: str, food: Food) -> str:
+    if food.brand or _query_has_sku(query):
+        return "pending_capture_required"
+    return (
+        "agent_selection_eligible" if _source_supports_agent_generic(food) else "identity_rejected"
+    )
+
+
+def _direct_source_ref_status(query: str, food: Food) -> str:
+    source_status = _candidate_status(query, food)
+    if source_status != "agent_selection_eligible":
+        return source_status
+    return (
+        "generic_proxy_eligible" if _generic_identity_is_safe(query, food) else "identity_rejected"
+    )
 
 
 def _candidate_dict(query: str, food: Food) -> dict:
     source_id = food.source_id or (str(food.fdc_id) if food.fdc_id is not None else None)
+    candidate_status = _candidate_status(query, food)
     return {
         "source_ref": f"{'off' if food.source == 'openfoodfacts' else food.source}:{source_id}",
         "provider": food.source,
@@ -251,7 +323,11 @@ def _candidate_dict(query: str, food: Food) -> dict:
         "type": food.provider_data_type,
         "category": food.categories[0] if food.categories else None,
         "brand": food.brand,
-        "candidate_status": _candidate_status(query, food),
+        "candidate_status": candidate_status,
+        "direct_source_ref_eligible": (
+            candidate_status == "agent_selection_eligible"
+            and _direct_source_ref_status(query, food) == "generic_proxy_eligible"
+        ),
     }
 
 
@@ -322,16 +398,21 @@ def discover_candidates(
     return result
 
 
-def _generic_proxy(food: Food) -> Food:
+def _generic_proxy(food: Food, selection: AgentSelection | None = None) -> Food:
     source_id = food.source_id or (str(food.fdc_id) if food.fdc_id is not None else "unknown")
     assumption = (
-        f"Agent selected source-backed {food.source} generic proxy "
-        f"{food.name} ({source_id})."
+        selection.assumption
+        if selection is not None
+        else (
+            f"Source-backed {food.source} generic proxy {food.name} ({source_id}) "
+            "matched the raw input literally."
+        )
     )
     return replace(
         food,
         resolution_mode="generic_proxy",
         assumption=assumption,
+        provenance="agent_selected" if selection is not None else food.provenance,
     )
 
 
@@ -360,8 +441,9 @@ def _refetch_source(
     off_client: OpenFoodFactsClient,
     usda_client: USDAClient,
 ) -> Food:
-    assert item.source_ref is not None
-    provider, source_id = item.source_ref.split(":", 1)
+    source_ref = item.selection.source_ref if item.selection is not None else item.source_ref
+    assert source_ref is not None
+    provider, source_id = source_ref.split(":", 1)
     offline = os.getenv("NOMNOM_OFFLINE", "").strip() == "1"
     off_disabled = os.getenv("NOMNOM_DISABLE_OFF", "").strip() == "1"
     if offline or provider == "off" and off_disabled:
@@ -372,7 +454,7 @@ def _refetch_source(
             f"{provider_name} source re-fetch is disabled",
             details={
                 "provider": "openfoodfacts" if provider == "off" else "usda",
-                "source_ref": item.source_ref,
+                "source_ref": source_ref,
                 "action": f"Unset {setting} to allow {provider_name} source re-fetch",
             },
         )
@@ -385,7 +467,7 @@ def _refetch_source(
                 raise NomnomError(
                     "usda_not_configured",
                     "USDA is required to re-fetch this source reference",
-                    details={"source_ref": item.source_ref},
+                    details={"source_ref": source_ref},
                 )
             food = usda_client.food_by_fdc_id(int(source_id), credential.value)
     except NomnomError as exc:
@@ -398,7 +480,7 @@ def _refetch_source(
             raise NomnomError(
                 "agent_source_ref_mismatch",
                 "The selected source reference no longer identifies the discovered record",
-                details={"source_ref": item.source_ref, "provider_error": exc.as_dict()["error"]},
+                details={"source_ref": source_ref, "provider_error": exc.as_dict()["error"]},
             ) from exc
         raise
     returned_id = food.source_id or (str(food.fdc_id) if food.fdc_id is not None else None)
@@ -406,16 +488,41 @@ def _refetch_source(
         raise NomnomError(
             "agent_source_ref_mismatch",
             "Provider result identity does not match source_ref",
-            details={"source_ref": item.source_ref, "returned_source_id": returned_id},
+            details={"source_ref": source_ref, "returned_source_id": returned_id},
+        )
+    expected_source = "openfoodfacts" if provider == "off" else "usda"
+    nutrients = (food.kcal, food.protein, food.fat, food.carbs)
+    if food.source != expected_source or any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value <= 0
+        for value in nutrients
+    ):
+        raise NomnomError(
+            "agent_source_integrity_rejected",
+            "The selected source returned inconsistent identity or incomplete nutrition",
+            details={
+                "source_ref": source_ref,
+                "expected_provider": expected_source,
+                "returned_provider": food.source,
+            },
         )
     query = _identity_query(item.input)
-    status = _candidate_status(query, food)
-    if status != "generic_proxy_eligible":
+    status = (
+        _candidate_status(query, food)
+        if item.selection is not None
+        else _direct_source_ref_status(query, food)
+    )
+    required_status = (
+        "agent_selection_eligible" if item.selection is not None else "generic_proxy_eligible"
+    )
+    if status != required_status:
         raise NomnomError(
             "agent_source_identity_rejected",
             "The selected source changes food type or lacks exact identity evidence",
             details={
-                "source_ref": item.source_ref,
+                "source_ref": source_ref,
                 "candidate_status": status,
                 "raw_input": item.input,
                 "returned_name": food.name,
@@ -425,7 +532,7 @@ def _refetch_source(
             },
         )
     _apply_generic_policy(food, config)
-    return _generic_proxy(food)
+    return _generic_proxy(food, item.selection)
 
 
 def resolve_agent_plan(
@@ -482,6 +589,16 @@ def resolve_agent_plan(
             resolved = scale_food(food, grams, 1.0)
         resolved_item = resolved.to_dict()
         resolved_item.update({"item_index": index, "input": planned.input, "status": "resolved"})
+        if planned.selection is not None:
+            resolved_item.update(
+                {
+                    "selection_mode": "agent_generic",
+                    "selection_relation": planned.selection.relation,
+                    "selection_assumption": planned.selection.assumption,
+                    "selected_source_ref": planned.selection.source_ref,
+                    "source_canonical_name": food.name,
+                }
+            )
         items.append(resolved_item)
 
     resolved_items = [item for item in items if item["status"] == "resolved"]
