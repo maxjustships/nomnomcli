@@ -63,6 +63,20 @@ GENERIC_MILK = {
     "foodCategory": "Dairy",
     "foodNutrients": nutrients(kcal=61, protein=3.2, fat=3.3, carbs=4.8),
 }
+CHOCOLATE_MILK = {
+    "fdcId": 203,
+    "description": "Chocolate milk",
+    "dataType": "Foundation",
+    "foodCategory": "Dairy",
+    "foodNutrients": nutrients(kcal=83, protein=3.2, fat=3.4, carbs=10.3),
+}
+CONDENSED_MILK = {
+    "fdcId": 204,
+    "description": "Condensed milk",
+    "dataType": "SR Legacy",
+    "foodCategory": "Dairy",
+    "foodNutrients": nutrients(kcal=321, protein=7.9, fat=8.7, carbs=54.4),
+}
 MILK_CRACKERS = {
     "fdcId": 202,
     "description": "Milk crackers",
@@ -91,7 +105,9 @@ def provider_get(url, **kwargs):
         if "tomato" in query:
             return Response({"foods": [TOMATO_POWDER, RAW_TOMATO]})
         if "milk" in query:
-            return Response({"foods": [MILK_CRACKERS, GENERIC_MILK]})
+            return Response(
+                {"foods": [CHOCOLATE_MILK, CONDENSED_MILK, MILK_CRACKERS, GENERIC_MILK]}
+            )
         return Response({"foods": []})
     if url == USDA_FOOD_URL.format(fdc_id=101):
         return Response(RAW_TOMATO)
@@ -101,6 +117,10 @@ def provider_get(url, **kwargs):
         return Response(GENERIC_MILK)
     if url == USDA_FOOD_URL.format(fdc_id=202):
         return Response(MILK_CRACKERS)
+    if url == USDA_FOOD_URL.format(fdc_id=203):
+        return Response(CHOCOLATE_MILK)
+    if url == USDA_FOOD_URL.format(fdc_id=204):
+        return Response(CONDENSED_MILK)
     if url.startswith("https://api.nal.usda.gov/fdc/v1/food/"):
         return Response({}, status_code=404)
     if url == OFF_SEARCH_URL:
@@ -185,7 +205,7 @@ def test_agent_candidates_are_read_only_deterministic_and_type_safe(
     assert all("kcal" not in json.dumps(candidate) for candidate in first["candidates"])
 
 
-def test_agent_candidates_expose_milk_not_crackers(
+def test_agent_candidates_reject_type_changing_leading_milk_modifiers(
     tmp_path, monkeypatch, synthetic_providers, capsys
 ):
     untouched = tmp_path / "discovery.sqlite3"
@@ -200,6 +220,8 @@ def test_agent_candidates_expose_milk_not_crackers(
     assert statuses == {
         "usda:201": "generic_proxy_eligible",
         "usda:202": "identity_rejected",
+        "usda:203": "identity_rejected",
+        "usda:204": "identity_rejected",
     }
     assert not untouched.exists()
 
@@ -309,6 +331,117 @@ def test_agent_intake_refetches_literal_tomato_and_milk_and_writes_one_event(
         assert len(rows) == 1
         assert rows[0]["kind"] == "agent_intake"
         assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("source_ref", ["usda:203", "usda:204"])
+def test_agent_intake_rejects_type_changing_leading_milk_modifiers_without_write(
+    source_ref, user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+
+    code, error, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan({"input": "milk 200 g", "grams": 200, "source_ref": source_ref}),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_source_identity_rejected"
+    assert not user_db.exists()
+
+
+@pytest.mark.parametrize(
+    ("source_ref", "provider"),
+    [("off:0123456789012", "openfoodfacts"), ("usda:201", "usda")],
+)
+def test_agent_intake_offline_blocks_source_refetch_without_calls_or_write(
+    source_ref, provider, user_db, monkeypatch, synthetic_providers, capsys
+):
+    calls = []
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_OFFLINE", "1")
+    monkeypatch.setattr(requests, "get", lambda url, **kwargs: calls.append(url))
+
+    code, error, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan({"input": "milk 200 g", "grams": 200, "source_ref": source_ref}),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "provider_disabled"
+    assert error["error"]["details"]["provider"] == provider
+    assert "NOMNOM_OFFLINE" in error["error"]["details"]["action"]
+    assert calls == []
+    assert not user_db.exists()
+
+
+def test_agent_intake_disable_off_blocks_only_off_without_call_or_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    calls = []
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+    monkeypatch.setattr(requests, "get", lambda url, **kwargs: calls.append(url))
+
+    code, error, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan(
+                {
+                    "input": "Harry's sandwich bread 80 g",
+                    "grams": 80,
+                    "source_ref": "off:0123456789012",
+                }
+            ),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "provider_disabled"
+    assert error["error"]["details"]["provider"] == "openfoodfacts"
+    assert "NOMNOM_DISABLE_OFF" in error["error"]["details"]["action"]
+    assert calls == []
+    assert not user_db.exists()
+
+
+def test_agent_intake_disable_off_still_allows_configured_usda_refetch(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    calls = []
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_DISABLE_OFF", "1")
+
+    def tracked_get(url, **kwargs):
+        calls.append(url)
+        return provider_get(url, **kwargs)
+
+    monkeypatch.setattr(requests, "get", tracked_get)
+
+    code, result, _ = invoke_json(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            plan({"input": "milk 200 g", "grams": 200, "source_ref": "usda:201"}),
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert result["items"][0]["name"] == "milk"
+    assert calls == [USDA_FOOD_URL.format(fdc_id=201)]
 
 
 def test_agent_intake_pending_exact_brand_is_preserved_and_stats_are_incomplete(

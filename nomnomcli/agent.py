@@ -223,9 +223,7 @@ def _source_name(food: Food) -> str:
 def _generic_identity_is_safe(query: str, food: Food) -> bool:
     query_tokens = _ordered_tokens(query)
     candidate_tokens = _ordered_tokens(_source_name(food))
-    if not query_tokens or len(candidate_tokens) < len(query_tokens):
-        return False
-    return candidate_tokens[-len(query_tokens) :] == query_tokens
+    return bool(query_tokens) and candidate_tokens == query_tokens
 
 
 def _candidate_status(query: str, food: Food) -> str:
@@ -364,6 +362,20 @@ def _refetch_source(
 ) -> Food:
     assert item.source_ref is not None
     provider, source_id = item.source_ref.split(":", 1)
+    offline = os.getenv("NOMNOM_OFFLINE", "").strip() == "1"
+    off_disabled = os.getenv("NOMNOM_DISABLE_OFF", "").strip() == "1"
+    if offline or provider == "off" and off_disabled:
+        provider_name = "Open Food Facts" if provider == "off" else "USDA"
+        setting = "NOMNOM_OFFLINE" if offline else "NOMNOM_DISABLE_OFF"
+        raise NomnomError(
+            "provider_disabled",
+            f"{provider_name} source re-fetch is disabled",
+            details={
+                "provider": "openfoodfacts" if provider == "off" else "usda",
+                "source_ref": item.source_ref,
+                "action": f"Unset {setting} to allow {provider_name} source re-fetch",
+            },
+        )
     try:
         if provider == "off":
             food = off_client.product_by_barcode(source_id)
