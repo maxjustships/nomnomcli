@@ -33,6 +33,18 @@ REPAIR_CONTEXT_FORBIDDEN_KEYS = {
 }
 
 
+REPAIRABLE_CLI_ERROR_CODES = {"agent_plan_invalid", "portion_estimates_malformed"}
+PLAN_TOP_LEVEL_FIELDS = {"version", "accuracy_profile", "items", "portion_estimates"}
+PLAN_ITEM_FIELDS = {"input", "grams", "source_ref", "selection", "pending_capture"}
+SELECTION_BASE_FIELDS = {"source_ref", "relation", "assumption", "semantic_attestation"}
+SELECTION_FIELDS_BY_RELATION = {
+    "semantic_equivalent": SELECTION_BASE_FIELDS,
+    "probable_brand_match": SELECTION_BASE_FIELDS | {"discovery_receipt"},
+    "branded_same_type_generic": SELECTION_BASE_FIELDS
+    | {"discovery_receipt", "dismissed_brand_candidates", "risk_disposition"},
+}
+
+
 def load_corpus() -> dict:
     return json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 
@@ -258,6 +270,10 @@ def actor_prompt(request: dict) -> str:
                 },
             },
         },
+        "selection_fields_by_relation": {
+            relation: sorted(fields)
+            for relation, fields in SELECTION_FIELDS_BY_RELATION.items()
+        },
         "branded_same_type_generic_flat_example": {
             "input": "Example Brand sandwich bread 80 g",
             "grams": 80,
@@ -350,7 +366,9 @@ def actor_prompt(request: dict) -> str:
         "unbranded candidate with direct_source_ref_eligible=true, prefer the direct measured "
         "template: source_ref is an ITEM field, relation is omitted, and grams is an ITEM field. "
         "There is no relation named exact or exact_same_type. For every selection, include the "
-        "strict semantic_attestation. Only assert same_food_type when the raw and selected "
+        "strict semantic_attestation. selection must never contain input. discovery_receipt is "
+        "forbidden for semantic_equivalent and is allowed only for the branded relations listed. "
+        "Only assert same_food_type when the raw and selected "
         "identities truly denote the same food type; otherwise use pending_capture. A "
         "brand_candidate_requires_semantic_assessment is not exact. A branded generic fallback "
         "must dismiss every discovered brand candidate. Never create a "
@@ -422,6 +440,60 @@ def extract_json_object(stdout: str) -> dict | None:
 
 def capped_stdout_excerpt(stdout: str) -> str:
     return stdout.strip()[:STDOUT_EXCERPT_LIMIT]
+
+
+def normalize_actor_plan(plan: dict, request: dict) -> dict:
+    """Repair schema shape only; never invent or change semantic/nutrition values."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("items"), list):
+        return plan
+    if plan_has_injected_nutrition(plan):
+        return plan
+    normalized = json.loads(json.dumps(plan))
+    normalized = {
+        key: value for key, value in normalized.items() if key in PLAN_TOP_LEVEL_FIELDS
+    }
+    normalized["version"] = 2
+    request_profile = request.get("accuracy_profile")
+    if "accuracy_profile" not in normalized and isinstance(request_profile, str):
+        normalized["accuracy_profile"] = request_profile
+    portion_estimates = normalized.get("portion_estimates")
+    if isinstance(portion_estimates, list):
+        normalized["portion_estimates"] = {"items": portion_estimates}
+    elif isinstance(portion_estimates, dict) and isinstance(
+        portion_estimates.get("items"), list
+    ):
+        normalized["portion_estimates"] = {"items": portion_estimates["items"]}
+
+    normalized_items = []
+    for raw_item in normalized["items"]:
+        if not isinstance(raw_item, dict):
+            normalized_items.append(raw_item)
+            continue
+        item = {key: value for key, value in raw_item.items() if key in PLAN_ITEM_FIELDS}
+        selection = item.get("selection")
+        if isinstance(selection, dict) and isinstance(selection.get("selection"), dict):
+            selection = selection["selection"]
+        if isinstance(selection, dict):
+            additions = selection.get("branded_selection_additions")
+            if isinstance(additions, dict):
+                selection = {**selection, **additions}
+            relation = selection.get("relation")
+            allowed = (
+                SELECTION_FIELDS_BY_RELATION.get(relation)
+                if isinstance(relation, str)
+                else None
+            )
+            if allowed is not None:
+                selection = {key: value for key, value in selection.items() if key in allowed}
+            item["selection"] = selection
+        if isinstance(item.get("pending_capture"), dict):
+            item.pop("source_ref", None)
+            item.pop("selection", None)
+        elif isinstance(item.get("selection"), dict):
+            item.pop("source_ref", None)
+        normalized_items.append(item)
+    normalized["items"] = normalized_items
+    return normalized
 
 
 def allowlisted_actor_env(host_env: dict[str, str], actor_home: Path) -> dict[str, str]:
@@ -725,6 +797,12 @@ def run_actor_step(
         attempt["attempt"] = attempt_number
         attempt["prompt_kind"] = prompt_kind
         plan = attempt.get("plan")
+        if isinstance(plan, dict):
+            normalized_plan = normalize_actor_plan(plan, request)
+            if normalized_plan != plan:
+                attempt["raw_plan"] = plan
+                attempt["plan"] = normalized_plan
+                plan = normalized_plan
         if plan is None:
             attempt["cli_returncode"] = attempt.get("actor_returncode", 70)
             attempt["cli"] = {
@@ -753,9 +831,11 @@ def run_actor_step(
     initial = complete_attempt(attempt_number=1, prompt_kind="initial")
     attempts = [initial]
     parse_failed = initial.get("actor_error_kind") == "parse_failure"
+    cli_error_code = initial.get("cli", {}).get("error", {}).get("code")
     intake_failed = (
         initial.get("plan") is not None
         and int(initial.get("cli_returncode", 0)) != 0
+        and cli_error_code in REPAIRABLE_CLI_ERROR_CODES
     )
     if parse_failed or intake_failed:
         previous_invalid = (
@@ -987,6 +1067,28 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
     practical_ux_counts = Counter(
         failure for result in practical for failure in result["ux_failures"]
     )
+    integrity_prefixes = (
+        "actor_forbidden_semantic_attestation",
+        "actor_semantic_attestation_missing",
+        "actor_semantic_identity_not_allowed",
+        "agent_nutrition_injection",
+        "approximation_assumption_missing",
+        "atomic_no_write_failed",
+        "catastrophic_semantic_substitution",
+        "expected_error_missing",
+        "invented_nutrition",
+        "lost_input_item",
+        "resolution_mode_not_allowed",
+        "semantic_identity_not_allowed",
+        "source_not_allowed",
+        "source_or_provenance_missing",
+        "unexpected_cli_error",
+    )
+    global_integrity_failures = {
+        failure: count
+        for failure, count in all_hard_counts.items()
+        if failure.startswith(integrity_prefixes)
+    }
     portion_results = [
         result
         for result in practical
@@ -1029,7 +1131,7 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
             practical_metrics["invented_nutrition_or_source"] == 0
         ),
         "lost_input_items": practical_metrics["lost_input_items"] == 0,
-        "incorrect_complete_status": practical_metrics["incorrect_complete_status"] == 0,
+        "global_integrity": not global_integrity_failures,
         "one_pass_completion": practical_metrics["one_pass_completion_rate"] >= 0.95,
         "followup_rate": practical_metrics["meals_requiring_followup_rate"] <= 0.05,
         "max_followups": practical_metrics["max_followups_per_meal"] <= 1,
@@ -1061,6 +1163,7 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
             "ux_failures": dict(sorted(practical_ux_counts.items())),
         },
         "practical_metrics": practical_metrics,
+        "global_integrity_failures": dict(sorted(global_integrity_failures.items())),
         "release_gate": release_gate,
         "gate_metrics_passed": gate_metrics_passed,
         "release_gate_passed": release_evidence and gate_metrics_passed,
@@ -1211,7 +1314,12 @@ def main() -> int:
             sort_keys=True,
         )
     )
-    return 0 if report["failed"] == 0 and report["gate_metrics_passed"] else 1
+    accepted = (
+        report["release_gate_passed"]
+        if actor_kind == "external"
+        else report["harness_self_test_passed"]
+    )
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":

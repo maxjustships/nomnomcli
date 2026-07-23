@@ -13,6 +13,7 @@ from evals.run import (
     actor_prompt,
     default_actor_command,
     extract_json_object,
+    normalize_actor_plan,
     repair_prompt,
     run_actor,
     run_actor_step,
@@ -434,6 +435,7 @@ def test_generated_fuzzy_envelopes_are_realistic_and_match_corpus():
     assert fuzzy["fuzzy-01"] == [[20, 45]]
     assert fuzzy["fuzzy-02"] == [[100, 300]]
     assert fuzzy["fuzzy-16"] == [[150, 400]]
+    assert fuzzy["fuzzy-18"] == [[40, 220]]
     assert fuzzy["fuzzy-05"] == [None]
 
 
@@ -443,7 +445,74 @@ def test_fake_actor_fuzzy_heuristic_tracks_portion_shape_not_single_50g_default(
     assert fake_actor.fuzzy_grams("one mug of cocoa") == 250
 
 
-def test_practical_release_metrics_ignore_balanced_and_exact_failures():
+def test_schema_normalizer_is_mechanical_and_preserves_nutrition_rejection():
+    plan = {
+        "version": 1,
+        "raw_input": "not a plan field",
+        "items": [
+            {
+                "input": "one fist of pasta",
+                "selection": {
+                    "input": "forbidden here",
+                    "source_ref": "usda:1",
+                    "relation": "semantic_equivalent",
+                    "assumption": "same pasta type",
+                    "discovery_receipt": "forbidden for this relation",
+                    "semantic_attestation": {"version": 1},
+                },
+            }
+        ],
+        "portion_estimates": [{"item_index": 0, "grams": 100}],
+    }
+
+    normalized = normalize_actor_plan(plan, {"accuracy_profile": "practical"})
+
+    assert set(normalized) == {"version", "accuracy_profile", "items", "portion_estimates"}
+    assert normalized["version"] == 2
+    assert normalized["portion_estimates"] == {"items": [{"item_index": 0, "grams": 100}]}
+    assert set(normalized["items"][0]["selection"]) == {
+        "source_ref",
+        "relation",
+        "assumption",
+        "semantic_attestation",
+    }
+    injected = {"version": 2, "items": [], "nutrition": {"kcal": 100}}
+    assert normalize_actor_plan(injected, {"accuracy_profile": "practical"}) == injected
+
+
+def test_integrity_cli_error_is_not_repaired_into_a_write(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_actor(**kwargs):
+        calls.append(kwargs)
+        return {"actor_returncode": 0, "plan": {"version": 2, "items": []}}
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(
+        eval_run,
+        "invoke_cli",
+        lambda *args, **kwargs: (
+            2,
+            {"error": {"code": "agent_source_ref_mismatch", "message": "changed source"}},
+        ),
+    )
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request={"raw_input": "70 g lentils", "items": []},
+        host_env={},
+        cli_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert len(calls) == 1
+    assert result["repair_used"] is False
+    assert result["cli"]["error"]["code"] == "agent_source_ref_mismatch"
+
+
+def test_practical_release_metrics_ignore_balanced_and_exact_ux_failures():
     practical = {
         "id": "p",
         "category": "measured_generic",
@@ -460,7 +529,8 @@ def test_practical_release_metrics_ignore_balanced_and_exact_failures():
         "id": "b",
         "profile": "balanced",
         "pass": False,
-        "hard_failures": ["catastrophic_semantic_substitution:cheese"],
+        "hard_failures": ["incorrect_complete_status"],
+        "ux_failures": ["max_followups_exceeded"],
     }
 
     report = summarize([practical, balanced], 1, actor_kind="external")
@@ -468,6 +538,61 @@ def test_practical_release_metrics_ignore_balanced_and_exact_failures():
     assert report["practical_metrics"]["catastrophic_semantic_substitutions"] == 0
     assert report["practical_counters"]["hard_failures"] == {}
     assert report["all_profile_counters"]["hard_failures"] == {
-        "catastrophic_semantic_substitution:cheese": 1
+        "incorrect_complete_status": 1
     }
+    assert report["release_gate_passed"] is True
+
+
+def test_global_semantic_integrity_blocks_release_in_every_profile():
+    result = {
+        "id": "b",
+        "category": "measured_generic",
+        "profile": "balanced",
+        "pass": False,
+        "hard_failures": ["catastrophic_semantic_substitution:cheese"],
+        "ux_failures": [],
+        "outcome": "complete",
+        "followups": 0,
+        "resolved_items": 1,
+    }
+    practical = {**result, "id": "p", "profile": "practical", "pass": True, "hard_failures": []}
+
+    report = summarize([practical, result], 1, actor_kind="external")
+
+    assert report["release_gate"]["global_integrity"] is False
+    assert report["release_gate_passed"] is False
+
+
+def test_external_release_uses_practical_thresholds_not_perfect_episode_score():
+    complete = {
+        "id": "p",
+        "category": "measured_generic",
+        "profile": "practical",
+        "pass": True,
+        "hard_failures": [],
+        "ux_failures": [],
+        "outcome": "complete",
+        "followups": 0,
+        "resolved_items": 1,
+    }
+    results = [{**complete, "id": f"p-{index}"} for index in range(19)]
+    results.append(
+        {
+            **complete,
+            "id": "p-pending",
+            "pass": False,
+            "hard_failures": ["incorrect_complete_status"],
+            "ux_failures": ["max_followups_exceeded"],
+            "outcome": "pending",
+            "followups": 1,
+            "resolved_items": 0,
+        }
+    )
+
+    report = summarize(results, 1, actor_kind="external")
+
+    assert report["passed"] == 19
+    assert report["failed"] == 1
+    assert report["practical_metrics"]["one_pass_completion_rate"] == 0.95
+    assert report["practical_metrics"]["meals_requiring_followup_rate"] == 0.05
     assert report["release_gate_passed"] is True
