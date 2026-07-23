@@ -203,6 +203,28 @@ def fuzzy_cases(start: int) -> list[dict]:
         ("one piece of cornbread", "cornbread"),
         ("a large serving of couscous", "couscous"),
     ]
+    envelopes = [
+        [20, 45],
+        [100, 300],
+        [40, 120],
+        [100, 220],
+        None,
+        [80, 220],
+        [10, 50],
+        [100, 350],
+        [70, 180],
+        None,
+        [15, 70],
+        [150, 350],
+        [10, 40],
+        [25, 120],
+        None,
+        [150, 400],
+        [15, 70],
+        [50, 220],
+        [30, 160],
+        None,
+    ]
     cases = []
     for index, (item, identity) in enumerate(portions):
         source_id = start + index
@@ -220,7 +242,7 @@ def fuzzy_cases(start: int) -> list[dict]:
                 allowed_identities=[] if pending else [identity],
                 allowed_modes=["pending_capture"] if pending else ["generic_proxy"],
                 forbidden_tokens=["powder", "cracker"],
-                envelopes=[None if pending else [40, 60]],
+                envelopes=[envelopes[index]],
                 outcome="pending" if pending else "complete",
                 max_followups=1 if pending else 0,
             )

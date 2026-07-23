@@ -14,11 +14,23 @@ import threading
 from collections import Counter, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = Path(__file__).with_name("corpus.json")
 PROHIBITED_PLAN_KEYS = {"calories", "carbs", "fat", "kcal", "macros", "nutrition", "protein"}
+STDOUT_EXCERPT_LIMIT = 2000
+REPAIR_CONTEXT_FORBIDDEN_KEYS = {
+    "allowed_resolution_modes",
+    "allowed_semantic_identities",
+    "allowed_source_refs",
+    "expected",
+    "forbidden_identities",
+    "forbidden_tokens",
+    "gram_envelopes",
+    "synthetic_providers",
+}
 
 
 def load_corpus() -> dict:
@@ -246,13 +258,49 @@ def actor_prompt(request: dict) -> str:
                 },
             },
         },
-        "branded_selection_additions": {
-            "probable_brand_match": ["discovery_receipt"],
-            "branded_same_type_generic": [
-                "discovery_receipt",
-                "dismissed_brand_candidates",
-            ],
-            "balanced_branded_same_type_generic": ["risk_disposition=material_risk_accepted"],
+        "branded_same_type_generic_flat_example": {
+            "input": "Example Brand sandwich bread 80 g",
+            "grams": 80,
+            "selection": {
+                "source_ref": "usda:12345",
+                "relation": "branded_same_type_generic",
+                "assumption": (
+                    "Example Brand/SKU was not exact; used source-backed generic "
+                    "sandwich bread after provider text discovery."
+                ),
+                "semantic_attestation": {
+                    "version": 1,
+                    "relation": "branded_same_type_generic",
+                    "raw_identity": "Example Brand sandwich bread",
+                    "selected_identity": "sandwich bread",
+                    "same_food_type": True,
+                    "rationale": "Both identities denote sandwich bread.",
+                    "confidence": 0.9,
+                },
+                "discovery_receipt": "0" * 64,
+                "dismissed_brand_candidates": [
+                    {
+                        "source_ref": "off:0000000000000",
+                        "reason": "different_food_type",
+                    }
+                ],
+                "risk_disposition": "material_risk_accepted",
+            },
+        },
+        "branded_selection_rules": {
+            "probable_brand_match": (
+                "discovery_receipt is required directly in selection"
+            ),
+            "branded_same_type_generic": (
+                "discovery_receipt and dismissed_brand_candidates are required directly "
+                "in selection; assumption must contain the literal words 'not exact'"
+            ),
+            "balanced_branded_same_type_generic": (
+                "risk_disposition=material_risk_accepted is required directly in selection"
+            ),
+            "practical_branded_same_type_generic": (
+                "risk_disposition must be omitted"
+            ),
             "dismissal": {
                 "source_ref": "COPY_EACH_BRAND_CANDIDATE_SOURCE_REF",
                 "reason": "different_food_type | incompatible_variant | incomplete_facts",
@@ -276,6 +324,22 @@ def actor_prompt(request: dict) -> str:
             ],
             "method": "agent_estimate",
         },
+        "accuracy_profile_policy": {
+            "practical": (
+                "MUST estimate every fuzzy portion automatically when a semantically "
+                "compatible source exists; fuzzy grams alone never justify pending_capture"
+            ),
+            "balanced": (
+                "MUST estimate every fuzzy portion automatically when a semantically "
+                "compatible source exists; fuzzy grams alone never justify pending_capture"
+            ),
+            "exact": "MUST use pending_capture for every fuzzy portion",
+            "measured": "Copy explicitly measured grams exactly in every profile",
+            "estimate_bounds": (
+                "grams MUST be inside lower_grams and upper_grams inclusive, and MUST be "
+                "a realistic edible-portion estimate for the phrase"
+            ),
+        },
     }
     return (
         "Return exactly one strict nomnom agent plan JSON object and no prose or markdown. "
@@ -289,12 +353,75 @@ def actor_prompt(request: dict) -> str:
         "strict semantic_attestation. Only assert same_food_type when the raw and selected "
         "identities truly denote the same food type; otherwise use pending_capture. A "
         "brand_candidate_requires_semantic_assessment is not exact. A branded generic fallback "
-        "must dismiss every discovered brand candidate. Exact profile must use pending_capture "
-        "for fuzzy portions or text-only branded identity.\nSTRICT CONTRACT:\n"
+        "must dismiss every discovered brand candidate. Never create a "
+        "branded_selection_additions object: discovery_receipt, dismissed_brand_candidates, and "
+        "risk_disposition belong directly inside selection. For branded_same_type_generic, the "
+        "assumption MUST contain the literal words 'not exact'. probable_brand_match MUST include "
+        "discovery_receipt. Balanced may complete a same-type branded generic fallback only with "
+        "risk_disposition='material_risk_accepted'; Practical does not need it and must omit it. "
+        "Practical and Balanced MUST automatically estimate fuzzy portions when a semantically "
+        "compatible source exists and must not use pending_capture merely because grams are "
+        "fuzzy. Exact MUST use pending_capture for fuzzy portions or text-only branded identity. "
+        "Every estimate must put grams inside its inclusive lower_grams/upper_grams range and use "
+        "a realistic edible-portion amount. Copy measured grams exactly.\nSTRICT CONTRACT:\n"
         + json.dumps(contract, ensure_ascii=False, sort_keys=True)
         + "\nSANITIZED REQUEST:\n"
         + json.dumps(request, ensure_ascii=False, sort_keys=True)
     )
+
+
+def _sanitize_previous_invalid(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_previous_invalid(child)
+            for key, child in value.items()
+            if str(key).casefold()
+            not in PROHIBITED_PLAN_KEYS | REPAIR_CONTEXT_FORBIDDEN_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_previous_invalid(child) for child in value]
+    return value
+
+
+def repair_prompt(
+    *,
+    request: dict,
+    previous_invalid_plan_or_stdout,
+    exact_error: dict,
+) -> str:
+    sanitized_request = _sanitize_previous_invalid(request)
+    repair_input = {
+        "sanitized_original_request": sanitized_request,
+        "previous_invalid_plan_or_stdout_excerpt": _sanitize_previous_invalid(
+            previous_invalid_plan_or_stdout
+        ),
+        "exact_cli_or_parser_error": exact_error,
+    }
+    return (
+        actor_prompt(sanitized_request)
+        + "\nREPAIR CONTEXT:\n"
+        + "This is the single bounded internal repair turn. Correct only the reported parser or "
+        "CLI intake validation error. The only case-specific context supplied below is the "
+        "sanitized original request, previous invalid plan or capped stdout excerpt, and exact "
+        "error. Do not infer or request any benchmark oracle.\n"
+        + json.dumps(repair_input, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def extract_json_object(stdout: str) -> dict | None:
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", stdout):
+        try:
+            payload, _ = decoder.raw_decode(stdout, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def capped_stdout_excerpt(stdout: str) -> str:
+    return stdout.strip()[:STDOUT_EXCERPT_LIMIT]
 
 
 def allowlisted_actor_env(host_env: dict[str, str], actor_home: Path) -> dict[str, str]:
@@ -518,12 +645,13 @@ def run_actor(
     episode_dir: Path,
     suffix: str,
     auth_launcher_command: str | None,
+    prompt_override: str | None = None,
 ) -> dict:
     actor_result = episode_dir / f"actor-{suffix}.json"
     actor_home = episode_dir / f"actor-home-{suffix}"
     actor_env = allowlisted_actor_env(host_env, actor_home)
     request_json = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
-    prompt = actor_prompt(request)
+    prompt = prompt_override if prompt_override is not None else actor_prompt(request)
     command_template = auth_launcher_command or actor_command
     command = render_command(
         command_template,
@@ -545,6 +673,7 @@ def run_actor(
         timeout=90,
     )
     def persist(payload: dict) -> dict:
+        payload["actor_result"] = actor_result.name
         actor_result.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -554,25 +683,104 @@ def run_actor(
     if completed.returncode != 0:
         return persist({
             "actor_returncode": completed.returncode,
+            "actor_error_kind": "process_failure",
             "actor_process_error": "actor command returned a nonzero status",
         })
-    candidates = [completed.stdout.strip()]
-    candidates.extend(
-        line.strip().removeprefix("```json").removesuffix("```").strip()
-        for line in reversed(completed.stdout.splitlines())
-        if line.strip()
-    )
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return persist({"actor_returncode": 0, "plan": payload})
+    payload = extract_json_object(completed.stdout)
+    if payload is not None:
+        return persist({"actor_returncode": 0, "plan": payload})
     return persist({
         "actor_returncode": 70,
+        "actor_error_kind": "parse_failure",
         "actor_process_error": "actor stdout did not contain one parseable JSON object",
+        "actor_stdout_excerpt": capped_stdout_excerpt(completed.stdout),
     })
+
+
+def run_actor_step(
+    *,
+    actor_command: str,
+    request: dict,
+    host_env: dict[str, str],
+    cli_env: dict[str, str],
+    episode_dir: Path,
+    suffix: str,
+    auth_launcher_command: str | None,
+) -> dict:
+    def complete_attempt(
+        *,
+        attempt_number: int,
+        prompt_kind: str,
+        prompt_override: str | None = None,
+    ) -> dict:
+        attempt = run_actor(
+            actor_command=actor_command,
+            request=request,
+            host_env=host_env,
+            episode_dir=episode_dir,
+            suffix=suffix if attempt_number == 1 else f"{suffix}-repair",
+            auth_launcher_command=auth_launcher_command,
+            prompt_override=prompt_override,
+        )
+        attempt["attempt"] = attempt_number
+        attempt["prompt_kind"] = prompt_kind
+        plan = attempt.get("plan")
+        if plan is None:
+            attempt["cli_returncode"] = attempt.get("actor_returncode", 70)
+            attempt["cli"] = {
+                "error": {
+                    "code": "eval_actor_failed",
+                    "message": attempt.get(
+                        "actor_process_error", "Actor returned no plan"
+                    ),
+                }
+            }
+        else:
+            intake_code, intake_payload = invoke_cli(
+                [
+                    "agent",
+                    "intake",
+                    "--plan",
+                    json.dumps(plan, ensure_ascii=False),
+                ],
+                env=cli_env,
+                cwd=episode_dir,
+            )
+            attempt["cli_returncode"] = intake_code
+            attempt["cli"] = intake_payload
+        return attempt
+
+    initial = complete_attempt(attempt_number=1, prompt_kind="initial")
+    attempts = [initial]
+    parse_failed = initial.get("actor_error_kind") == "parse_failure"
+    intake_failed = (
+        initial.get("plan") is not None
+        and int(initial.get("cli_returncode", 0)) != 0
+    )
+    if parse_failed or intake_failed:
+        previous_invalid = (
+            initial["plan"]
+            if initial.get("plan") is not None
+            else initial.get("actor_stdout_excerpt", "")
+        )
+        exact_error = initial["cli"]["error"]
+        repaired = complete_attempt(
+            attempt_number=2,
+            prompt_kind="repair",
+            prompt_override=repair_prompt(
+                request=request,
+                previous_invalid_plan_or_stdout=previous_invalid,
+                exact_error=exact_error,
+            ),
+        )
+        attempts.append(repaired)
+
+    final = dict(attempts[-1])
+    final["attempts"] = attempts
+    final["final_attempt"] = len(attempts)
+    final["repair_used"] = len(attempts) == 2
+    final["request"] = request
+    return final
 
 
 def run_episode(
@@ -669,39 +877,15 @@ def run_episode(
                     "accuracy_profile": case["profile"],
                     "items": discoveries,
                 }
-                actor_run = run_actor(
+                actor_run = run_actor_step(
                     actor_command=actor_command,
                     request=request,
                     host_env=os.environ.copy(),
+                    cli_env=environment,
                     episode_dir=episode_dir,
                     suffix=f"{index + 1:02d}",
                     auth_launcher_command=auth_launcher_command,
                 )
-                plan = actor_run.get("plan")
-                if plan is None:
-                    actor_run["cli_returncode"] = actor_run.get("actor_returncode", 70)
-                    actor_run["cli"] = {
-                        "error": {
-                            "code": "eval_actor_failed",
-                            "message": actor_run.get(
-                                "actor_process_error", "Actor returned no plan"
-                            ),
-                        }
-                    }
-                else:
-                    intake_code, intake_payload = invoke_cli(
-                        [
-                            "agent",
-                            "intake",
-                            "--plan",
-                            json.dumps(plan, ensure_ascii=False),
-                        ],
-                        env=environment,
-                        cwd=episode_dir,
-                    )
-                    actor_run["cli_returncode"] = intake_code
-                    actor_run["cli"] = intake_payload
-                    actor_run["request"] = request
             actor_runs.append(actor_run)
             if step.get("action_after") == "remove_logged_event":
                 log_id = actor_runs[-1].get("cli", {}).get("log_id")
@@ -728,7 +912,9 @@ def run_episode(
         result = evaluate(case, actor_runs, events, list(replay.state.requests))
 
         if judge_command and result["outcome"] == "pending":
-            actor_path = episode_dir / "actor-01.json"
+            actor_path = episode_dir / actor_runs[-1].get(
+                "actor_result", "actor-01.json"
+            )
             judge_path = episode_dir / "judge.json"
             if actor_path.resolve() == judge_path.resolve():
                 result["hard_failures"].append("actor_judge_result_path_collision")

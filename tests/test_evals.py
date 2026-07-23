@@ -7,7 +7,18 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from evals.run import actor_prompt, default_actor_command, run_actor, run_episode, summarize
+from evals import fake_actor, generate_corpus
+from evals import run as eval_run
+from evals.run import (
+    actor_prompt,
+    default_actor_command,
+    extract_json_object,
+    repair_prompt,
+    run_actor,
+    run_actor_step,
+    run_episode,
+    summarize,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "evals" / "corpus.json"
@@ -254,6 +265,182 @@ def test_actor_prompt_exposes_exact_plan_grammar_without_golden_oracle():
     assert "protocol_version, plan_version, raw_input" in prompt
     assert "allowed_source_refs" not in prompt
     assert "forbidden_identities" not in prompt
+
+
+def test_external_actor_json_extraction_accepts_fenced_multiline_object():
+    stdout = "Here is the plan:\n```json\n{\n  \"version\": 2,\n  \"items\": []\n}\n```\n"
+
+    assert extract_json_object(stdout) == {"version": 2, "items": []}
+    assert extract_json_object("not json") is None
+
+
+def test_repair_prompt_reuses_contract_and_removes_oracle_and_nutrition():
+    request = {
+        "raw_input": "a handful of almonds",
+        "items": [],
+        "allowed_source_refs": ["usda:secret"],
+        "expected": {"outcome": "complete"},
+        "synthetic_providers": {"nutrition": "must-not-leak"},
+    }
+    prompt = repair_prompt(
+        request=request,
+        previous_invalid_plan_or_stdout={"calories": 999, "version": 2},
+        exact_error={"code": "agent_plan_invalid", "details": {"grams": 123}},
+    )
+
+    assert '"direct_measured_template"' in prompt
+    assert "single bounded internal repair turn" in prompt
+    assert "allowed_source_refs" not in prompt
+    assert "synthetic_providers" not in prompt
+    assert "must-not-leak" not in prompt
+    assert '"calories"' not in prompt
+
+
+def test_actor_step_repairs_one_invalid_draft_and_returns_only_final(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_actor(**kwargs):
+        calls.append(kwargs)
+        return (
+            {"actor_returncode": 0, "plan": {"version": 2, "bad": True}}
+            if len(calls) == 1
+            else {"actor_returncode": 0, "plan": {"version": 2, "items": []}}
+        )
+
+    def fake_intake(args, **kwargs):
+        if '"bad": true' in args[-1]:
+            return 2, {"error": {"code": "agent_plan_invalid", "message": "bad"}}
+        return 0, {"items": []}
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(eval_run, "invoke_cli", fake_intake)
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request={"raw_input": "40 g apple", "items": []},
+        host_env={},
+        cli_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert len(calls) == 2
+    assert result["repair_used"] is True
+    assert result["final_attempt"] == 2
+    assert result["cli_returncode"] == 0
+    assert result["plan"] == {"version": 2, "items": []}
+    assert len(result["attempts"]) == 2
+
+
+def test_actor_step_does_not_retry_after_successful_cli_write(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_actor(**kwargs):
+        calls.append(kwargs)
+        return {"actor_returncode": 0, "plan": {"version": 2, "items": []}}
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(eval_run, "invoke_cli", lambda *args, **kwargs: (0, {"items": []}))
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request={"raw_input": "40 g apple", "items": []},
+        host_env={},
+        cli_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert len(calls) == 1
+    assert result["repair_used"] is False
+    assert result["final_attempt"] == 1
+
+
+def test_actor_step_repairs_parse_failure_once(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_actor(**kwargs):
+        calls.append(kwargs)
+        return (
+            {
+                "actor_returncode": 70,
+                "actor_error_kind": "parse_failure",
+                "actor_process_error": "no JSON",
+                "actor_stdout_excerpt": "```not-json",
+            }
+            if len(calls) == 1
+            else {"actor_returncode": 0, "plan": {"version": 2, "items": []}}
+        )
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(eval_run, "invoke_cli", lambda *args, **kwargs: (0, {"items": []}))
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request={"raw_input": "40 g apple", "items": []},
+        host_env={},
+        cli_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert len(calls) == 2
+    assert result["repair_used"] is True
+    assert result["cli_returncode"] == 0
+
+
+def test_actor_step_preserves_failed_repair_as_final_error(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_actor(**kwargs):
+        calls.append(kwargs)
+        return {"actor_returncode": 0, "plan": {"version": 2, "invalid": len(calls)}}
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(
+        eval_run,
+        "invoke_cli",
+        lambda *args, **kwargs: (
+            2,
+            {"error": {"code": "agent_plan_invalid", "message": "still invalid"}},
+        ),
+    )
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request={"raw_input": "40 g apple", "items": []},
+        host_env={},
+        cli_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert len(calls) == 2
+    assert result["repair_used"] is True
+    assert result["final_attempt"] == 2
+    assert result["cli_returncode"] == 2
+    assert result["cli"]["error"]["message"] == "still invalid"
+
+
+def test_generated_fuzzy_envelopes_are_realistic_and_match_corpus():
+    generated = generate_corpus.build_corpus()
+    stored = json.loads(CORPUS.read_text())
+    assert generated == stored
+    fuzzy = {case["id"]: case["gram_envelopes"] for case in generated["cases"]}
+    assert fuzzy["fuzzy-01"] == [[20, 45]]
+    assert fuzzy["fuzzy-02"] == [[100, 300]]
+    assert fuzzy["fuzzy-16"] == [[150, 400]]
+    assert fuzzy["fuzzy-05"] == [None]
+
+
+def test_fake_actor_fuzzy_heuristic_tracks_portion_shape_not_single_50g_default():
+    assert fake_actor.fuzzy_grams("a handful of almonds") == 30
+    assert fake_actor.fuzzy_grams("half a bowl of porridge") == 200
+    assert fake_actor.fuzzy_grams("one mug of cocoa") == 250
 
 
 def test_practical_release_metrics_ignore_balanced_and_exact_failures():

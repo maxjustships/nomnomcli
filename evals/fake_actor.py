@@ -20,6 +20,33 @@ def explicit_grams(value: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def fuzzy_grams(value: str) -> float:
+    """Eval-only unit-shape heuristic; never packaged or used by nomnom runtime."""
+    normalized = value.casefold()
+    for marker, grams in (
+        ("cereal", 60),
+        ("thin slice", 20),
+        ("two slices", 70),
+        ("two bites", 35),
+        ("half a bowl", 200),
+        ("one bowl", 60),
+        ("three quarters cup", 160),
+        ("one fist", 150),
+        ("a few", 30),
+        ("one ladle", 200),
+        ("a palm", 120),
+        ("one glass", 250),
+        ("one mug", 250),
+        ("small handful", 30),
+        ("a handful", 30),
+        ("half a wrap", 120),
+        ("one piece", 90),
+    ):
+        if marker in normalized:
+            return float(grams)
+    return 50.0
+
+
 def compatible(raw_identity: str, candidate: dict) -> bool:
     raw_tokens = tokens(raw_identity)
     brand_tokens = tokens(str(candidate.get("brand") or ""))
@@ -176,16 +203,19 @@ def build_plan(request: dict) -> dict:
             }
 
         if fuzzy:
+            estimated_grams = fuzzy_grams(raw_item)
             estimates.append(
                 {
                     "item_index": index,
                     "input": raw_item,
-                    "grams": 50,
-                    "lower_grams": 40,
-                    "upper_grams": 60,
+                    "grams": estimated_grams,
+                    "lower_grams": round(estimated_grams * 0.6, 1),
+                    "upper_grams": round(estimated_grams * 1.4, 1),
                     "confidence": 0.7,
                     "method": "agent_estimate",
-                    "assumption": "External actor estimated the fuzzy portion at 50 g.",
+                    "assumption": (
+                        "External actor estimated the fuzzy portion from its described unit shape."
+                    ),
                 }
             )
         else:
