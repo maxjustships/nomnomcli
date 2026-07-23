@@ -278,6 +278,26 @@ def test_external_actor_json_extraction_accepts_fenced_multiline_object():
     assert extract_json_object("not json") is None
 
 
+def test_external_actor_timeout_is_persisted_instead_of_crashing_run(monkeypatch, tmp_path):
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timed_out)
+
+    result = run_actor(
+        actor_command="actor {prompt}",
+        request={"raw_input": "40 g apple", "items": []},
+        host_env={},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command="launcher {prompt}",
+    )
+
+    assert result["actor_returncode"] == 124
+    assert result["actor_error_kind"] == "process_timeout"
+    assert json.loads((tmp_path / "actor-01.json").read_text()) == result
+
+
 def test_repair_prompt_reuses_contract_and_removes_oracle_and_nutrition():
     request = {
         "raw_input": "a handful of almonds",

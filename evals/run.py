@@ -743,15 +743,6 @@ def run_actor(
             "max_turns": "1",
         },
     )
-    completed = subprocess.run(
-        command,
-        cwd=episode_dir,
-        env=host_env if auth_launcher_command else actor_env,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
     def persist(payload: dict) -> dict:
         payload["actor_result"] = actor_result.name
         actor_result.write_text(
@@ -759,6 +750,25 @@ def run_actor(
             encoding="utf-8",
         )
         return payload
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=episode_dir,
+            env=host_env if auth_launcher_command else actor_env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180 if auth_launcher_command else 90,
+        )
+    except subprocess.TimeoutExpired:
+        return persist(
+            {
+                "actor_returncode": 124,
+                "actor_error_kind": "process_timeout",
+                "actor_process_error": "actor command exceeded its bounded timeout",
+            }
+        )
 
     if completed.returncode != 0:
         return persist({
