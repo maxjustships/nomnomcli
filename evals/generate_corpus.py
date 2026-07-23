@@ -70,9 +70,11 @@ def expected(
     *,
     max_followups: int,
     text_search: bool,
+    error_codes: list[str] | None = None,
 ) -> dict:
     return {
         "outcome": outcome,
+        "error_codes": error_codes or [],
         "max_followups": max_followups,
         "text_search_must_be_attempted": text_search,
     }
@@ -99,6 +101,7 @@ def make_case(
     off_status: int = 200,
     usda_status: int = 200,
     refetch_overrides: dict[str, dict] | None = None,
+    error_codes: list[str] | None = None,
     steps: list[dict] | None = None,
 ) -> dict:
     return {
@@ -128,6 +131,7 @@ def make_case(
             outcome,
             max_followups=max_followups,
             text_search=text_search,
+            error_codes=error_codes,
         ),
         "steps": steps or [],
     }
@@ -483,6 +487,7 @@ def ambiguity_cases(start: int) -> list[dict]:
                 forbidden_tokens=["mismatched"],
                 envelopes=[None],
                 outcome="error",
+                error_codes=["agent_source_ref_mismatch"],
                 max_followups=0,
                 refetch_overrides={str(source_id): wrong_refetch},
             )
@@ -568,7 +573,7 @@ def build_corpus() -> dict:
     assert counts == expected_counts
     assert len({case["id"] for case in cases}) == 100
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "description": (
             "Synthetic eval-only benchmark oracle. Never load from production code or package."
         ),

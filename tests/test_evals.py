@@ -7,11 +7,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from evals import fake_actor, generate_corpus
 from evals import run as eval_run
 from evals.run import (
     actor_prompt,
     default_actor_command,
+    evaluate,
     extract_json_object,
     normalize_actor_plan,
     repair_prompt,
@@ -31,6 +34,16 @@ EXPECTED_COUNTS = {
     "cooking_yield": 10,
     "ambiguity_failure": 10,
     "stateful": 5,
+}
+EXTERNAL_PROVENANCE = {
+    "kind": "external",
+    "boundary": "isolated_actor",
+    "executable": "synthetic-external-actor",
+    "adapter": "synthetic-external-actor",
+    "verified": True,
+    "executable_fingerprint": "1" * 64,
+    "adapter_fingerprint": "3" * 64,
+    "command_fingerprint": "2" * 64,
 }
 REQUIRED_CASE_FIELDS = {
     "id",
@@ -54,7 +67,7 @@ def test_eval_corpus_has_exactly_100_fully_declared_synthetic_cases():
     payload = json.loads(CORPUS.read_text(encoding="utf-8"))
     cases = payload["cases"]
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert len(cases) == 100
     assert len({case["id"] for case in cases}) == 100
     assert Counter(case["category"] for case in cases) == EXPECTED_COUNTS
@@ -71,10 +84,15 @@ def test_eval_corpus_has_exactly_100_fully_declared_synthetic_cases():
             "usda",
         }
         assert set(case["expected"]) == {
+            "error_codes",
             "outcome",
             "max_followups",
             "text_search_must_be_attempted",
         }
+        if case["expected"]["outcome"] == "error":
+            assert case["expected"]["error_codes"]
+        else:
+            assert case["expected"]["error_codes"] == []
         serialized = json.dumps(case).casefold()
         assert "api_key" not in serialized
         assert "credential" not in serialized
@@ -296,6 +314,193 @@ def test_external_actor_timeout_is_persisted_instead_of_crashing_run(monkeypatch
     assert result["actor_returncode"] == 124
     assert result["actor_error_kind"] == "process_timeout"
     assert json.loads((tmp_path / "actor-01.json").read_text()) == result
+
+
+def test_error_episode_rejects_wrong_actor_error_and_actor_failures():
+    case = {
+        **next(
+            case
+            for case in json.loads(CORPUS.read_text())["cases"]
+            if case["id"] == "ambiguity-09"
+        ),
+        "expected": {
+            "outcome": "error",
+            "error_codes": ["agent_source_ref_mismatch"],
+            "max_followups": 0,
+            "text_search_must_be_attempted": False,
+        },
+    }
+
+    wrong = evaluate(
+        case,
+        [
+            {
+                "cli_returncode": 2,
+                "cli": {"error": {"code": "agent_plan_invalid", "message": "wrong error"}},
+            }
+        ],
+        [],
+        [],
+    )
+    actor_failed = evaluate(
+        case,
+        [
+            {
+                "actor_returncode": 124,
+                "actor_error_kind": "process_timeout",
+                "cli_returncode": 124,
+                "cli": {"error": {"code": "eval_actor_failed", "message": "timeout"}},
+            }
+        ],
+        [],
+        [],
+    )
+    repaired_parse = evaluate(
+        case,
+        [
+            {
+                "cli_returncode": 2,
+                "cli": {
+                    "error": {
+                        "code": "agent_source_ref_mismatch",
+                        "message": "expected CLI error",
+                    }
+                },
+                "attempts": [
+                    {"actor_error_kind": "parse_failure"},
+                    {"actor_returncode": 0},
+                ],
+            }
+        ],
+        [],
+        [],
+    )
+
+    assert "expected_error_code_missing" in wrong["hard_failures"]
+    assert "unexpected_error_code:agent_plan_invalid" in wrong["hard_failures"]
+    assert "actor_process_timeout" in actor_failed["hard_failures"]
+    assert "actor_parse_failure" in repaired_parse["hard_failures"]
+
+
+def test_actor_provenance_is_derived_and_rejects_external_fake_claim():
+    provenance = eval_run.derive_actor_provenance(
+        default_actor_command(),
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+
+    assert provenance["kind"] == "fake"
+    assert provenance["verified"] is True
+    assert len(provenance["command_fingerprint"]) == 64
+    assert len(provenance["executable_fingerprint"]) == 64
+    assert len(provenance["adapter_fingerprint"]) == 64
+    assert "command" not in provenance
+    with pytest.raises(ValueError, match="contradicts"):
+        eval_run.validate_actor_kind("external", provenance)
+    external = eval_run.derive_actor_provenance(
+        f"{sys.executable} {Path(__file__).resolve()}",
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+    with pytest.raises(ValueError, match="contradicts"):
+        eval_run.validate_actor_kind("fake", external)
+
+
+def test_actor_provenance_never_persists_command_secret_values():
+    provenance = eval_run.derive_actor_provenance(
+        f"{sys.executable} synthetic_actor.py --api-key do-not-persist {{prompt}}",
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+
+    serialized = json.dumps(provenance)
+    assert "do-not-persist" not in serialized
+    assert "api-key" not in serialized
+    changed_secret = eval_run.derive_actor_provenance(
+        f"{sys.executable} synthetic_actor.py --api-key another-secret {{prompt}}",
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+    assert provenance["command_fingerprint"] == changed_secret["command_fingerprint"]
+    other_provider = eval_run.derive_actor_provenance(
+        f"{sys.executable} {Path(__file__).resolve()} --provider synthetic-b",
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+    first_provider = eval_run.derive_actor_provenance(
+        f"{sys.executable} {Path(__file__).resolve()} --provider synthetic-a",
+        auth_launcher_command=None,
+        host_env=os.environ,
+    )
+    assert (
+        first_provider["command_fingerprint"]
+        != other_provider["command_fingerprint"]
+    )
+
+
+def test_unverified_external_provenance_cannot_create_release_evidence():
+    result = {
+        "id": "p",
+        "category": "measured_generic",
+        "profile": "practical",
+        "pass": True,
+        "hard_failures": [],
+        "ux_failures": [],
+        "outcome": "complete",
+        "followups": 0,
+        "resolved_items": 1,
+    }
+    provenance = {
+        **EXTERNAL_PROVENANCE,
+        "verified": False,
+        "executable_fingerprint": None,
+        "adapter_fingerprint": None,
+    }
+
+    report = summarize([result], 1, actor_provenance=provenance)
+
+    assert report["actor_provenance"] == provenance
+    assert report["release_evidence"] is False
+    assert report["release_gate_passed"] is False
+
+
+def test_auth_launcher_environment_excludes_unrelated_host_secrets(
+    tmp_path, monkeypatch
+):
+    script = tmp_path / "capture_launcher.py"
+    script.write_text(
+        "import argparse, json, os\n"
+        "from pathlib import Path\n"
+        "p=argparse.ArgumentParser(); p.add_argument('--capture'); "
+        "p.add_argument('--prompt'); a=p.parse_args()\n"
+        "Path(a.capture).write_text(json.dumps(dict(os.environ)), encoding='utf-8')\n"
+        "print('{}')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NOMNOM_EVAL_SENTINEL_SECRET", "must-not-leak")
+    monkeypatch.setenv("UNRELATED_ACCESS_TOKEN", "also-must-not-leak")
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    monkeypatch.setenv("HOME", str(host_home))
+    episode = tmp_path / "episode"
+    episode.mkdir()
+
+    run_actor(
+        actor_command=default_actor_command(),
+        request={"raw_input": "40 g apple", "items": []},
+        host_env=os.environ.copy(),
+        episode_dir=episode,
+        suffix="01",
+        auth_launcher_command=(
+            f"{sys.executable} {script} --capture {{sandbox}}/launcher-env.json "
+            "--prompt {prompt}"
+        ),
+    )
+
+    launcher_env = json.loads((episode / "launcher-env.json").read_text())
+    assert launcher_env["HOME"] == str(host_home)
+    assert "NOMNOM_EVAL_SENTINEL_SECRET" not in launcher_env
+    assert "UNRELATED_ACCESS_TOKEN" not in launcher_env
 
 
 def test_repair_prompt_reuses_contract_and_removes_oracle_and_nutrition():
@@ -561,7 +766,11 @@ def test_practical_release_metrics_ignore_balanced_reliability_failures():
         "ux_failures": ["max_followups_exceeded"],
     }
 
-    report = summarize([practical, balanced], 1, actor_kind="external")
+    report = summarize(
+        [practical, balanced],
+        1,
+        actor_provenance=EXTERNAL_PROVENANCE,
+    )
 
     assert report["practical_metrics"]["catastrophic_semantic_substitutions"] == 0
     assert report["practical_counters"]["hard_failures"] == {}
@@ -588,7 +797,11 @@ def test_global_semantic_integrity_blocks_release_in_every_profile():
     }
     practical = {**result, "id": "p", "profile": "practical", "pass": True, "hard_failures": []}
 
-    report = summarize([practical, result], 1, actor_kind="external")
+    report = summarize(
+        [practical, result],
+        1,
+        actor_provenance=EXTERNAL_PROVENANCE,
+    )
 
     assert report["release_gate"]["global_integrity"] is False
     assert report["release_gate_passed"] is False
@@ -620,7 +833,11 @@ def test_external_release_uses_practical_thresholds_not_perfect_episode_score():
         }
     )
 
-    report = summarize(results, 1, actor_kind="external")
+    report = summarize(
+        results,
+        1,
+        actor_provenance=EXTERNAL_PROVENANCE,
+    )
 
     assert report["passed"] == 19
     assert report["failed"] == 1

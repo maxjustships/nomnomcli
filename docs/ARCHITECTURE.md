@@ -97,11 +97,13 @@ The approved agent-first runtime contract has two CLI phases:
    `relation=semantic_equivalent`, `relation=probable_brand_match`, or the distinct
    `relation=branded_same_type_generic`, a human-readable assumption, and a strict versioned
    semantic attestation binding the relation, raw identity, selected provider identity,
-   `same_food_type=true`, rationale, and bounded confidence. This is an external semantic judgment,
-   not a CLI claim that token overlap proves food type. A branded generic fallback also dismisses
-   every unselected brand candidate by receipt-bound source ref and structured reason. The CLI
-   re-runs discovery for branded relations, verifies the input/profile-bound receipt, candidate
-   eligibility, and complete dismissal set, re-fetches the
+   `same_food_type=true`, rationale, and bounded confidence. The assertion is proposal metadata,
+   never sufficient proof. A branded generic fallback also dismisses every unselected brand
+   candidate by receipt-bound source ref and structured reason. The CLI re-runs discovery for every
+   selection and requires a fresh matching candidate plus deterministic literal-anchor and
+   provider type/category compatibility. If that evidence cannot establish compatibility, intake
+   fails closed without writing. Branded relations additionally verify the input/profile-bound
+   receipt, candidate eligibility, and complete dismissal set, then re-fetches the
    exact ref, validates source integrity and complete finite nutrition, applies generic policy,
    calculates totals, and writes one journal event.
 
@@ -110,8 +112,9 @@ Discovery never reads or writes the user cache. Commit never trusts cached nutri
 ranking: a source reference is re-fetched through its provider adapter. An accepted selection must
 be a source-unbranded generic record and is journaled as `selection_mode=agent_generic`,
 `resolution_mode=generic_proxy`, and `provenance=agent_selected`, with raw input, canonical source
-name/ref, relation, assumption, semantic attestation, accuracy profile, receipt, dismissals, and
-deterministic search/provider status. The older version-1 envelope remains accepted, but selections
+name/ref, relation, assumption, semantic attestation, semantic compatibility evidence, accuracy
+profile, receipt, dismissals, and deterministic search/provider status. The older version-1
+envelope remains accepted, but selections
 require the same attestation; direct `source_ref` retains strict literal identity matching. A
 same-type branded fallback is `selection_mode=agent_branded_generic_fallback`
 and remains `generic_proxy`; a text-only brand match is

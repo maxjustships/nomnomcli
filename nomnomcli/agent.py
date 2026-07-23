@@ -561,10 +561,18 @@ def _identity_query(input_phrase: str) -> str:
 
 
 def _ordered_tokens(value: str) -> tuple[str, ...]:
-    return tuple(
-        _comparison_token(token)
-        for token in re.findall(r"\w+(?:['’]\w+)*", value.casefold().replace("ё", "е"))
-    )
+    tokens = []
+    for token in re.findall(
+        r"\w+(?:['’]\w+)*",
+        value.casefold().replace("ё", "е"),
+    ):
+        normalized = (
+            token[:-2]
+            if re.fullmatch(r"[a-z]+", token) and len(token) > 4 and token.endswith("oes")
+            else _comparison_token(token)
+        )
+        tokens.append(normalized)
+    return tuple(tokens)
 
 
 def _source_name(food: Food) -> str:
@@ -628,6 +636,64 @@ def _candidate_dict(query: str, food: Food) -> dict:
             and _direct_source_ref_status(query, food) == "generic_proxy_eligible"
         ),
     }
+
+
+def _semantic_compatibility_evidence(
+    raw_identity: str,
+    selected_candidate: dict,
+    candidates: list[dict],
+) -> dict | None:
+    raw_tokens = _ordered_tokens(raw_identity)
+    selected_tokens = _ordered_tokens(str(selected_candidate["semantic_identity"]))
+    if not raw_tokens or not selected_tokens:
+        return None
+    raw_set = set(raw_tokens)
+    selected_category = selected_candidate.get("category")
+    for anchor in candidates:
+        if anchor["candidate_status"] not in {
+            "agent_selection_eligible",
+            "brand_candidate_requires_semantic_assessment",
+        }:
+            continue
+        anchor_tokens = _ordered_tokens(str(anchor["semantic_identity"]))
+        if not anchor_tokens or not set(anchor_tokens) <= raw_set:
+            continue
+        anchor_category = anchor.get("category")
+        anchor_type = anchor.get("type")
+        metadata_matches = 0
+        if anchor_category and selected_category:
+            if _ordered_tokens(str(anchor_category)) != _ordered_tokens(
+                str(selected_category)
+            ):
+                continue
+            metadata_matches += 1
+        if anchor_type and selected_candidate.get("type"):
+            if str(anchor_type).casefold() != str(
+                selected_candidate["type"]
+            ).casefold():
+                continue
+            metadata_matches += 1
+        selected_starts_with_anchor = (
+            selected_tokens[: len(anchor_tokens)] == anchor_tokens
+        )
+        raw_contained_by_selected = (
+            len(raw_tokens) > 1 and raw_set <= set(selected_tokens)
+        )
+        exact_anchor_identity = selected_tokens == anchor_tokens
+        if exact_anchor_identity or (
+            metadata_matches
+            and (selected_starts_with_anchor or raw_contained_by_selected)
+        ):
+            return {
+                "method": "revalidated_literal_candidate_anchor",
+                "anchor_source_ref": anchor["source_ref"],
+                "anchor_semantic_identity": anchor["semantic_identity"],
+                "anchor_type": anchor_type,
+                "anchor_category": anchor_category,
+                "selected_type": selected_candidate.get("type"),
+                "selected_category": selected_category,
+            }
+    return None
 
 
 def _provider_error(error: NomnomError) -> dict:
@@ -963,7 +1029,7 @@ def _revalidate_discovery(
     usda_client: USDAClient,
 ) -> dict | None:
     selection = item.selection
-    if selection is None or selection.relation == AGENT_SELECTION_RELATION:
+    if selection is None:
         return None
     discovery = discover_candidates(
         item.input,
@@ -972,7 +1038,10 @@ def _revalidate_discovery(
         off_client=off_client,
         usda_client=usda_client,
     )
-    if discovery["discovery_receipt"] != selection.discovery_receipt:
+    if (
+        selection.discovery_receipt is not None
+        and discovery["discovery_receipt"] != selection.discovery_receipt
+    ):
         raise NomnomError(
             "agent_discovery_evidence_mismatch",
             "Provider text discovery changed or the discovery receipt was not produced "
@@ -990,12 +1059,31 @@ def _revalidate_discovery(
     candidate = candidates.get(selection.source_ref)
     required_status = (
         "agent_selection_eligible"
-        if selection.relation == BRANDED_GENERIC_RELATION
+        if selection.relation in {
+            AGENT_SELECTION_RELATION,
+            BRANDED_GENERIC_RELATION,
+        }
         else "brand_candidate_requires_semantic_assessment"
     )
+    provider = selection.source_ref.split(":", 1)[0]
+    provider_status_key = "openfoodfacts" if provider == "off" else "usda"
+    selected_provider_status = discovery["text_search"]["providers"][
+        provider_status_key
+    ]["status"]
+    if candidate is None and selected_provider_status in {
+        "disabled",
+        "not_configured",
+        "unavailable",
+    }:
+        return discovery
     if candidate is None or candidate["candidate_status"] != required_status:
+        error_code = (
+            "agent_semantic_compatibility_rejected"
+            if selection.relation == AGENT_SELECTION_RELATION
+            else "agent_discovery_candidate_mismatch"
+        )
         raise NomnomError(
-            "agent_discovery_candidate_mismatch",
+            error_code,
             "Selected source is not eligible under the revalidated text discovery",
             details={
                 "source_ref": selection.source_ref,
@@ -1003,6 +1091,39 @@ def _revalidate_discovery(
                 "candidate_status": (
                     candidate["candidate_status"] if candidate is not None else "absent"
                 ),
+                "action": (
+                    "photo_or_barcode"
+                    if candidate is not None
+                    and candidate["candidate_status"] == "pending_capture_required"
+                    else "select_safe_candidate_or_pending"
+                ),
+            },
+        )
+    attested_identity = selection.semantic_attestation.selected_identity
+    if candidate["semantic_identity"] != attested_identity:
+        raise NomnomError(
+            "agent_semantic_attestation_mismatch",
+            "The revalidated candidate identity does not match the semantic attestation",
+            details={
+                "source_ref": selection.source_ref,
+                "attested_identity": attested_identity,
+                "candidate_identity": candidate["semantic_identity"],
+            },
+        )
+    compatibility = _semantic_compatibility_evidence(
+        discovery["query"],
+        candidate,
+        discovery["candidates"],
+    )
+    if compatibility is None:
+        raise NomnomError(
+            "agent_semantic_compatibility_rejected",
+            "The raw and selected identities lack deterministic same-food-type evidence",
+            details={
+                "source_ref": selection.source_ref,
+                "raw_identity": discovery["query"],
+                "selected_identity": candidate["semantic_identity"],
+                "action": "select_safe_candidate_or_pending",
             },
         )
     if selection.relation == BRANDED_GENERIC_RELATION:
@@ -1026,7 +1147,49 @@ def _revalidate_discovery(
                     "provided_source_refs": sorted(dismissed),
                 },
             )
-    return discovery
+    return {**discovery, "semantic_compatibility": compatibility}
+
+
+def _validate_refetched_discovery_evidence(
+    item: AgentPlanItem,
+    food: Food,
+    discovery: dict | None,
+) -> None:
+    if item.selection is None or discovery is None:
+        return
+    candidate = next(
+        (
+            value
+            for value in discovery["candidates"]
+            if value["source_ref"] == item.selection.source_ref
+        ),
+        None,
+    )
+    if candidate is None:
+        raise NomnomError(
+            "agent_semantic_compatibility_rejected",
+            "The selected source could not be tied to revalidated discovery evidence",
+            details={
+                "source_ref": item.selection.source_ref,
+                "action": "retry_discovery_or_pending",
+            },
+        )
+    returned_category = food.categories[0] if food.categories else None
+    if (
+        candidate.get("type") != food.provider_data_type
+        or candidate.get("category") != returned_category
+    ):
+        raise NomnomError(
+            "agent_discovery_candidate_mismatch",
+            "The refetched source metadata no longer matches the revalidated candidate",
+            details={
+                "source_ref": item.selection.source_ref,
+                "candidate_type": candidate.get("type"),
+                "returned_type": food.provider_data_type,
+                "candidate_category": candidate.get("category"),
+                "returned_category": returned_category,
+            },
+        )
 
 
 def resolve_agent_plan(
@@ -1107,6 +1270,7 @@ def resolve_agent_plan(
             off_client=off,
             usda_client=usda,
         )
+        _validate_refetched_discovery_evidence(planned, food, discovery)
         grams = planned.grams
         assert grams is not None or planned.portion_estimate is not None
         if planned.portion_estimate is not None:
@@ -1154,6 +1318,10 @@ def resolve_agent_plan(
                         "text_search": discovery["text_search"],
                     }
                 )
+                if discovery.get("semantic_compatibility") is not None:
+                    resolved_item["semantic_compatibility"] = discovery[
+                        "semantic_compatibility"
+                    ]
             if planned.selection.dismissed_brand_candidates:
                 resolved_item["dismissed_brand_candidates"] = [
                     dismissal.as_dict()

@@ -338,8 +338,10 @@ The item key allowlist is `input`, optional positive `grams`, and exactly one of
 selection uses `relation="semantic_equivalent"`. Every `selection` also requires the strict
 version-1 `semantic_attestation` shown above. It binds the raw identity, selected provider identity,
 relation, explicit `same_food_type=true` judgment, concise rationale, and finite confidence. nomnom
-validates this structure and binding; it does not claim lexical overlap independently proves food
-type. Text-only brand candidates use
+does not trust that assertion by itself: intake re-runs discovery for every selection, requires the
+selected ref and identity to match the fresh candidate, and accepts only deterministic literal
+anchor plus provider type/category compatibility. If that evidence cannot establish the same food
+type, intake fails closed without writing. Text-only brand candidates use
 `relation="probable_brand_match"` plus the discovery receipt. Search-first same-type branded
 fallback uses the distinct `relation="branded_same_type_generic"`, the receipt, an assumption that
 the brand/SKU was not exact, and a receipt-bound dismissal for every unselected brand candidate.
@@ -350,12 +352,13 @@ source facts, unknown keys,
 duplicate refs, forged/stale receipts, non-finite numbers, and mismatched estimates reject the
 whole plan before a journal write.
 
-On commit, nomnom re-fetches every chosen ref, validates source identity plus complete finite
-nutrition, applies generic policy, calculates, and persists. For branded relations it first repeats
-provider discovery and verifies the input/profile-bound receipt instead of trusting a boolean
-search claim. It never uses a cache hit or agent nutrition. Output and the journal retain raw input,
-canonical source name/ref, provenance, relation, assumption, accuracy profile, and text-search
-evidence/status. A branded generic fallback remains `generic_proxy`; a provider text brand match is
+On commit, nomnom re-runs provider discovery for every selection, re-fetches every chosen ref,
+validates deterministic semantic evidence, source identity, and complete finite nutrition, applies
+generic policy, calculates, and persists. Branded relations also verify the input/profile-bound
+receipt instead of trusting a boolean search claim. It never uses a cache hit or agent nutrition.
+Output and the journal retain raw input, canonical source name/ref, provenance, relation,
+assumption, accuracy profile, deterministic semantic evidence, and text-search evidence/status. A
+branded generic fallback remains `generic_proxy`; a provider text brand match is
 `probable_product`; neither is `exact_product`. Direct `source_ref` keeps strict literal identity
 behavior. Pending items have no nutrition fields; intake and stats report
 `nutrition_status=incomplete` and resolved-only totals.
@@ -548,8 +551,10 @@ All API tests use payloads under `tests/fixtures/` and mocked HTTP; the test sui
 network access.
 
 The eval-only corpus is `evals/corpus.json`; production code never imports it and package builds
-exclude all of `evals/`. The harness runs candidate discovery and intake itself; actors receive only
-sanitized raw input, profile, candidates, receipts, and provider statuses, and return plan JSON.
+exclude all of `evals/`. Expected-error episodes declare the exact acceptable structured CLI error
+codes; actor process, timeout, and parse failures never satisfy them. The harness runs candidate
+discovery and intake itself; actors receive only sanitized raw input, profile, candidates,
+receipts, and provider statuses, and return plan JSON.
 Run the deterministic fake actor as a harness/CLI self-test:
 
 ```sh
@@ -558,10 +563,13 @@ PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4
 ```
 
 Fake-actor reports set `actor_kind=fake` and `release_evidence=false`; they are not production
-release acceptance. Decision-grade evidence requires an external actor. Generic actor subprocesses
-receive an allowlisted environment with episode-local `HOME`/XDG directories and no nomnom
-credentials or inherited secret variables. The locally supported, tool-free Hermes/Luna-high
-adapter is:
+release acceptance. The harness derives actor kind from the effective executable/command shape,
+rejects contradictory `--actor-kind` labels, and records only non-secret executable and command
+fingerprints, including the invoked adapter/module bytes. Decision-grade evidence requires verified
+external provenance, not a label. Generic
+actor subprocesses receive an allowlisted environment with episode-local `HOME`/XDG directories
+and no nomnom credentials or inherited secret variables. The locally supported, tool-free
+Hermes/Luna-high adapter is:
 
 ```sh
 --actor-kind external \
@@ -582,10 +590,12 @@ PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4 \
   --actor-auth-launcher-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna --safe-mode --max-turns 1 -q {prompt}'
 ```
 
-That launcher process receives the host authentication environment, while `--safe-mode` leaves the
-model tool-free and the prompt contains only sanitized episode facts. It does not copy credentials
-and must be an explicit operator choice. Use `--judge-command` only for unresolved semantic
-episodes. Actor and judge artifacts are separate.
+That launcher process receives only a narrow environment containing the host home/XDG
+authentication paths plus basic process locale/PATH values. Arbitrary token and secret variables
+are not forwarded or persisted; Hermes reads its OAuth state through the host authentication
+paths. `--safe-mode` leaves the model tool-free and the prompt contains only sanitized episode
+facts. The boundary must be an explicit operator choice. Use `--judge-command` only for unresolved
+semantic episodes. Actor and judge artifacts are separate.
 
 ## License
 

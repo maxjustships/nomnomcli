@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
+import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -21,6 +24,14 @@ ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = Path(__file__).with_name("corpus.json")
 PROHIBITED_PLAN_KEYS = {"calories", "carbs", "fat", "kcal", "macros", "nutrition", "protein"}
 STDOUT_EXCERPT_LIMIT = 2000
+SENSITIVE_COMMAND_OPTION_MARKERS = (
+    "authorization",
+    "credential",
+    "key",
+    "password",
+    "secret",
+    "token",
+)
 REPAIR_CONTEXT_FORBIDDEN_KEYS = {
     "allowed_resolution_modes",
     "allowed_semantic_identities",
@@ -521,6 +532,154 @@ def allowlisted_actor_env(host_env: dict[str, str], actor_home: Path) -> dict[st
     }
 
 
+def allowlisted_launcher_env(host_env: dict[str, str]) -> dict[str, str]:
+    allowed = {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    }
+    environment = {
+        key: value
+        for key, value in host_env.items()
+        if key in allowed and isinstance(value, str)
+    }
+    environment.setdefault("PATH", os.defpath)
+    environment.setdefault("LANG", "C.UTF-8")
+    environment.setdefault("LC_ALL", "C.UTF-8")
+    return environment
+
+
+def _file_fingerprint(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _actor_adapter(
+    arguments: list[str],
+    executable_path: Path | None,
+) -> tuple[str, Path | None]:
+    executable_name = Path(arguments[0]).name
+    if executable_name in {"bash", "dash", "sh", "zsh"} and "-c" in arguments[1:]:
+        return "shell-command", None
+    if executable_name.startswith(("python", "pypy")):
+        if len(arguments) >= 3 and arguments[1] == "-m":
+            module_name = arguments[2]
+            try:
+                spec = importlib.util.find_spec(module_name)
+            except (ImportError, ModuleNotFoundError, ValueError):
+                spec = None
+            origin = Path(spec.origin).resolve() if spec and spec.origin else None
+            return module_name, origin
+        if len(arguments) >= 2 and not arguments[1].startswith("-"):
+            script = Path(arguments[1])
+            if not script.is_absolute():
+                script = (ROOT / script).resolve()
+            return script.name, script
+        return executable_name, None
+    return executable_name, executable_path
+
+
+def derive_actor_provenance(
+    actor_command: str,
+    *,
+    auth_launcher_command: str | None,
+    host_env: dict[str, str],
+) -> dict:
+    command_template = auth_launcher_command or actor_command
+    arguments = shlex.split(command_template)
+    if not arguments:
+        raise ValueError("actor command must not be empty")
+    executable = shutil.which(arguments[0], path=host_env.get("PATH"))
+    executable_path = Path(executable).resolve() if executable else None
+    try:
+        executable_fingerprint = (
+            _file_fingerprint(executable_path)
+            if executable_path is not None and executable_path.is_file()
+            else None
+        )
+    except OSError:
+        executable_fingerprint = None
+    adapter, adapter_path = _actor_adapter(arguments, executable_path)
+    try:
+        adapter_fingerprint = (
+            _file_fingerprint(adapter_path)
+            if adapter_path is not None and adapter_path.is_file()
+            else None
+        )
+    except OSError:
+        adapter_fingerprint = None
+    command_fingerprint_tokens = []
+    redact_next = False
+    for index, argument in enumerate(arguments):
+        if index == 0:
+            command_fingerprint_tokens.append(Path(argument).name)
+        elif redact_next:
+            command_fingerprint_tokens.append("<secret>")
+            redact_next = False
+        elif argument.startswith("--") and "=" in argument:
+            option, value = argument.split("=", 1)
+            sensitive = any(
+                marker in option.casefold()
+                for marker in SENSITIVE_COMMAND_OPTION_MARKERS
+            )
+            command_fingerprint_tokens.append(
+                option + ("=<secret>" if sensitive else f"={value}")
+            )
+        else:
+            command_fingerprint_tokens.append(argument)
+            if argument.startswith("-"):
+                redact_next = any(
+                    marker in argument.casefold()
+                    for marker in SENSITIVE_COMMAND_OPTION_MARKERS
+                )
+    fake_actor = adapter == "evals.fake_actor" or adapter == "fake_actor.py"
+    kind = "fake" if fake_actor else "external"
+    provenance_basis = {
+        "kind": kind,
+        "boundary": "auth_launcher" if auth_launcher_command else "isolated_actor",
+        "executable": Path(arguments[0]).name,
+        "executable_fingerprint": executable_fingerprint,
+        "adapter": adapter,
+        "adapter_fingerprint": adapter_fingerprint,
+        "command_fingerprint_tokens": command_fingerprint_tokens,
+    }
+    return {
+        "kind": kind,
+        "boundary": provenance_basis["boundary"],
+        "executable": provenance_basis["executable"],
+        "adapter": adapter,
+        "verified": (
+            executable_fingerprint is not None and adapter_fingerprint is not None
+        ),
+        "executable_fingerprint": executable_fingerprint,
+        "adapter_fingerprint": adapter_fingerprint,
+        "command_fingerprint": hashlib.sha256(
+            json.dumps(
+                provenance_basis,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
+    }
+
+
+def validate_actor_kind(requested_kind: str | None, provenance: dict) -> str:
+    derived_kind = str(provenance["kind"])
+    if requested_kind is not None and requested_kind != derived_kind:
+        raise ValueError(
+            f"--actor-kind {requested_kind} contradicts derived actor kind {derived_kind}"
+        )
+    return derived_kind
+
+
 def read_events(db_path: Path) -> list[dict]:
     if not db_path.exists():
         return []
@@ -600,9 +759,31 @@ def evaluate(
     expected_outcome = case["expected"]["outcome"]
     cli_payloads = [run.get("cli", run) for run in actor_runs]
     cli_codes = [int(run.get("cli_returncode", 0)) for run in actor_runs]
+    actor_error_kinds = []
+    for run in actor_runs:
+        attempts = run.get("attempts")
+        records = attempts if isinstance(attempts, list) else [run]
+        actor_error_kinds.extend(
+            str(record["actor_error_kind"])
+            for record in records
+            if record.get("actor_error_kind")
+        )
+    hard.extend(f"actor_{kind}" for kind in actor_error_kinds)
     if expected_outcome == "error":
         if not any(code != 0 for code in cli_codes):
             hard.append("expected_error_missing")
+        actual_error_codes = {
+            str(payload.get("error", {}).get("code"))
+            for code, payload in zip(cli_codes, cli_payloads, strict=True)
+            if code != 0 and payload.get("error", {}).get("code")
+        }
+        expected_error_codes = set(case["expected"]["error_codes"])
+        if not actual_error_codes & expected_error_codes:
+            hard.append("expected_error_code_missing")
+        hard.extend(
+            f"unexpected_error_code:{code}"
+            for code in actual_error_codes - expected_error_codes
+        )
         if events:
             hard.append("atomic_no_write_failed")
     elif any(code != 0 for code in cli_codes):
@@ -755,7 +936,11 @@ def run_actor(
         completed = subprocess.run(
             command,
             cwd=episode_dir,
-            env=host_env if auth_launcher_command else actor_env,
+            env=(
+                allowlisted_launcher_env(host_env)
+                if auth_launcher_command
+                else actor_env
+            ),
             check=False,
             capture_output=True,
             text=True,
@@ -1064,7 +1249,8 @@ def run_episode(
     return result
 
 
-def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
+def summarize(results: list[dict], repeats: int, *, actor_provenance: dict) -> dict:
+    actor_kind = str(actor_provenance["kind"])
     categories = defaultdict(lambda: {"passed": 0, "total": 0})
     for result in results:
         category = categories[result["category"]]
@@ -1086,6 +1272,7 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
         failure for result in practical for failure in result["ux_failures"]
     )
     integrity_prefixes = (
+        "actor_",
         "actor_forbidden_semantic_attestation",
         "actor_semantic_attestation_missing",
         "actor_semantic_identity_not_allowed",
@@ -1094,11 +1281,13 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
         "atomic_no_write_failed",
         "catastrophic_semantic_substitution",
         "expected_error_missing",
+        "expected_error_code_missing",
         "invented_nutrition",
         "resolution_mode_not_allowed",
         "semantic_identity_not_allowed",
         "source_not_allowed",
         "source_or_provenance_missing",
+        "unexpected_error_code",
     )
     global_integrity_failures = {
         failure: count
@@ -1157,11 +1346,12 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
         ),
     }
     gate_metrics_passed = all(release_gate.values())
-    release_evidence = actor_kind == "external"
+    release_evidence = actor_kind == "external" and actor_provenance["verified"] is True
     failed = sum(not result["pass"] for result in results)
     return {
         "schema_version": 2,
         "actor_kind": actor_kind,
+        "actor_provenance": actor_provenance,
         "release_evidence": release_evidence,
         "episodes": len(results),
         "repeats": repeats,
@@ -1260,7 +1450,8 @@ def parse_args() -> argparse.Namespace:
         "--actor-auth-launcher-command",
         help=(
             "Explicit trusted launcher boundary for external provider authentication; "
-            "the launcher receives the host environment and must keep the model tool-free"
+            "the launcher receives only host auth paths and basic process variables and "
+            "must keep the model tool-free"
         ),
     )
     parser.add_argument("--judge-command")
@@ -1270,9 +1461,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    actor_kind = args.actor_kind or (
-        "fake" if args.actor_command == default_actor_command() else "external"
+    actor_provenance = derive_actor_provenance(
+        args.actor_command,
+        auth_launcher_command=args.actor_auth_launcher_command,
+        host_env=os.environ,
     )
+    try:
+        actor_kind = validate_actor_kind(args.actor_kind, actor_provenance)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.repeat < 1:
         raise SystemExit("--repeat must be at least 1")
     if not 1 <= args.concurrency <= 16:
@@ -1308,7 +1505,11 @@ def main() -> int:
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
     results.sort(key=lambda result: (result["id"], result["trace"]))
-    report = summarize(results, args.repeat, actor_kind=actor_kind)
+    report = summarize(
+        results,
+        args.repeat,
+        actor_provenance=actor_provenance,
+    )
     (output_root / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -105,6 +106,18 @@ class ReplayUSDA:
     def food_by_fdc_id(self, fdc_id, api_key):
         self.refetches.append(fdc_id)
         return self.food
+
+
+class ChangingMetadataUSDA(ReplayUSDA):
+    def food_by_fdc_id(self, fdc_id, api_key):
+        self.refetches.append(fdc_id)
+        return replace(self.food, categories=("different synthetic category",))
+
+
+class UnavailableSearchUSDA(ReplayUSDA):
+    def candidates(self, query, api_key):
+        self.searches.append(query)
+        raise NomnomError("usda_unavailable", "Synthetic discovery outage")
 
 
 def profile_config(tmp_path, profile):
@@ -297,6 +310,68 @@ def test_branded_fallback_rejects_forged_or_stale_discovery_receipt(tmp_path):
     assert usda.refetches == []
 
 
+def test_selection_rejects_refetched_candidate_metadata_change(tmp_path):
+    config = profile_config(tmp_path, "practical")
+    usda = ChangingMetadataUSDA()
+    discovery = discover_candidates(
+        "Harris sandwich bread two slices",
+        provider_config=config,
+        off_client=EmptyOFF(),
+        usda_client=usda,
+    )
+    parsed = parse_agent_plan(
+        json.dumps(branded_plan("practical", discovery["discovery_receipt"]))
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        resolve_agent_plan(
+            parsed,
+            provider_config=config,
+            off_client=EmptyOFF(),
+            usda_client=usda,
+        )
+
+    assert caught.value.code == "agent_discovery_candidate_mismatch"
+
+
+def test_selection_fails_closed_when_discovery_is_unavailable_but_refetch_works(
+    tmp_path,
+):
+    config = profile_config(tmp_path, "practical")
+    usda = UnavailableSearchUSDA()
+    payload = {
+        "version": 2,
+        "accuracy_profile": "practical",
+        "items": [
+            {
+                "input": "sandwich bread 56 g",
+                "grams": 56,
+                "selection": {
+                    "source_ref": "usda:7001",
+                    "relation": "semantic_equivalent",
+                    "assumption": "Synthetic same-type proposal.",
+                    "semantic_attestation": attestation(
+                        "semantic_equivalent",
+                        "sandwich bread",
+                        "sandwich bread",
+                    ),
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(NomnomError) as caught:
+        resolve_agent_plan(
+            parse_agent_plan(json.dumps(payload)),
+            provider_config=config,
+            off_client=EmptyOFF(),
+            usda_client=usda,
+        )
+
+    assert caught.value.code == "agent_semantic_compatibility_rejected"
+    assert usda.refetches == [7001]
+
+
 def test_practical_branded_fallback_records_partial_provider_outage(tmp_path):
     config = profile_config(tmp_path, "practical")
     usda = ReplayUSDA()
@@ -375,6 +450,137 @@ def test_provider_text_brand_match_remains_probable_not_exact(tmp_path):
     assert item["resolution_mode"] == "probable_product"
     assert item["selection_mode"] == "agent_probable_brand_match"
     assert item["resolution_mode"] != "exact_product"
+
+
+@pytest.mark.parametrize(
+    ("relation", "raw_input", "food", "off_client"),
+    [
+        (
+            "branded_same_type_generic",
+            "Harris sandwich bread 80 g",
+            generic_food("raw chicken", "7004"),
+            EmptyOFF(),
+        ),
+        (
+            "probable_brand_match",
+            "Harris sandwich bread 80 g",
+            HarrisCheeseOFF().food,
+            HarrisCheeseOFF(),
+        ),
+    ],
+)
+def test_branded_relations_reject_revalidated_different_food_type(
+    relation, raw_input, food, off_client, tmp_path
+):
+    config = profile_config(tmp_path, "practical")
+    usda = ReplayUSDA(food) if food.source == "usda" else EmptyUSDA()
+    discovery = discover_candidates(
+        raw_input,
+        provider_config=config,
+        off_client=off_client,
+        usda_client=usda,
+    )
+    selection = {
+        "source_ref": (
+            f"usda:{food.source_id}" if food.source == "usda" else f"off:{food.source_id}"
+        ),
+        "relation": relation,
+        "assumption": (
+            "Harris brand/SKU was not exact; actor selected raw chicken."
+            if relation == "branded_same_type_generic"
+            else "Actor claims this provider text match is probable."
+        ),
+        "semantic_attestation": attestation(
+            relation,
+            _identity_query(raw_input),
+            food.name.split(" — ", 1)[0],
+        ),
+        "discovery_receipt": discovery["discovery_receipt"],
+    }
+    if relation == "branded_same_type_generic":
+        selection["dismissed_brand_candidates"] = []
+    payload = {
+        "version": 2,
+        "accuracy_profile": "practical",
+        "items": [
+            {
+                "input": raw_input,
+                "grams": 80,
+                "selection": selection,
+            }
+        ],
+    }
+
+    with pytest.raises(NomnomError) as caught:
+        resolve_agent_plan(
+            parse_agent_plan(json.dumps(payload)),
+            provider_config=config,
+            off_client=off_client,
+            usda_client=usda,
+        )
+
+    assert caught.value.code == "agent_semantic_compatibility_rejected"
+
+
+@pytest.mark.parametrize(
+    ("raw_identity", "selected_identity", "compatible"),
+    [
+        ("cooked egg", "cooked egg", True),
+        ("milk", "milk", True),
+        ("tomato", "tomato", True),
+        ("pasta", "pasta", True),
+        ("cooked egg", "cooked cheese", False),
+        ("milk", "chocolate milk", False),
+        ("tomato", "tomato powder", False),
+        ("pasta", "pasta sauce", False),
+    ],
+)
+def test_semantic_hard_floor_preserves_core_safety_cases(
+    raw_identity, selected_identity, compatible, tmp_path
+):
+    config = profile_config(tmp_path, "practical")
+    food = generic_food(selected_identity, "7010")
+    usda = ReplayUSDA(food)
+    payload = {
+        "version": 2,
+        "accuracy_profile": "practical",
+        "items": [
+            {
+                "input": f"50 g {raw_identity}",
+                "grams": 50,
+                "selection": {
+                    "source_ref": "usda:7010",
+                    "relation": "semantic_equivalent",
+                    "assumption": "Synthetic semantic proposal.",
+                    "semantic_attestation": attestation(
+                        "semantic_equivalent",
+                        raw_identity,
+                        selected_identity,
+                    ),
+                },
+            }
+        ],
+    }
+    parsed = parse_agent_plan(json.dumps(payload))
+
+    if compatible:
+        result = resolve_agent_plan(
+            parsed,
+            provider_config=config,
+            off_client=EmptyOFF(),
+            usda_client=usda,
+        )
+        assert result["complete"] is True
+        assert result["items"][0]["name"] == selected_identity
+    else:
+        with pytest.raises(NomnomError) as caught:
+            resolve_agent_plan(
+                parsed,
+                provider_config=config,
+                off_client=EmptyOFF(),
+                usda_client=usda,
+            )
+        assert caught.value.code == "agent_semantic_compatibility_rejected"
 
 
 def test_balanced_requires_material_risk_and_exact_forbids_branded_fallback(tmp_path):
