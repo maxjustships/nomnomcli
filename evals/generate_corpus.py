@@ -221,7 +221,7 @@ def fuzzy_cases(start: int) -> list[dict]:
         None,
         [150, 400],
         [15, 70],
-        [40, 220],
+        [30, 220],
         [30, 160],
         None,
     ]

@@ -263,6 +263,9 @@ def test_actor_prompt_exposes_exact_plan_grammar_without_golden_oracle():
     assert '"direct_measured_template"' in prompt
     assert '"source_ref": "COPY_ELIGIBLE_SOURCE_REF"' in prompt
     assert "There is no relation named exact or exact_same_type" in prompt
+    assert "complete plan object, never a single item or selection" in prompt
+    assert "exactly one item for every SANITIZED REQUEST item" in prompt
+    assert "use probable_brand_match rather than pending_capture" in prompt
     assert "protocol_version, plan_version, raw_input" in prompt
     assert "allowed_source_refs" not in prompt
     assert "forbidden_identities" not in prompt
@@ -291,6 +294,7 @@ def test_repair_prompt_reuses_contract_and_removes_oracle_and_nutrition():
 
     assert '"direct_measured_template"' in prompt
     assert "single bounded internal repair turn" in prompt
+    assert "Reconstruct the COMPLETE plan from scratch" in prompt
     assert "allowed_source_refs" not in prompt
     assert "synthetic_providers" not in prompt
     assert "must-not-leak" not in prompt
@@ -435,7 +439,7 @@ def test_generated_fuzzy_envelopes_are_realistic_and_match_corpus():
     assert fuzzy["fuzzy-01"] == [[20, 45]]
     assert fuzzy["fuzzy-02"] == [[100, 300]]
     assert fuzzy["fuzzy-16"] == [[150, 400]]
-    assert fuzzy["fuzzy-18"] == [[40, 220]]
+    assert fuzzy["fuzzy-18"] == [[30, 220]]
     assert fuzzy["fuzzy-05"] == [None]
 
 

@@ -360,7 +360,10 @@ def actor_prompt(request: dict) -> str:
     return (
         "Return exactly one strict nomnom agent plan JSON object and no prose or markdown. "
         "You have no tools and must use only the sanitized request below. Never return nutrition "
-        "facts. Do not invent protocol_version, plan_version, raw_input, selections, candidate, "
+        "facts. The JSON root MUST be the complete plan object, never a single item or selection. "
+        "The items array MUST contain exactly one item for every SANITIZED REQUEST item, in the "
+        "same order; never omit later items. "
+        "Do not invent protocol_version, plan_version, raw_input, selections, candidate, "
         "canonical_name, provider, source_id, portion, unit, amount, value, or any field not "
         "explicitly allowed by the contract. Copy each item input exactly. For a measured "
         "unbranded candidate with direct_source_ref_eligible=true, prefer the direct measured "
@@ -377,6 +380,9 @@ def actor_prompt(request: dict) -> str:
         "assumption MUST contain the literal words 'not exact'. probable_brand_match MUST include "
         "discovery_receipt. Balanced may complete a same-type branded generic fallback only with "
         "risk_disposition='material_risk_accepted'; Practical does not need it and must omit it. "
+        "In Practical, when a discovered brand candidate's brand and semantic food identity match "
+        "the branded input, use probable_brand_match rather than pending_capture merely because "
+        "there is no barcode; use pending only when same-food-type compatibility is uncertain. "
         "Practical and Balanced MUST automatically estimate fuzzy portions when a semantically "
         "compatible source exists and must not use pending_capture merely because grams are "
         "fuzzy. Exact MUST use pending_capture for fuzzy portions or text-only branded identity. "
@@ -419,9 +425,11 @@ def repair_prompt(
         actor_prompt(sanitized_request)
         + "\nREPAIR CONTEXT:\n"
         + "This is the single bounded internal repair turn. Correct only the reported parser or "
-        "CLI intake validation error. The only case-specific context supplied below is the "
-        "sanitized original request, previous invalid plan or capped stdout excerpt, and exact "
-        "error. Do not infer or request any benchmark oracle.\n"
+        "CLI intake validation error. Reconstruct the COMPLETE plan from scratch, including every "
+        "sanitized request item; never return only the invalid item or selection. Preserve the "
+        "original food semantics and measured values. The only case-specific context supplied "
+        "below is the sanitized original request, previous invalid plan or capped stdout excerpt, "
+        "and exact error. Do not infer or request any benchmark oracle.\n"
         + json.dumps(repair_input, ensure_ascii=False, sort_keys=True)
     )
 
