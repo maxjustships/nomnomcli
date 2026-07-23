@@ -150,6 +150,20 @@ nomnom setup
 nomnom doctor --json
 ```
 
+Choose the normative accuracy profile independently of provider setup:
+
+```sh
+nomnom setup --accuracy-profile balanced --json
+# practical | balanced | exact
+```
+
+`balanced` is the recommended new-user default. `practical` uses explicit agent portion estimates
+and permits a search-first, same-type branded generic fallback with auditable evidence. `balanced`
+also estimates portions, but a branded fallback requires an explicit material-risk disposition.
+`exact` requires measured/explicit fuzzy portions and barcode, label, pin, or equivalent evidence
+for branded products. Semantic food-type mismatch is a hard failure in every profile. Doctor and
+setup status report the active profile.
+
 Get a free key at the official signup page
 <https://fdc.nal.usda.gov/api-key-signup.html>. For non-interactive/CI use only, set it in the
 environment:
@@ -258,18 +272,21 @@ opening the diary:
 nomnom agent candidates --input "raw tomato 60 g" --json
 ```
 
-Discovery returns deterministic provider metadata, candidate status, and opaque references such as
-`usda:123` or `off:0123456789012`; it returns no nutrition fields for an agent plan.
+Discovery returns deterministic provider metadata, provider/search status, a canonical
+`discovery_receipt`, candidate status, and opaque references such as `usda:123` or
+`off:0123456789012`; it returns no nutrition fields for an agent plan.
 `agent_selection_eligible` means the provider record is source-unbranded and structurally valid for
-an external agent's explicit semantic choice. `pending_capture_required` must become an explicit
-pending item, and `identity_rejected` must not be selected. Candidate output also reports whether
-the older direct `source_ref` form satisfies strict literal identity.
+an external agent's explicit same-type semantic choice. `probable_brand_match` is a text-only
+branded result and is never exact. `pending_capture_required` must become an explicit pending item,
+and `identity_rejected` must not be selected. Candidate output also reports whether the older direct
+`source_ref` form satisfies strict literal identity.
 
 Commit all items as one strict plan and one journal event:
 
 ```sh
 nomnom agent intake --plan '{
-  "version": 1,
+  "version": 2,
+  "accuracy_profile": "practical",
   "items": [
     {
       "input": "raw tomato 60 g",
@@ -281,30 +298,39 @@ nomnom agent intake --plan '{
       }
     },
     {
-      "input": "Example Brand bread two slices",
-      "pending_capture": {"status": "pending_capture", "action": "photo_or_barcode"}
+      "input": "Harris sandwich bread two slices",
+      "grams": 56,
+      "selection": {
+        "source_ref": "usda:456",
+        "relation": "branded_same_type_generic",
+        "assumption": "Harris brand/SKU was not exact; used source-backed same-type sandwich bread after provider text discovery.",
+        "discovery_receipt": "RECEIPT_RETURNED_BY_CANDIDATES"
+      }
     }
   ]
 }' --json
 ```
 
 The item key allowlist is `input`, optional positive `grams`, and exactly one of direct `source_ref`,
-`selection`, or `pending_capture`. A selection contains exactly `source_ref`,
-`relation="semantic_equivalent"`, and a nonempty human-readable `assumption`. The top level allows
-only `version`, `items`, and optional `portion_estimates`, whose shape is the existing external
-estimate contract below. Calories, macros, nutrition, source facts, unknown keys, duplicate refs,
-non-finite numbers, and mismatched estimates reject the whole plan before a journal write.
+`selection`, or `pending_capture`. Version 2 requires `accuracy_profile`. Unbranded semantic
+selection uses `relation="semantic_equivalent"`. Text-only brand candidates use
+`relation="probable_brand_match"` plus the discovery receipt. Search-first same-type branded
+fallback uses the distinct `relation="branded_same_type_generic"`, the receipt, an assumption that
+the brand/SKU was not exact, and in `balanced`,
+`risk_disposition="material_risk_accepted"`. `exact` rejects that fallback. Version 1 remains
+accepted for its original strict fields. Calories, macros, nutrition, source facts, unknown keys,
+duplicate refs, forged/stale receipts, non-finite numbers, and mismatched estimates reject the
+whole plan before a journal write.
 
 On commit, nomnom re-fetches every chosen ref, validates source identity plus complete finite
-nutrition, applies generic policy, calculates, and persists. It never uses a cache hit or agent
-nutrition. An accepted external choice is always `selection_mode=agent_generic`,
-`resolution_mode=generic_proxy`, and `provenance=agent_selected`; output and the journal retain raw
-input, canonical source name/ref, relation, and assumption. Direct `source_ref` keeps strict literal
-identity behavior. A branded/SKU source—including an OFF text-ranked result—cannot be selected as
-exact or generic: preserve it with `pending_capture`, then use barcode/photo capture and explicit
-`nomnom log remove LOG_ID --confirm --json` plus a replacement entry when corrected. Intake output
-exposes `log_id` and each pending `item_id`. Pending items have no nutrition fields; intake and stats
-report `nutrition_status=incomplete` and resolved-only totals.
+nutrition, applies generic policy, calculates, and persists. For branded relations it first repeats
+provider discovery and verifies the input/profile-bound receipt instead of trusting a boolean
+search claim. It never uses a cache hit or agent nutrition. Output and the journal retain raw input,
+canonical source name/ref, provenance, relation, assumption, accuracy profile, and text-search
+evidence/status. A branded generic fallback remains `generic_proxy`; a provider text brand match is
+`probable_product`; neither is `exact_product`. Direct `source_ref` keeps strict literal identity
+behavior. Pending items have no nutrition fields; intake and stats report
+`nutrition_status=incomplete` and resolved-only totals.
 
 ### Legacy canonical text input
 
@@ -374,8 +400,9 @@ Every unresolved fuzzy item must have exactly one matching entry. Missing, extra
 non-exact mappings and malformed/invalid values reject the complete meal without a log write;
 entries for explicit gram items are also rejected. Only inline JSON is supported. `ask` returns a
 structured `portion_estimate_required` response with the exact index/input and writes nothing.
-`strict` remains the default. Set a persistent default in user config or override it in the
-environment:
+For installations without a stored accuracy profile, `strict` remains the compatibility default.
+An explicitly stored `practical` or `balanced` profile defaults this policy to `estimate`; `exact`
+uses `strict`. Set a legacy policy in user config or override it in the environment:
 
 ```toml
 [resolution]
@@ -383,6 +410,7 @@ portion_policy = "ask" # or "estimate"; default is "strict"
 ```
 
 `NOMNOM_PORTION_POLICY` accepts `strict`, `ask`, or `estimate`; the CLI flag has highest precedence.
+Explicit `NOMNOM_PORTION_POLICY` or stored `resolution.portion_policy` wins over the profile.
 Estimated log items persist `approximate=true`, `portion_provenance=agent_estimate`, and the full
 `portion_estimate` object next to food-resolution provenance. Log JSON and date stats expose these
 fields. Human output gives one correction prompt toward scale grams, a photo, or a barcode. Existing
@@ -490,6 +518,25 @@ ruff check .
 
 All API tests use payloads under `tests/fixtures/` and mocked HTTP; the test suite never requires
 network access.
+
+The eval-only corpus is `evals/corpus.json`; production code never imports it and package builds
+exclude all of `evals/`. Run the deterministic fake actor through actual CLI subprocesses:
+
+```sh
+PYTHONPATH=. python -m evals.run --mode smoke --repeat 1 --concurrency 3
+PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4
+```
+
+An external actor command is supplied with `--actor-command`; `{prompt}` receives only the case
+request and sandbox paths arrive through the episode environment. The documented Hermes/Luna-high
+adapter is:
+
+```sh
+--actor-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna -t terminal -s nomnomcli --source tool --max-turns {max_turns} -q {prompt}'
+```
+
+Use `--judge-command` only for unresolved semantic episodes. Actor and judge artifacts are separate;
+deterministic gates remain authoritative.
 
 ## License
 

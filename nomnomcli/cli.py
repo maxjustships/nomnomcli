@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 
 from nomnomcli import __version__
+from nomnomcli.accuracy import ACCURACY_PROFILES
 from nomnomcli.agent import discover_candidates, parse_agent_plan, resolve_agent_plan
 from nomnomcli.config import ProviderConfig
 from nomnomcli.db import connect, get_stats, remove_log, store_log
@@ -185,6 +186,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     setup.add_argument(
         "--status", action="store_true", help="report connection state without prompting"
+    )
+    setup.add_argument(
+        "--accuracy-profile",
+        choices=ACCURACY_PROFILES,
+        help="store practical, balanced, or exact resolution behavior",
     )
     setup.add_argument("--json", action="store_true", help="machine-readable status JSON")
 
@@ -412,12 +418,32 @@ def _run(args: argparse.Namespace) -> int:
         resolved_agent_plan = resolve_agent_plan(agent_plan)
 
     if args.command == "setup":
+        if args.accuracy_profile is not None:
+            if args.status:
+                raise NomnomError(
+                    "invalid_arguments",
+                    "--accuracy-profile cannot be combined with --status",
+                )
+            config = ProviderConfig()
+            path = config.store_accuracy_profile(args.accuracy_profile)
+            result = {
+                "accuracy_profile": args.accuracy_profile,
+                "config_path": str(path),
+                "recommended": args.accuracy_profile == "balanced",
+            }
+            if args.json:
+                print(_json_output(result))
+            else:
+                print(f"Accuracy profile: {args.accuracy_profile}")
+                print(f"Saved secure provider config: {path} (0600)")
+            return 0
         if args.status:
             result = setup_status_report()
             if args.json:
                 print(_json_output(result))
             else:
                 usda = result["providers"]["usda"]
+                print(f"Accuracy profile: {result['accuracy']['profile']}")
                 print(f"USDA connection: {result['status']}")
                 print(f"Purpose: {usda['purpose']}")
                 print(f"Official free signup: {usda['signup_url']}")
@@ -468,6 +494,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.json:
             print(_json_output(result))
         else:
+            print(f"accuracy profile: {result['accuracy']['profile']}")
             for provider, status in result["providers"].items():
                 if provider == "openfoodfacts":
                     product_state = (

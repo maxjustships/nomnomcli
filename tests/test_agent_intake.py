@@ -685,7 +685,7 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
     )
     assert discovery_code == 0
     assert discovery["candidates"][0]["source_ref"] == "off:0123456789012"
-    assert discovery["candidates"][0]["candidate_status"] == "pending_capture_required"
+    assert discovery["candidates"][0]["candidate_status"] == "probable_brand_match"
     assert not user_db.exists()
 
     code, error, _ = invoke_json(
@@ -707,7 +707,7 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
 
     assert code == 2
     assert error["error"]["code"] == "agent_source_identity_rejected"
-    assert error["error"]["details"]["action"] == "photo_or_barcode"
+    assert error["error"]["details"]["action"] == "select_safe_candidate_or_pending"
     with connect(user_db) as connection:
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
 

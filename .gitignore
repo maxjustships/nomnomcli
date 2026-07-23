@@ -11,4 +11,5 @@ dist/
 venv/
 *.sqlite3
 *.db-journal
+evals/artifacts/
 .DS_Store

@@ -55,18 +55,19 @@ Follow this exact sequence:
 ## Log free text
 
 1. Preserve each raw voice/text/photo item phrase.
-2. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Semantically choose only a
-   source-unbranded `agent_selection_eligible` record; pending/rejected refs are never selectable.
-3. Build one version-1 plan with `input`, optional positive `grams`, and exactly one selection
-   (`source_ref`, `relation:"semantic_equivalent"`, human-readable `assumption`), strictly eligible direct `source_ref`, or documented `pending_capture`. Never include nutrition, select a branded/SKU source, or treat OFF text rank as exact evidence.
-4. Run `nomnom agent intake --plan 'JSON' --json`; optionally append an explicit prior `--date YYYY-MM-DD`. nomnom re-fetches, validates, calculates, and writes one event.
-5. Treat selection only as `agent_generic` / `generic_proxy` with `agent_selected` provenance; show source, relation, assumption, resolved-only totals, completeness, and pending capture IDs.
+2. Use `accuracy.profile` from `nomnom doctor --json`; configure with `nomnom setup --accuracy-profile practical|balanced|exact --json`.
+3. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Food type is a hard floor; preserve provider/search status and `discovery_receipt`.
+4. Build a version-2 plan with `accuracy_profile`, raw `input`, optional positive `grams`, and one strict selection/direct ref/pending state. Unbranded selection uses `semantic_equivalent`.
+   Text-only brand match uses `probable_brand_match` plus receipt and is never exact. In Practical, only after no usable brand result, same-type generic fallback uses
+   `branded_same_type_generic`, receipt, and an assumption saying brand/SKU was not exact. Balanced
+   also requires `risk_disposition:"material_risk_accepted"` or pending; Exact requires exact evidence. Never include nutrition.
+5. Run `nomnom agent intake --plan 'JSON' --json`; it re-runs branded discovery, verifies receipt, re-fetches facts, calculates, and writes atomically. Show profile, source, relation, assumption, search status, totals, completeness, and pending IDs.
 
 Use the existing `nomnom log --parse ...` path for legacy canonical-text flows. Successful logs are
 stored immediately. Do not silently correct or rerun one; tell the user first. Remove only an
 explicitly chosen entry with `nomnom log remove LOG_ID --confirm --json`, then replace it. Never manipulate SQLite directly.
 
-Supported dish prefixes split only named ingredients; never add a missing ingredient. Size words are parser syntax; `strict` asks for grams when piece weight is absent.
+Supported dish prefixes split only named ingredients; never add a missing ingredient. Practical/Balanced estimate unresolved portions; Exact and legacy installs stay strict.
 
 ## External fuzzy portions
 
@@ -77,7 +78,7 @@ entry per unresolved fuzzy item and none for explicit grams. Each requires zero-
 exact trimmed `input`, finite nonnegative central/lower/upper grams (lower <= central <= upper),
 confidence 0..1, `method:"agent_estimate"`, and nonempty `assumption`. Never fuzzy-match or generate
 nutrition ranges. Invalid or incomplete input rejects the whole log. Show returned portion fields
-and correction prompt. `ask` writes nothing; `strict` is default.
+and correction prompt. `ask` writes nothing; explicit legacy portion policy overrides the profile.
 
 ## Direct food flow
 
@@ -124,8 +125,7 @@ cache:
 nomnom alias add "USER PHRASE" "EXACT CACHED FOOD NAME" --json
 ```
 
-Aliases are user-database records, never packaged translations. They resolve
-only to exact local cache names and must not invent, approximate, or remotely
+Aliases are user-database records, never packaged translations. They resolve only to exact local cache names and must not invent, approximate, or remotely
 substitute a target.
 
 ## Unknown-food workflow: cache → exact intent / generic proxy → source request
@@ -133,17 +133,18 @@ substitute a target.
 The CLI automatically checks exact user alias, exact cache, and safe cache search before providers.
 For an unresolved food:
 
-1. `exact_product` requires a user barcode, an explicitly matched/confirmed brand or SKU, or an
-   exact local pin/alias. Provider confidence never makes an arbitrary branded result `exact_product`.
+1. `exact_product` requires barcode, source-backed label, exact pin/alias, or equivalent evidence.
+   Provider confidence never makes an arbitrary branded result `exact_product`.
 2. For unbranded input, prefer USDA Foundation/SR Legacy when configured. The default
    `allow_for_unbranded` policy accepts only non-branded records with an FDC id, complete
    validated nutrition, sufficient confidence, and full query-token coverage. Always show returned
    assumptions. A strictly name/type-matching OFF record may instead be a `generic_proxy`; if its
    source candidate is branded, show that brand, barcode, source, and explicit assumption.
-3. On `generic_proxy_confirmation_required`, show the candidate and ask; do not change policy or
+3. Practical may use the search-first same-type branded fallback; Balanced requires its risk disposition; Exact forbids it. Never substitute a different food type.
+4. On `generic_proxy_confirmation_required`, show the candidate and ask; do not change policy or
    write anything without the user's choice. On `exact_resolution_required`, ask for the package
    barcode or photo and use the exact capture flow above.
-4. On `food_needs_source`, preserve nested provider diagnostics and offer the returned package-photo,
+5. On `food_needs_source`, preserve nested provider diagnostics and offer the returned package-photo,
    barcode, `capture label`, and exact local-cache paths first. Offer the returned USDA action only
    as an optional broader-coverage enhancement. Never substitute a similar food or invent values.
 

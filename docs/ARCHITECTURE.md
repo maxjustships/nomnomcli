@@ -43,16 +43,28 @@ generic-proxy safety rules. `lookup_query` is retrieval metadata, never identity
 fuzzy record that fails this contract may be shown as a search candidate, but it cannot be logged
 automatically; resolution continues to a runtime provider or an actionable error.
 
-The two identity modes have different guarantees:
+Identity modes have different guarantees:
 
 - `exact_product` requires a barcode, source-backed label capture, explicit brand/SKU match, or
   exact user pin/alias. Ranking or confidence cannot establish exact identity.
 - `generic_proxy` is allowed only for unbranded intent under the configured policy and provider
-  safety checks. Its proxy status and provenance remain visible.
+  safety checks, or for the explicitly validated profile-specific branded fallback below. Its proxy
+  status and provenance remain visible.
+- `probable_product` is a provider text match for a branded request without barcode/label evidence.
+  It remains approximate, never becomes `exact_product`, and carries source and assumption.
 
-A branded or SKU-specific request must resolve exactly or request exact capture. The resolver must
-never silently substitute a generic food or similar product, and a cached generic proxy must not
-later satisfy branded intent.
+Semantic food type is the absolute floor in every profile. `practical` estimates fuzzy portions
+through an explicit agent estimate and, after real text discovery finds no usable brand candidate,
+permits an explicit source-backed same-type branded generic fallback. `balanced` is the recommended
+new-user default and requires an explicit material-risk disposition for that fallback. `exact`
+requires measured/explicit fuzzy portions and exact brand evidence. No profile permits a different
+food type: never silently substitute one. No profile permits silent fallback or reuse of a generic
+proxy as later branded identity.
+
+`resolution.generic_proxy_policy` remains compatible. Explicit environment or stored legacy policy
+values override profile defaults for generic proxy confirmation; an existing installation with no
+stored accuracy profile retains the historical strict portion default. Once a profile is explicitly
+stored, `practical` and `balanced` default fuzzy portions to `estimate`, while `exact` uses `strict`.
 
 Journal correction is reversible through `nomnom log remove LOG_ID --confirm --json`. The CLI
 validates the identifier and confirmation, then transactionally removes only that log record; user
@@ -71,25 +83,34 @@ database operation; this principle does not add an orchestration runtime to the 
 The approved agent-first runtime contract has two CLI phases:
 
 1. `nomnom agent candidates --input ... --json` queries runtime providers without opening SQLite.
-   It returns deterministically ordered source-backed identity metadata and opaque `off:BARCODE` or
-   `usda:FDC_ID` references, never nutrition facts for the agent to copy into a plan.
+   It returns deterministically ordered source-backed identity metadata, provider/search status, a
+   canonical SHA-256 discovery receipt, and opaque `off:BARCODE` or `usda:FDC_ID` references, never
+   nutrition facts for the agent to copy into a plan.
    `agent_selection_eligible` identifies source-unbranded generic records that an external agent
    may assess semantically; `pending_capture_required` and `identity_rejected` are not selectable.
-2. `nomnom agent intake --plan ... --json` accepts a strict versioned plan containing only raw item
+2. `nomnom agent intake --plan ... --json` accepts a strict version-2 plan containing the active
+   accuracy profile and only raw item
    input, quantity or the existing external portion estimate, and exactly one direct source ref,
    external selection, or explicit pending-capture state. A selection contains only a source ref,
-   `relation=semantic_equivalent`, and a required human-readable assumption. The CLI re-fetches the
+   `relation=semantic_equivalent`, `relation=probable_brand_match`, or the distinct
+   `relation=branded_same_type_generic`, plus required relation-specific evidence and a
+   human-readable assumption. The CLI re-runs discovery for branded relations, verifies the
+   input/profile-bound receipt and candidate eligibility, re-fetches the
    exact ref, validates source integrity and complete finite nutrition, applies generic policy,
    calculates totals, and writes one journal event.
 
-Discovery never reads or writes the user cache. Commit never trusts cached nutrition or agent
+Discovery never reads or writes the user cache. Commit never trusts cached nutrition, a
+`searched=true` assertion, or agent
 ranking: a source reference is re-fetched through its provider adapter. An accepted selection must
 be a source-unbranded generic record and is journaled as `selection_mode=agent_generic`,
 `resolution_mode=generic_proxy`, and `provenance=agent_selected`, with raw input, canonical source
-name/ref, relation, and assumption. The older direct `source_ref` form retains strict literal
-identity matching. Any branded/SKU source remains pending photo/barcode, including OFF text-search
-results, and no selection converts it to exact or generic. Pending output includes stable event/item
-identifiers so correction remains an explicit remove-and-replace flow.
+name/ref, relation, assumption, accuracy profile, receipt, and deterministic search/provider status.
+The older version-1 plan and direct `source_ref` form retain strict compatibility and literal
+identity matching. A same-type branded fallback is `selection_mode=agent_branded_generic_fallback`
+and remains `generic_proxy`; a text-only brand match is
+`selection_mode=agent_probable_brand_match` and `probable_product`. Neither becomes exact without
+barcode/label evidence. Pending output includes stable event/item identifiers so correction remains
+an explicit remove-and-replace flow.
 
 An external agent may translate language, choose among eligible source identity metadata, and read
 a supplied package image. Semantic choice remains outside the CLI; the CLI owns provider fetch,
@@ -117,6 +138,7 @@ The following are non-goals:
 - packaged aliases, translations, synonyms, serving weights, or portion assumptions;
 - LLM-driven nutrition, identity, provider selection, or persistence inside nomnom;
 - silent generic substitution for branded/SKU intent;
+- loading the eval-only 100-case corpus or frozen provider responses from production code;
 - repository tools that inspect, migrate, seed, copy, or repair real user databases;
 - treating `docs/plans.md`, `docs/status.md`, or `docs/test-plan.md` as current architecture.
 

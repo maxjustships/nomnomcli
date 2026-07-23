@@ -10,7 +10,7 @@ import requests
 from nomnomcli import __version__
 from nomnomcli.errors import NomnomError, ProviderUnavailableError
 from nomnomcli.models import Food
-from nomnomcli.providers import RetryPolicy, request_with_retry
+from nomnomcli.providers import RetryPolicy, provider_url, request_with_retry
 
 OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 OFF_PRODUCT_PROBE_URL = "https://api.openfoodfacts.org/api/v2/product/0"
@@ -119,7 +119,7 @@ class OpenFoodFactsClient:
             code="openfoodfacts_unavailable",
             message="Open Food Facts full-text search is unavailable",
             request_get=self._request_get or requests.get,
-            url=OFF_SEARCH_URL,
+            url=provider_url(OFF_SEARCH_URL, "/off/search"),
             request_kwargs={
                 "params": {
                     "search_terms": query,
@@ -173,7 +173,7 @@ class OpenFoodFactsClient:
             code="openfoodfacts_unavailable",
             message="Open Food Facts product lookup is unavailable",
             request_get=self._request_get or requests.get,
-            url=OFF_PRODUCT_PROBE_URL,
+            url=provider_url(OFF_PRODUCT_PROBE_URL, "/off/product-probe"),
             request_kwargs={
                 "params": {"fields": "code"},
                 "timeout": 10,
@@ -229,7 +229,7 @@ class OpenFoodFactsClient:
             code="openfoodfacts_unavailable",
             message="Open Food Facts barcode lookup is unavailable",
             request_get=self._request_get or requests.get,
-            url=OFF_PRODUCT_URL.format(barcode=code),
+            url=provider_url(OFF_PRODUCT_URL.format(barcode=code), f"/off/product/{code}"),
             request_kwargs={
                 "params": {"fields": OFF_FIELDS},
                 "timeout": 10,

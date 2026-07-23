@@ -10,7 +10,7 @@ import requests
 
 from nomnomcli.errors import NomnomError, ProviderUnavailableError
 from nomnomcli.models import Food
-from nomnomcli.providers import RetryPolicy, request_with_retry
+from nomnomcli.providers import RetryPolicy, provider_url, request_with_retry
 
 USDA_SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
 USDA_FOOD_URL = "https://api.nal.usda.gov/fdc/v1/food/{fdc_id}"
@@ -220,7 +220,7 @@ class USDAClient:
             code="usda_unavailable",
             message="USDA FoodData Central lookup is unavailable",
             request_get=self._request_get or requests.get,
-            url=USDA_SEARCH_URL,
+            url=provider_url(USDA_SEARCH_URL, "/usda/search"),
             request_kwargs={
                 "params": params,
                 "timeout": 15,
@@ -304,7 +304,10 @@ class USDAClient:
             code="usda_unavailable",
             message="USDA FoodData Central lookup is unavailable",
             request_get=self._request_get or requests.get,
-            url=USDA_FOOD_URL.format(fdc_id=fdc_id),
+            url=provider_url(
+                USDA_FOOD_URL.format(fdc_id=fdc_id),
+                f"/usda/food/{fdc_id}",
+            ),
             request_kwargs={"params": {"api_key": api_key}, "timeout": 15},
             details=details,
             retry_policy=self.retry_policy,

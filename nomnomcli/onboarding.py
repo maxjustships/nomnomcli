@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 from collections.abc import Callable
 
+from nomnomcli.accuracy import profile_spec
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
 from nomnomcli.foods import USDA_SETUP_URL
@@ -38,7 +39,14 @@ def doctor_report(
         credential = provider_config.usda_credential()
     except NomnomError:
         credential = None
+    profile = provider_config.accuracy_profile()
+    spec = profile_spec(profile)
     return {
+        "accuracy": {
+            "profile": profile,
+            "portion_policy": provider_config.portion_policy(),
+            "branded_generic_fallback": spec.branded_generic_fallback,
+        },
         "providers": {
             "openfoodfacts": _off_status(off),
             "usda": {
@@ -116,6 +124,7 @@ def setup_providers(
     if credential is not None:
         usda.probe(credential.value)
         return {
+            "accuracy_profile": provider_config.accuracy_profile(),
             "providers": {
                 "openfoodfacts": off_status,
                 "usda": {
@@ -147,6 +156,7 @@ def setup_providers(
     usda.probe(api_key)
     path = provider_config.store_usda_key(api_key)
     return {
+        "accuracy_profile": provider_config.accuracy_profile(),
         "providers": {
             "openfoodfacts": off_status,
             "usda": {"configured": True, "reachable": True, "key_source": "user_config"},

@@ -32,8 +32,26 @@ Never add a hidden fallback, packaged lookup table, generated corpus, or invente
 
 - `exact_product` requires exact evidence: a barcode, source-backed label capture, explicit
   brand/SKU match, or exact user pin/alias. Confidence alone is not identity.
-- Branded or SKU-specific input must resolve exactly or request capture. Never silently substitute
-  a generic food, similar product, or unconfirmed provider result for a branded/SKU request.
+- Semantic food-type compatibility is an absolute hard floor in every accuracy profile. An
+  external selection must never substitute a different food type, regardless of confidence,
+  availability, profile, or wording.
+- Product, brand, and portion specificity are controlled by the normative accuracy profile:
+  `practical`, `balanced`, or `exact`. Profiles never weaken the semantic food-type hard floor.
+- In `practical`, branded or SKU-specific raw input must first use normal provider text discovery.
+  If discovery produces no usable exact or probable brand candidate, an external agent may
+  explicitly select a source-backed, same-type generic proxy. This must use the distinct branded
+  generic fallback relation, must state that the brand/SKU is not exact, and must carry
+  deterministic discovery evidence that nomnom revalidates during intake. Provider outage and no
+  match are distinct evidence statuses.
+- In `balanced`, a branded generic fallback is allowed only through an explicit agent plan and a
+  material-risk or pending path. In `exact`, branded input requires barcode, source-backed label,
+  exact user pin/alias, or other exact evidence; fuzzy portions require explicit or measured
+  values.
+- A branded generic fallback is never `exact_product`. Persist the raw branded input, selected
+  canonical provider/source reference, provenance, relation, human-readable assumption, accuracy
+  profile, and text-discovery status/evidence.
+- A provider text match without exact barcode, label, pin, or equivalent identity evidence may be
+  logged only as approximate/probable/generic with explicit provenance.
 - Unbranded input may use a source-backed `generic_proxy` only under the approved policy and safety
   checks. Keep provider, source identifier, provenance, confidence, and assumption visible.
 - The versioned agent-intake contract may accept an explicit external semantic selection of a
