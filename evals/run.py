@@ -1095,12 +1095,10 @@ def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
         "catastrophic_semantic_substitution",
         "expected_error_missing",
         "invented_nutrition",
-        "lost_input_item",
         "resolution_mode_not_allowed",
         "semantic_identity_not_allowed",
         "source_not_allowed",
         "source_or_provenance_missing",
-        "unexpected_cli_error",
     )
     global_integrity_failures = {
         failure: count

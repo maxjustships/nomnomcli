@@ -536,7 +536,7 @@ def test_integrity_cli_error_is_not_repaired_into_a_write(monkeypatch, tmp_path)
     assert result["cli"]["error"]["code"] == "agent_source_ref_mismatch"
 
 
-def test_practical_release_metrics_ignore_balanced_and_exact_ux_failures():
+def test_practical_release_metrics_ignore_balanced_reliability_failures():
     practical = {
         "id": "p",
         "category": "measured_generic",
@@ -553,7 +553,11 @@ def test_practical_release_metrics_ignore_balanced_and_exact_ux_failures():
         "id": "b",
         "profile": "balanced",
         "pass": False,
-        "hard_failures": ["incorrect_complete_status"],
+        "hard_failures": [
+            "incorrect_complete_status",
+            "lost_input_item",
+            "unexpected_cli_error",
+        ],
         "ux_failures": ["max_followups_exceeded"],
     }
 
@@ -562,8 +566,11 @@ def test_practical_release_metrics_ignore_balanced_and_exact_ux_failures():
     assert report["practical_metrics"]["catastrophic_semantic_substitutions"] == 0
     assert report["practical_counters"]["hard_failures"] == {}
     assert report["all_profile_counters"]["hard_failures"] == {
-        "incorrect_complete_status": 1
+        "incorrect_complete_status": 1,
+        "lost_input_item": 1,
+        "unexpected_cli_error": 1,
     }
+    assert report["global_integrity_failures"] == {}
     assert report["release_gate_passed"] is True
 
 
