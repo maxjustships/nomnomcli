@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from evals.run import default_actor_command, run_actor, run_episode, summarize
+from evals.run import actor_prompt, default_actor_command, run_actor, run_episode, summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "evals" / "corpus.json"
@@ -220,6 +220,40 @@ def test_generic_actor_environment_is_allowlisted_and_documented_adapter_is_tool
     )
     assert "-t terminal" not in adapter
     assert "-s nomnomcli" not in adapter
+
+
+def test_actor_prompt_exposes_exact_plan_grammar_without_golden_oracle():
+    request = {
+        "protocol_version": 1,
+        "raw_input": "40 g apple",
+        "accuracy_profile": "practical",
+        "items": [
+            {
+                "input": "40 g apple",
+                "discovery": {
+                    "query": "apple",
+                    "candidates": [
+                        {
+                            "source_ref": "usda:10001",
+                            "semantic_identity": "apple",
+                            "direct_source_ref_eligible": True,
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    prompt = actor_prompt(request)
+
+    assert '"top_level"' in prompt
+    assert '"exactly_one_identity_state"' in prompt
+    assert '"direct_measured_template"' in prompt
+    assert '"source_ref": "COPY_ELIGIBLE_SOURCE_REF"' in prompt
+    assert "There is no relation named exact or exact_same_type" in prompt
+    assert "protocol_version, plan_version, raw_input" in prompt
+    assert "allowed_source_refs" not in prompt
+    assert "forbidden_identities" not in prompt
 
 
 def test_practical_release_metrics_ignore_balanced_and_exact_failures():

@@ -208,20 +208,91 @@ def sanitize_discovery(payload: dict) -> dict:
 
 
 def actor_prompt(request: dict) -> str:
+    contract = {
+        "top_level": {
+            "required": ["version", "accuracy_profile", "items"],
+            "optional": ["portion_estimates"],
+            "forbidden_extra_fields": True,
+            "version": 2,
+        },
+        "item": {
+            "required": ["input"],
+            "optional": ["grams"],
+            "exactly_one_identity_state": ["source_ref", "selection", "pending_capture"],
+            "forbidden_extra_fields": True,
+        },
+        "direct_measured_template": {
+            "input": "COPY_ITEM_INPUT_EXACTLY",
+            "grams": "NUMBER_PARSED_FROM_INPUT",
+            "source_ref": "COPY_ELIGIBLE_SOURCE_REF",
+        },
+        "selection_template": {
+            "input": "COPY_ITEM_INPUT_EXACTLY",
+            "grams": "NUMBER_OR_OMIT_WHEN_USING_PORTION_ESTIMATE",
+            "selection": {
+                "source_ref": "COPY_CANDIDATE_SOURCE_REF",
+                "relation": (
+                    "semantic_equivalent | branded_same_type_generic | probable_brand_match"
+                ),
+                "assumption": "NONEMPTY_HUMAN_READABLE_ASSUMPTION",
+                "semantic_attestation": {
+                    "version": 1,
+                    "relation": "EXACTLY_MATCH_SELECTION_RELATION",
+                    "raw_identity": "COPY_DISCOVERY_QUERY_EXACTLY",
+                    "selected_identity": "COPY_CANDIDATE_SEMANTIC_IDENTITY_EXACTLY",
+                    "same_food_type": True,
+                    "rationale": "CONCISE_SEMANTIC_REASON",
+                    "confidence": "NUMBER_FROM_0_TO_1",
+                },
+            },
+        },
+        "branded_selection_additions": {
+            "probable_brand_match": ["discovery_receipt"],
+            "branded_same_type_generic": [
+                "discovery_receipt",
+                "dismissed_brand_candidates",
+            ],
+            "balanced_branded_same_type_generic": ["risk_disposition=material_risk_accepted"],
+            "dismissal": {
+                "source_ref": "COPY_EACH_BRAND_CANDIDATE_SOURCE_REF",
+                "reason": "different_food_type | incompatible_variant | incomplete_facts",
+            },
+        },
+        "pending_template": {
+            "input": "COPY_ITEM_INPUT_EXACTLY",
+            "pending_capture": {"status": "pending_capture", "action": "photo_or_barcode"},
+        },
+        "portion_estimates": {
+            "shape": {"items": ["ONE_ESTIMATE_PER_FUZZY_RESOLVED_ITEM"]},
+            "estimate_fields_exactly": [
+                "item_index",
+                "input",
+                "grams",
+                "lower_grams",
+                "upper_grams",
+                "confidence",
+                "method",
+                "assumption",
+            ],
+            "method": "agent_estimate",
+        },
+    }
     return (
-        "Return exactly one strict nomnom agent plan JSON object and no prose. "
-        "You have no tools and must use only the sanitized request below. Never return "
-        "nutrition facts. For every selection, include semantic_attestation with exactly "
-        "version=1, relation matching the selection relation, raw_identity matching the "
-        "discovery query, selected_identity matching candidate.semantic_identity, "
-        "same_food_type=true, a concise rationale, and confidence from 0 to 1. Only assert "
-        "same_food_type when the identities truly denote the same food type; otherwise use "
-        "pending_capture. A brand_candidate_requires_semantic_assessment is not exact. "
-        "For branded_same_type_generic, include dismissed_brand_candidates covering every "
-        "brand candidate, each with source_ref and reason different_food_type, "
-        "incompatible_variant, or incomplete_facts. Exact profile must use pending_capture "
-        "for fuzzy portions or text-only branded identity. Use plan version 2 and the supplied "
-        "accuracy profile. Sanitized request:\n"
+        "Return exactly one strict nomnom agent plan JSON object and no prose or markdown. "
+        "You have no tools and must use only the sanitized request below. Never return nutrition "
+        "facts. Do not invent protocol_version, plan_version, raw_input, selections, candidate, "
+        "canonical_name, provider, source_id, portion, unit, amount, value, or any field not "
+        "explicitly allowed by the contract. Copy each item input exactly. For a measured "
+        "unbranded candidate with direct_source_ref_eligible=true, prefer the direct measured "
+        "template: source_ref is an ITEM field, relation is omitted, and grams is an ITEM field. "
+        "There is no relation named exact or exact_same_type. For every selection, include the "
+        "strict semantic_attestation. Only assert same_food_type when the raw and selected "
+        "identities truly denote the same food type; otherwise use pending_capture. A "
+        "brand_candidate_requires_semantic_assessment is not exact. A branded generic fallback "
+        "must dismiss every discovered brand candidate. Exact profile must use pending_capture "
+        "for fuzzy portions or text-only branded identity.\nSTRICT CONTRACT:\n"
+        + json.dumps(contract, ensure_ascii=False, sort_keys=True)
+        + "\nSANITIZED REQUEST:\n"
         + json.dumps(request, ensure_ascii=False, sort_keys=True)
     )
 
