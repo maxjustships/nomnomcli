@@ -44,7 +44,12 @@ REPAIR_CONTEXT_FORBIDDEN_KEYS = {
 }
 
 
-REPAIRABLE_CLI_ERROR_CODES = {"agent_plan_invalid", "portion_estimates_malformed"}
+REPAIRABLE_CLI_ERROR_CODES = {
+    "agent_plan_invalid",
+    "portion_estimates_malformed",
+    "agent_discovery_candidate_mismatch",
+    "agent_brand_dismissal_evidence_invalid",
+}
 PLAN_TOP_LEVEL_FIELDS = {"version", "accuracy_profile", "items", "portion_estimates"}
 PLAN_ITEM_FIELDS = {"input", "grams", "source_ref", "selection", "pending_capture"}
 SELECTION_BASE_FIELDS = {"source_ref", "relation", "assumption", "semantic_attestation"}
@@ -463,6 +468,13 @@ def capped_stdout_excerpt(stdout: str) -> str:
 
 def normalize_actor_plan(plan: dict, request: dict) -> dict:
     """Repair schema shape only; never invent or change semantic/nutrition values."""
+    if (
+        isinstance(plan, dict)
+        and "items" not in plan
+        and "input" in plan
+        and set(plan) <= PLAN_ITEM_FIELDS
+    ):
+        plan = {"version": 2, "items": [plan]}
     if not isinstance(plan, dict) or not isinstance(plan.get("items"), list):
         return plan
     if plan_has_injected_nutrition(plan):
@@ -513,6 +525,48 @@ def normalize_actor_plan(plan: dict, request: dict) -> dict:
         normalized_items.append(item)
     normalized["items"] = normalized_items
     return normalized
+
+
+def combine_isolated_actor_plans(plans: list[dict], request: dict) -> dict | None:
+    """Combine one validated plan per request item without inventing semantic values."""
+    requested_items = request.get("items")
+    if not isinstance(requested_items, list) or len(plans) != len(requested_items):
+        return None
+    combined_items = []
+    combined_estimates = []
+    for item_index, (plan, requested) in enumerate(
+        zip(plans, requested_items, strict=True)
+    ):
+        plan_items = plan.get("items")
+        if (
+            not isinstance(plan_items, list)
+            or len(plan_items) != 1
+            or not isinstance(plan_items[0], dict)
+            or plan_items[0].get("input") != requested.get("input")
+        ):
+            return None
+        combined_items.append(plan_items[0])
+        estimates = plan.get("portion_estimates")
+        if estimates is None:
+            continue
+        if not isinstance(estimates, dict) or not isinstance(estimates.get("items"), list):
+            return None
+        for estimate in estimates["items"]:
+            if (
+                not isinstance(estimate, dict)
+                or estimate.get("item_index") != 0
+                or estimate.get("input") != requested.get("input")
+            ):
+                return None
+            combined_estimates.append({**estimate, "item_index": item_index})
+    combined = {
+        "version": 2,
+        "accuracy_profile": request.get("accuracy_profile"),
+        "items": combined_items,
+    }
+    if combined_estimates:
+        combined["portion_estimates"] = {"items": combined_estimates}
+    return combined
 
 
 def allowlisted_actor_env(host_env: dict[str, str], actor_home: Path) -> dict[str, str]:
@@ -972,6 +1026,114 @@ def run_actor(
     })
 
 
+def _run_isolated_multi_item_actor_step(
+    *,
+    actor_command: str,
+    request: dict,
+    host_env: dict[str, str],
+    cli_env: dict[str, str],
+    episode_dir: Path,
+    suffix: str,
+    auth_launcher_command: str | None,
+) -> dict:
+    item_runs = []
+    plans = []
+    for item_index, requested_item in enumerate(request["items"]):
+        subrequest = {
+            "protocol_version": request.get("protocol_version"),
+            "raw_input": requested_item["input"],
+            "accuracy_profile": request.get("accuracy_profile"),
+            "items": [requested_item],
+        }
+        validation_env = {
+            **cli_env,
+            "NOMNOM_DB_PATH": str(
+                episode_dir / f"actor-validation-{suffix}-{item_index + 1:02d}.sqlite3"
+            ),
+        }
+        item_run = run_actor_step(
+            actor_command=actor_command,
+            request=subrequest,
+            host_env=host_env,
+            cli_env=validation_env,
+            episode_dir=episode_dir,
+            suffix=f"{suffix}-item{item_index + 1:02d}",
+            auth_launcher_command=auth_launcher_command,
+        )
+        item_runs.append(item_run)
+        if int(item_run.get("cli_returncode", 70)) != 0:
+            failed = dict(item_run)
+            failed["item_runs"] = item_runs
+            failed["attempts"] = [
+                attempt
+                for run in item_runs
+                for attempt in run.get("attempts", [run])
+            ]
+            failed["request"] = request
+            failed["planning_mode"] = "item_isolated_atomic"
+            failed["repair_used"] = any(run.get("repair_used") for run in item_runs)
+            failed["actor_calls"] = sum(
+                len(run.get("attempts", [run])) for run in item_runs
+            )
+            return failed
+        plan = item_run.get("plan")
+        if not isinstance(plan, dict):
+            break
+        plans.append(plan)
+
+    combined = combine_isolated_actor_plans(plans, request)
+    flattened_attempts = [
+        attempt for run in item_runs for attempt in run.get("attempts", [run])
+    ]
+    if combined is None:
+        return {
+            "actor_returncode": 70,
+            "actor_error_kind": "incomplete_plan",
+            "actor_process_error": (
+                "Item-isolated actor plans could not be combined without changing inputs"
+            ),
+            "cli_returncode": 70,
+            "cli": {
+                "error": {
+                    "code": "eval_actor_failed",
+                    "message": "Item-isolated actor plans were incomplete or ambiguous",
+                }
+            },
+            "attempts": flattened_attempts,
+            "item_runs": item_runs,
+            "request": request,
+            "planning_mode": "item_isolated_atomic",
+            "repair_used": any(run.get("repair_used") for run in item_runs),
+            "actor_calls": len(flattened_attempts),
+        }
+    intake_code, intake_payload = invoke_cli(
+        [
+            "agent",
+            "intake",
+            "--plan",
+            json.dumps(combined, ensure_ascii=False),
+        ],
+        env=cli_env,
+        cwd=episode_dir,
+    )
+    return {
+        "actor_returncode": 0,
+        "plan": combined,
+        "cli_returncode": intake_code,
+        "cli": intake_payload,
+        "attempts": flattened_attempts,
+        "item_runs": item_runs,
+        "request": request,
+        "planning_mode": "item_isolated_atomic",
+        "repair_used": any(run.get("repair_used") for run in item_runs),
+        "actor_calls": len(flattened_attempts),
+        "final_attempt": max(
+            (int(run.get("final_attempt", 1)) for run in item_runs),
+            default=1,
+        ),
+    }
+
+
 def run_actor_step(
     *,
     actor_command: str,
@@ -982,6 +1144,18 @@ def run_actor_step(
     suffix: str,
     auth_launcher_command: str | None,
 ) -> dict:
+    requested_items = request.get("items")
+    if isinstance(requested_items, list) and len(requested_items) > 1:
+        return _run_isolated_multi_item_actor_step(
+            actor_command=actor_command,
+            request=request,
+            host_env=host_env,
+            cli_env=cli_env,
+            episode_dir=episode_dir,
+            suffix=suffix,
+            auth_launcher_command=auth_launcher_command,
+        )
+
     def complete_attempt(
         *,
         attempt_number: int,

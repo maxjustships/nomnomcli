@@ -13,6 +13,7 @@ from evals import fake_actor, generate_corpus
 from evals import run as eval_run
 from evals.run import (
     actor_prompt,
+    combine_isolated_actor_plans,
     default_actor_command,
     evaluate,
     extract_json_object,
@@ -707,6 +708,126 @@ def test_schema_normalizer_is_mechanical_and_preserves_nutrition_rejection():
     }
     injected = {"version": 2, "items": [], "nutrition": {"kcal": 100}}
     assert normalize_actor_plan(injected, {"accuracy_profile": "practical"}) == injected
+
+
+def test_schema_normalizer_wraps_only_a_strict_root_item():
+    root_item = {
+        "input": "40 g apple",
+        "grams": 40,
+        "source_ref": "usda:1",
+    }
+
+    normalized = normalize_actor_plan(root_item, {"accuracy_profile": "practical"})
+
+    assert normalized == {
+        "version": 2,
+        "accuracy_profile": "practical",
+        "items": [root_item],
+    }
+    assert normalize_actor_plan(
+        {**root_item, "nutrition": {"kcal": 1}},
+        {"accuracy_profile": "practical"},
+    ) == {**root_item, "nutrition": {"kcal": 1}}
+
+
+def test_item_isolated_planning_combines_once_and_keeps_real_write_atomic(
+    monkeypatch, tmp_path
+):
+    actor_calls = []
+    intake_calls = []
+
+    def fake_actor(**kwargs):
+        actor_calls.append(kwargs["request"])
+        item_input = kwargs["request"]["items"][0]["input"]
+        return {
+            "actor_returncode": 0,
+            "plan": {
+                "input": item_input,
+                "pending_capture": {
+                    "status": "pending_capture",
+                    "action": "photo_or_barcode",
+                },
+            },
+        }
+
+    def fake_intake(args, **kwargs):
+        plan = json.loads(args[-1])
+        intake_calls.append((kwargs["env"]["NOMNOM_DB_PATH"], plan))
+        return 0, {"items": plan["items"]}
+
+    monkeypatch.setattr(eval_run, "run_actor", fake_actor)
+    monkeypatch.setattr(eval_run, "invoke_cli", fake_intake)
+    real_db = tmp_path / "real.sqlite3"
+    request = {
+        "protocol_version": 1,
+        "raw_input": "40 g apple; 50 g pear",
+        "accuracy_profile": "practical",
+        "items": [
+            {"input": "40 g apple", "discovery": {}},
+            {"input": "50 g pear", "discovery": {}},
+        ],
+    }
+
+    result = run_actor_step(
+        actor_command="actor {prompt}",
+        request=request,
+        host_env={},
+        cli_env={"NOMNOM_DB_PATH": str(real_db)},
+        episode_dir=tmp_path,
+        suffix="01",
+        auth_launcher_command=None,
+    )
+
+    assert [call["raw_input"] for call in actor_calls] == ["40 g apple", "50 g pear"]
+    assert len(intake_calls) == 3
+    assert all(path != str(real_db) for path, _ in intake_calls[:2])
+    assert intake_calls[-1][0] == str(real_db)
+    assert [item["input"] for item in intake_calls[-1][1]["items"]] == [
+        "40 g apple",
+        "50 g pear",
+    ]
+    assert result["planning_mode"] == "item_isolated_atomic"
+    assert result["cli_returncode"] == 0
+
+
+def test_isolated_plan_merge_reindexes_fuzzy_estimates_without_changing_values():
+    request = {
+        "accuracy_profile": "practical",
+        "items": [{"input": "apple"}, {"input": "pear"}],
+    }
+    plans = [
+        {
+            "version": 2,
+            "items": [{"input": "apple", "source_ref": "usda:1"}],
+            "portion_estimates": {
+                "items": [{"item_index": 0, "input": "apple", "grams": 80}]
+            },
+        },
+        {
+            "version": 2,
+            "items": [{"input": "pear", "source_ref": "usda:2"}],
+            "portion_estimates": {
+                "items": [{"item_index": 0, "input": "pear", "grams": 90}]
+            },
+        },
+    ]
+
+    combined = combine_isolated_actor_plans(plans, request)
+
+    assert combined is not None
+    assert combined["portion_estimates"]["items"] == [
+        {"item_index": 0, "input": "apple", "grams": 80},
+        {"item_index": 1, "input": "pear", "grams": 90},
+    ]
+
+
+def test_branded_contract_errors_are_repairable_but_source_integrity_is_not():
+    assert {
+        "agent_discovery_candidate_mismatch",
+        "agent_brand_dismissal_evidence_invalid",
+    } <= eval_run.REPAIRABLE_CLI_ERROR_CODES
+    assert "agent_source_ref_mismatch" not in eval_run.REPAIRABLE_CLI_ERROR_CODES
+    assert "agent_semantic_compatibility_rejected" not in eval_run.REPAIRABLE_CLI_ERROR_CODES
 
 
 def test_integrity_cli_error_is_not_repaired_into_a_write(monkeypatch, tmp_path):
