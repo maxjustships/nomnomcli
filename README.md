@@ -276,9 +276,10 @@ Discovery returns deterministic provider metadata, provider/search status, a can
 `discovery_receipt`, candidate status, and opaque references such as `usda:123` or
 `off:0123456789012`; it returns no nutrition fields for an agent plan.
 `agent_selection_eligible` means the provider record is source-unbranded and structurally valid for
-an external agent's explicit same-type semantic choice. `probable_brand_match` is a text-only
-branded result and is never exact. `pending_capture_required` must become an explicit pending item,
-and `identity_rejected` must not be selected. Candidate output also reports whether the older direct
+an external agent's explicit same-type semantic choice.
+`brand_candidate_requires_semantic_assessment` is only a same-brand text candidate, not a usable or
+exact product match. `pending_capture_required` must become an explicit pending item, and
+`identity_rejected` must not be selected. Candidate output also reports whether the older direct
 `source_ref` form satisfies strict literal identity.
 
 Commit all items as one strict plan and one journal event:
@@ -294,7 +295,16 @@ nomnom agent intake --plan '{
       "selection": {
         "source_ref": "usda:123",
         "relation": "semantic_equivalent",
-        "assumption": "Interpreted raw tomato as the source's ripe raw tomato record."
+        "assumption": "Interpreted raw tomato as the source's ripe raw tomato record.",
+        "semantic_attestation": {
+          "version": 1,
+          "relation": "semantic_equivalent",
+          "raw_identity": "raw tomato",
+          "selected_identity": "tomatoes, red, ripe, raw, year round average",
+          "same_food_type": true,
+          "rationale": "Both identities denote raw tomato.",
+          "confidence": 0.94
+        }
       }
     },
     {
@@ -304,7 +314,19 @@ nomnom agent intake --plan '{
         "source_ref": "usda:456",
         "relation": "branded_same_type_generic",
         "assumption": "Harris brand/SKU was not exact; used source-backed same-type sandwich bread after provider text discovery.",
-        "discovery_receipt": "RECEIPT_RETURNED_BY_CANDIDATES"
+        "semantic_attestation": {
+          "version": 1,
+          "relation": "branded_same_type_generic",
+          "raw_identity": "Harris sandwich bread two slices",
+          "selected_identity": "sandwich bread",
+          "same_food_type": true,
+          "rationale": "The selected generic record is sandwich bread.",
+          "confidence": 0.91
+        },
+        "discovery_receipt": "RECEIPT_RETURNED_BY_CANDIDATES",
+        "dismissed_brand_candidates": [
+          {"source_ref": "off:0200000012999", "reason": "different_food_type"}
+        ]
       }
     }
   ]
@@ -313,12 +335,18 @@ nomnom agent intake --plan '{
 
 The item key allowlist is `input`, optional positive `grams`, and exactly one of direct `source_ref`,
 `selection`, or `pending_capture`. Version 2 requires `accuracy_profile`. Unbranded semantic
-selection uses `relation="semantic_equivalent"`. Text-only brand candidates use
+selection uses `relation="semantic_equivalent"`. Every `selection` also requires the strict
+version-1 `semantic_attestation` shown above. It binds the raw identity, selected provider identity,
+relation, explicit `same_food_type=true` judgment, concise rationale, and finite confidence. nomnom
+validates this structure and binding; it does not claim lexical overlap independently proves food
+type. Text-only brand candidates use
 `relation="probable_brand_match"` plus the discovery receipt. Search-first same-type branded
 fallback uses the distinct `relation="branded_same_type_generic"`, the receipt, an assumption that
-the brand/SKU was not exact, and in `balanced`,
+the brand/SKU was not exact, and a receipt-bound dismissal for every unselected brand candidate.
+Dismissal reasons are `different_food_type`, `incompatible_variant`, or `incomplete_facts`. In `balanced`,
 `risk_disposition="material_risk_accepted"`. `exact` rejects that fallback. Version 1 remains
-accepted for its original strict fields. Calories, macros, nutrition, source facts, unknown keys,
+accepted, but its semantic selections also require the attestation. Calories, macros, nutrition,
+source facts, unknown keys,
 duplicate refs, forged/stale receipts, non-finite numbers, and mismatched estimates reject the
 whole plan before a journal write.
 
@@ -520,23 +548,44 @@ All API tests use payloads under `tests/fixtures/` and mocked HTTP; the test sui
 network access.
 
 The eval-only corpus is `evals/corpus.json`; production code never imports it and package builds
-exclude all of `evals/`. Run the deterministic fake actor through actual CLI subprocesses:
+exclude all of `evals/`. The harness runs candidate discovery and intake itself; actors receive only
+sanitized raw input, profile, candidates, receipts, and provider statuses, and return plan JSON.
+Run the deterministic fake actor as a harness/CLI self-test:
 
 ```sh
 PYTHONPATH=. python -m evals.run --mode smoke --repeat 1 --concurrency 3
 PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4
 ```
 
-An external actor command is supplied with `--actor-command`; `{prompt}` receives only the case
-request and sandbox paths arrive through the episode environment. The documented Hermes/Luna-high
+Fake-actor reports set `actor_kind=fake` and `release_evidence=false`; they are not production
+release acceptance. Decision-grade evidence requires an external actor. Generic actor subprocesses
+receive an allowlisted environment with episode-local `HOME`/XDG directories and no nomnom
+credentials or inherited secret variables. The locally supported, tool-free Hermes/Luna-high
 adapter is:
 
 ```sh
---actor-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna -t terminal -s nomnomcli --source tool --max-turns {max_turns} -q {prompt}'
+--actor-kind external \
+--actor-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna --safe-mode --max-turns 1 -q {prompt}'
 ```
 
-Use `--judge-command` only for unresolved semantic episodes. Actor and judge artifacts are separate;
-deterministic gates remain authoritative.
+`--safe-mode` supplies no terminal, file, web, MCP, plugin, skill, or repository access. In many
+Hermes installations, `openai-codex` authentication lives under the host home directory, so the
+generic command above will intentionally not see it. Opt in to the trusted authentication boundary
+only when needed:
+
+```sh
+PYTHONPATH=. python -m evals.run --mode smoke --repeat 1 --concurrency 1 \
+  --actor-kind external \
+  --actor-auth-launcher-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna --safe-mode --max-turns 1 -q {prompt}'
+PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4 \
+  --actor-kind external \
+  --actor-auth-launcher-command 'hermes chat -Q --provider openai-codex -m gpt-5.6-luna --safe-mode --max-turns 1 -q {prompt}'
+```
+
+That launcher process receives the host authentication environment, while `--safe-mode` leaves the
+model tool-free and the prompt contains only sanitized episode facts. It does not copy credentials
+and must be an explicit operator choice. Use `--judge-command` only for unresolved semantic
+episodes. Actor and judge artifacts are separate.
 
 ## License
 

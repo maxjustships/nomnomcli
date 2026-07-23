@@ -40,10 +40,45 @@ MATERIAL_RISK_ACCEPTED = "material_risk_accepted"
 GENERIC_USDA_TYPES = frozenset({"foundation", "sr legacy"})
 STATUS_ORDER = {
     "agent_selection_eligible": 0,
-    "probable_brand_match": 1,
+    "brand_candidate_requires_semantic_assessment": 1,
     "pending_capture_required": 2,
     "identity_rejected": 3,
 }
+SEMANTIC_ATTESTATION_VERSION = 1
+BRAND_DISMISSAL_REASONS = frozenset(
+    {"different_food_type", "incompatible_variant", "incomplete_facts"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticAttestation:
+    version: int
+    relation: str
+    raw_identity: str
+    selected_identity: str
+    same_food_type: bool
+    rationale: str
+    confidence: float
+
+    def as_dict(self) -> dict:
+        return {
+            "version": self.version,
+            "relation": self.relation,
+            "raw_identity": self.raw_identity,
+            "selected_identity": self.selected_identity,
+            "same_food_type": self.same_food_type,
+            "rationale": self.rationale,
+            "confidence": self.confidence,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BrandCandidateDismissal:
+    source_ref: str
+    reason: str
+
+    def as_dict(self) -> dict:
+        return {"source_ref": self.source_ref, "reason": self.reason}
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +86,10 @@ class AgentSelection:
     source_ref: str
     relation: str
     assumption: str
+    semantic_attestation: SemanticAttestation
     discovery_receipt: str | None
     risk_disposition: str | None
+    dismissed_brand_candidates: tuple[BrandCandidateDismissal, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,10 +121,21 @@ def _invalid_plan(message: str, *, item_index: int | None = None) -> NomnomError
         ],
         "selection_fields": [
             "assumption",
+            "dismissed_brand_candidates",
             "discovery_receipt",
             "relation",
             "risk_disposition",
+            "semantic_attestation",
             "source_ref",
+        ],
+        "semantic_attestation_fields": [
+            "confidence",
+            "rationale",
+            "raw_identity",
+            "relation",
+            "same_food_type",
+            "selected_identity",
+            "version",
         ],
         "prohibited": ["calories", "carbs", "fat", "kcal", "macros", "nutrition", "protein"],
     }
@@ -136,14 +184,146 @@ def _validate_source_ref(value, *, item_index: int) -> str:
     return value
 
 
+def _parse_semantic_attestation(
+    value,
+    *,
+    item_index: int,
+    input_phrase: str,
+    relation: str,
+) -> SemanticAttestation:
+    fields = {
+        "version",
+        "relation",
+        "raw_identity",
+        "selected_identity",
+        "same_food_type",
+        "rationale",
+        "confidence",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise _invalid_plan(
+            "semantic_attestation contains missing or unknown fields",
+            item_index=item_index,
+        )
+    if (
+        isinstance(value["version"], bool)
+        or value["version"] != SEMANTIC_ATTESTATION_VERSION
+    ):
+        raise _invalid_plan(
+            f"semantic_attestation version must be {SEMANTIC_ATTESTATION_VERSION}",
+            item_index=item_index,
+        )
+    if value["relation"] != relation:
+        raise _invalid_plan(
+            "semantic_attestation relation must match selection relation",
+            item_index=item_index,
+        )
+    raw_identity = value["raw_identity"]
+    selected_identity = value["selected_identity"]
+    for field_name, identity in (
+        ("raw_identity", raw_identity),
+        ("selected_identity", selected_identity),
+    ):
+        if (
+            not isinstance(identity, str)
+            or not identity.strip()
+            or identity != identity.strip()
+            or len(identity) > 500
+        ):
+            raise _invalid_plan(
+                f"semantic_attestation {field_name} must be a nonempty trimmed string",
+                item_index=item_index,
+            )
+    expected_raw_identity = _identity_query(input_phrase)
+    if raw_identity != expected_raw_identity:
+        raise _invalid_plan(
+            "semantic_attestation raw_identity must match the parsed raw input identity",
+            item_index=item_index,
+        )
+    if value["same_food_type"] is not True:
+        raise _invalid_plan(
+            "semantic_attestation must explicitly assert same_food_type true",
+            item_index=item_index,
+        )
+    rationale = value["rationale"]
+    if (
+        not isinstance(rationale, str)
+        or not rationale.strip()
+        or rationale != rationale.strip()
+        or len(rationale) > 500
+    ):
+        raise _invalid_plan(
+            "semantic_attestation rationale must be a concise trimmed string",
+            item_index=item_index,
+        )
+    confidence = value["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise _invalid_plan(
+            "semantic_attestation confidence must be a finite number from 0 to 1",
+            item_index=item_index,
+        )
+    confidence = float(confidence)
+    if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise _invalid_plan(
+            "semantic_attestation confidence must be a finite number from 0 to 1",
+            item_index=item_index,
+        )
+    return SemanticAttestation(
+        version=SEMANTIC_ATTESTATION_VERSION,
+        relation=relation,
+        raw_identity=raw_identity,
+        selected_identity=selected_identity,
+        same_food_type=True,
+        rationale=rationale,
+        confidence=confidence,
+    )
+
+
+def _parse_brand_dismissals(value, *, item_index: int) -> tuple[BrandCandidateDismissal, ...]:
+    if not isinstance(value, list):
+        raise _invalid_plan(
+            "dismissed_brand_candidates must be an array",
+            item_index=item_index,
+        )
+    if len(value) > 100:
+        raise _invalid_plan(
+            "dismissed_brand_candidates supports at most 100 entries",
+            item_index=item_index,
+        )
+    parsed = []
+    seen: set[str] = set()
+    for dismissal in value:
+        if not isinstance(dismissal, dict) or set(dismissal) != {"source_ref", "reason"}:
+            raise _invalid_plan(
+                "Each brand dismissal requires only source_ref and reason",
+                item_index=item_index,
+            )
+        source_ref = _validate_source_ref(dismissal["source_ref"], item_index=item_index)
+        reason = dismissal["reason"]
+        if not isinstance(reason, str) or reason not in BRAND_DISMISSAL_REASONS:
+            raise _invalid_plan(
+                "Brand dismissal reason is not supported",
+                item_index=item_index,
+            )
+        if source_ref in seen:
+            raise _invalid_plan(
+                "A brand candidate may be dismissed only once",
+                item_index=item_index,
+            )
+        seen.add(source_ref)
+        parsed.append(BrandCandidateDismissal(source_ref=source_ref, reason=reason))
+    return tuple(parsed)
+
+
 def _parse_selection(
     value,
     *,
     item_index: int,
+    input_phrase: str,
     version: int,
     accuracy_profile: str | None,
 ) -> AgentSelection:
-    base = {"source_ref", "relation", "assumption"}
+    base = {"source_ref", "relation", "assumption", "semantic_attestation"}
     if not isinstance(value, dict) or not base <= set(value):
         raise _invalid_plan(
             "selection is missing required source_ref, relation, or assumption",
@@ -159,16 +339,16 @@ def _parse_selection(
             f"selection relation must be one of {', '.join(SELECTION_RELATIONS)}",
             item_index=item_index,
         )
-    if version == LEGACY_AGENT_PLAN_VERSION and (
-        relation != AGENT_SELECTION_RELATION or set(value) != base
-    ):
+    if version == LEGACY_AGENT_PLAN_VERSION and relation != AGENT_SELECTION_RELATION:
         raise _invalid_plan(
-            "Version 1 selections contain only the semantic_equivalent relation",
+            "Version 1 selections support only the semantic_equivalent relation",
             item_index=item_index,
         )
     allowed = set(base)
     if relation in {BRANDED_GENERIC_RELATION, PROBABLE_BRAND_RELATION}:
         allowed.add("discovery_receipt")
+        if relation == BRANDED_GENERIC_RELATION:
+            allowed.add("dismissed_brand_candidates")
         if accuracy_profile == "balanced" and relation == BRANDED_GENERIC_RELATION:
             allowed.add("risk_disposition")
     if set(value) != allowed:
@@ -205,12 +385,33 @@ def _parse_selection(
             "branded generic fallback assumption must explicitly say the brand/SKU was not exact",
             item_index=item_index,
         )
+    semantic_attestation = _parse_semantic_attestation(
+        value["semantic_attestation"],
+        item_index=item_index,
+        input_phrase=input_phrase,
+        relation=relation,
+    )
+    dismissals = (
+        _parse_brand_dismissals(value["dismissed_brand_candidates"], item_index=item_index)
+        if relation == BRANDED_GENERIC_RELATION
+        else ()
+    )
+    if accuracy_profile == "exact" and relation in {
+        BRANDED_GENERIC_RELATION,
+        PROBABLE_BRAND_RELATION,
+    }:
+        raise _invalid_plan(
+            "Exact profile accepts only exact identity evidence for branded input",
+            item_index=item_index,
+        )
     return AgentSelection(
         source_ref=_validate_source_ref(source_ref, item_index=item_index),
         relation=relation,
         assumption=assumption,
+        semantic_attestation=semantic_attestation,
         discovery_receipt=receipt,
         risk_disposition=risk_disposition,
+        dismissed_brand_candidates=dismissals,
     )
 
 
@@ -289,6 +490,7 @@ def parse_agent_plan(value: str) -> AgentPlan:
             _parse_selection(
                 entry["selection"],
                 item_index=index,
+                input_phrase=input_phrase,
                 version=version,
                 accuracy_profile=accuracy_profile,
             )
@@ -375,10 +577,6 @@ def _generic_identity_is_safe(query: str, food: Food) -> bool:
     return bool(query_tokens) and candidate_tokens == query_tokens
 
 
-def _semantic_floor_has_identity_overlap(query: str, food: Food) -> bool:
-    return bool(set(_ordered_tokens(query)) & set(_ordered_tokens(_source_name(food))))
-
-
 def _source_supports_agent_generic(food: Food) -> bool:
     if food.brand:
         return False
@@ -395,7 +593,7 @@ def _source_supports_agent_generic(food: Food) -> bool:
 
 def _candidate_status(query: str, food: Food) -> str:
     if food.brand and _brand_matches_query(food, query):
-        return "probable_brand_match"
+        return "brand_candidate_requires_semantic_assessment"
     if food.brand or _query_has_sku(query):
         return "pending_capture_required"
     return (
@@ -420,6 +618,7 @@ def _candidate_dict(query: str, food: Food) -> dict:
         "provider": food.source,
         "source_id": source_id,
         "canonical_name": food.name,
+        "semantic_identity": _source_name(food),
         "type": food.provider_data_type,
         "category": food.categories[0] if food.categories else None,
         "brand": food.brand,
@@ -541,10 +740,10 @@ def discover_candidates(
         if ok_count
         else "unavailable"
     )
-    probable = [
+    brand_candidates = [
         candidate
         for candidate in candidates
-        if candidate["candidate_status"] == "probable_brand_match"
+        if candidate["candidate_status"] == "brand_candidate_requires_semantic_assessment"
     ]
     evidence = {
         "version": AGENT_PLAN_VERSION,
@@ -555,11 +754,11 @@ def discover_candidates(
         "text_search": {
             "status": search_status,
             "brand_match_status": (
-                "usable_brand_candidate"
-                if probable
+                "brand_candidates_require_semantic_assessment"
+                if brand_candidates
                 else "search_unavailable"
                 if search_status == "unavailable"
-                else "no_usable_brand_match"
+                else "no_brand_candidates"
             ),
             "providers": provider_status,
         },
@@ -697,11 +896,12 @@ def _refetch_source(
             required_status = "agent_selection_eligible"
         else:
             status = _candidate_status(query, food)
-            required_status = "probable_brand_match"
+            required_status = "brand_candidate_requires_semantic_assessment"
     if status != required_status:
         raise NomnomError(
             "agent_source_identity_rejected",
-            "The selected source changes food type or lacks exact identity evidence",
+            "The selected source is not structurally eligible for this relation "
+            "or lacks exact identity evidence",
             details={
                 "source_ref": source_ref,
                 "candidate_status": status,
@@ -712,15 +912,18 @@ def _refetch_source(
                 else "select_safe_candidate_or_pending",
             },
         )
-    if item.selection is not None and not _semantic_floor_has_identity_overlap(query, food):
+    if (
+        item.selection is not None
+        and item.selection.semantic_attestation.selected_identity != _source_name(food)
+    ):
         raise NomnomError(
-            "agent_semantic_type_mismatch",
-            "The selected source has no deterministic food-identity overlap with the raw input",
+            "agent_semantic_attestation_mismatch",
+            "The selected source identity does not match the semantic attestation",
             details={
                 "source_ref": source_ref,
                 "raw_input": item.input,
+                "attested_identity": item.selection.semantic_attestation.selected_identity,
                 "returned_name": food.name,
-                "hard_failure": True,
             },
         )
     if item.selection is not None and item.selection.relation == BRANDED_GENERIC_RELATION:
@@ -788,7 +991,7 @@ def _revalidate_discovery(
     required_status = (
         "agent_selection_eligible"
         if selection.relation == BRANDED_GENERIC_RELATION
-        else "probable_brand_match"
+        else "brand_candidate_requires_semantic_assessment"
     )
     if candidate is None or candidate["candidate_status"] != required_status:
         raise NomnomError(
@@ -802,19 +1005,27 @@ def _revalidate_discovery(
                 ),
             },
         )
-    if (
-        selection.relation == BRANDED_GENERIC_RELATION
-        and discovery["text_search"]["brand_match_status"] == "usable_brand_candidate"
-    ):
-        raise NomnomError(
-            "branded_fallback_not_available",
-            "A usable probable brand text candidate must be handled before generic fallback",
-            details={
-                "source_ref": selection.source_ref,
-                "text_search": discovery["text_search"],
-                "action": "select_probable_brand_match_or_pending",
-            },
-        )
+    if selection.relation == BRANDED_GENERIC_RELATION:
+        brand_candidates = {
+            candidate["source_ref"]: candidate
+            for candidate in discovery["candidates"]
+            if candidate["candidate_status"]
+            == "brand_candidate_requires_semantic_assessment"
+        }
+        dismissed = {
+            dismissal.source_ref: dismissal.reason
+            for dismissal in selection.dismissed_brand_candidates
+        }
+        if set(dismissed) != set(brand_candidates):
+            raise NomnomError(
+                "agent_brand_dismissal_evidence_invalid",
+                "Branded generic fallback must dismiss every discovered brand candidate",
+                details={
+                    "source_ref": selection.source_ref,
+                    "required_source_refs": sorted(brand_candidates),
+                    "provided_source_refs": sorted(dismissed),
+                },
+            )
     return discovery
 
 
@@ -837,6 +1048,25 @@ def resolve_agent_plan(
                 "active_profile": configured_profile,
                 "action": "Run discovery and intake with the active configured profile.",
             },
+        )
+    if accuracy_profile == "exact" and any(
+        item.portion_estimate is not None for item in plan.items
+    ):
+        raise NomnomError(
+            "accuracy_profile_exact_required",
+            "Exact profile requires measured or explicit grams, not a fuzzy portion estimate",
+            details={"accuracy_profile": accuracy_profile, "action": "provide_measured_grams"},
+        )
+    if accuracy_profile == "exact" and any(
+        item.selection is not None
+        and item.selection.relation
+        in {BRANDED_GENERIC_RELATION, PROBABLE_BRAND_RELATION}
+        for item in plan.items
+    ):
+        raise NomnomError(
+            "accuracy_profile_exact_required",
+            "Exact profile requires barcode, label, pin, or other exact brand evidence",
+            details={"accuracy_profile": accuracy_profile, "action": "photo_or_barcode"},
         )
     off = off_client or OpenFoodFactsClient()
     usda = usda_client or USDAClient()
@@ -863,21 +1093,6 @@ def resolve_agent_plan(
                 )
             items.append(pending_item)
             continue
-        if (
-            accuracy_profile == "exact"
-            and planned.selection is not None
-            and planned.selection.relation == BRANDED_GENERIC_RELATION
-        ):
-            raise NomnomError(
-                "accuracy_profile_exact_required",
-                "Exact profile requires barcode, label, pin, or other exact brand evidence",
-                details={
-                    "accuracy_profile": accuracy_profile,
-                    "source_ref": planned.selection.source_ref,
-                    "action": "photo_or_barcode",
-                },
-            )
-
         discovery = _revalidate_discovery(
             planned,
             accuracy_profile=accuracy_profile,
@@ -925,6 +1140,9 @@ def resolve_agent_plan(
                     "selection_mode": selection_mode,
                     "selection_relation": planned.selection.relation,
                     "selection_assumption": planned.selection.assumption,
+                    "semantic_attestation": (
+                        planned.selection.semantic_attestation.as_dict()
+                    ),
                     "selected_source_ref": planned.selection.source_ref,
                     "source_canonical_name": food.name,
                 }
@@ -936,6 +1154,11 @@ def resolve_agent_plan(
                         "text_search": discovery["text_search"],
                     }
                 )
+            if planned.selection.dismissed_brand_candidates:
+                resolved_item["dismissed_brand_candidates"] = [
+                    dismissal.as_dict()
+                    for dismissal in planned.selection.dismissed_brand_candidates
+                ]
         items.append(resolved_item)
 
     resolved_items = [item for item in items if item["status"] == "resolved"]

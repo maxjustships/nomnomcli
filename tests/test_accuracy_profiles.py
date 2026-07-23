@@ -4,7 +4,12 @@ import json
 
 import pytest
 
-from nomnomcli.agent import discover_candidates, parse_agent_plan, resolve_agent_plan
+from nomnomcli.agent import (
+    _identity_query,
+    discover_candidates,
+    parse_agent_plan,
+    resolve_agent_plan,
+)
 from nomnomcli.config import ProviderConfig
 from nomnomcli.errors import NomnomError
 from nomnomcli.models import Food
@@ -59,6 +64,29 @@ class ReplayOFF:
         return self.food
 
 
+class HarrisCheeseOFF:
+    def __init__(self):
+        self.food = Food(
+            name="cheese — Harris",
+            kcal=350,
+            protein=24,
+            fat=28,
+            carbs=2,
+            source="openfoodfacts",
+            barcode="0200000012999",
+            source_id="0200000012999",
+            provenance="openfoodfacts",
+            brand="Harris",
+            categories=("cheese",),
+        )
+
+    def search(self, query, page_size=10):
+        return [self.food]
+
+    def product_by_barcode(self, barcode):
+        return self.food
+
+
 class EmptyUSDA:
     def candidates(self, query, api_key):
         return []
@@ -89,7 +117,27 @@ def profile_config(tmp_path, profile):
     )
 
 
-def branded_plan(profile, receipt, *, risk=False, source_ref="usda:7001"):
+def attestation(relation, raw_identity, selected_identity):
+    return {
+        "version": 1,
+        "relation": relation,
+        "raw_identity": raw_identity,
+        "selected_identity": selected_identity,
+        "same_food_type": True,
+        "rationale": "Synthetic actor attestation for the same food type.",
+        "confidence": 0.9,
+    }
+
+
+def branded_plan(
+    profile,
+    receipt,
+    *,
+    risk=False,
+    source_ref="usda:7001",
+    dismissals=None,
+    raw_input="Harris sandwich bread two slices",
+):
     selection = {
         "source_ref": source_ref,
         "relation": "branded_same_type_generic",
@@ -97,7 +145,13 @@ def branded_plan(profile, receipt, *, risk=False, source_ref="usda:7001"):
             "Harris brand/SKU was not exact; used source-backed generic sandwich bread "
             "after provider text discovery."
         ),
+        "semantic_attestation": attestation(
+            "branded_same_type_generic",
+            _identity_query(raw_input),
+            "sandwich bread",
+        ),
         "discovery_receipt": receipt,
+        "dismissed_brand_candidates": dismissals or [],
     }
     if risk:
         selection["risk_disposition"] = "material_risk_accepted"
@@ -106,7 +160,7 @@ def branded_plan(profile, receipt, *, risk=False, source_ref="usda:7001"):
         "accuracy_profile": profile,
         "items": [
             {
-                "input": "Harris sandwich bread two slices",
+                "input": raw_input,
                 "grams": 56,
                 "selection": selection,
             }
@@ -151,13 +205,79 @@ def test_practical_branded_fallback_revalidates_search_and_persists_evidence(tmp
     assert item["resolution_mode"] == "generic_proxy"
     assert item["provenance"] == "agent_selected"
     assert item["accuracy_profile"] == "practical"
-    assert item["text_search"]["brand_match_status"] == "no_usable_brand_match"
+    assert item["text_search"]["brand_match_status"] == "no_brand_candidates"
     assert item["discovery_receipt"] == discovery["discovery_receipt"]
     assert usda.searches == [
         "Harris sandwich bread two slices",
         "Harris sandwich bread two slices",
     ]
     assert usda.refetches == [7001]
+
+
+def test_harris_cheese_brand_candidate_is_dismissed_for_generic_bread(tmp_path):
+    config = profile_config(tmp_path, "practical")
+    usda = ReplayUSDA()
+    off = HarrisCheeseOFF()
+    raw = "Harris sandwich bread two slices"
+    discovery = discover_candidates(
+        raw,
+        provider_config=config,
+        off_client=off,
+        usda_client=usda,
+    )
+    dismissal = {
+        "source_ref": "off:0200000012999",
+        "reason": "different_food_type",
+    }
+    parsed = parse_agent_plan(
+        json.dumps(
+            branded_plan(
+                "practical",
+                discovery["discovery_receipt"],
+                dismissals=[dismissal],
+            )
+        )
+    )
+
+    result = resolve_agent_plan(
+        parsed,
+        provider_config=config,
+        off_client=off,
+        usda_client=usda,
+    )
+
+    assert (
+        discovery["text_search"]["brand_match_status"]
+        == "brand_candidates_require_semantic_assessment"
+    )
+    assert result["items"][0]["dismissed_brand_candidates"] == [dismissal]
+    assert result["items"][0]["name"] == "sandwich bread"
+
+
+def test_missing_brand_candidate_dismissal_rejects_before_refetch(tmp_path):
+    config = profile_config(tmp_path, "practical")
+    usda = ReplayUSDA()
+    off = HarrisCheeseOFF()
+    discovery = discover_candidates(
+        "Harris sandwich bread two slices",
+        provider_config=config,
+        off_client=off,
+        usda_client=usda,
+    )
+    parsed = parse_agent_plan(
+        json.dumps(branded_plan("practical", discovery["discovery_receipt"]))
+    )
+
+    with pytest.raises(NomnomError) as caught:
+        resolve_agent_plan(
+            parsed,
+            provider_config=config,
+            off_client=off,
+            usda_client=usda,
+        )
+
+    assert caught.value.code == "agent_brand_dismissal_evidence_invalid"
+    assert usda.refetches == []
 
 
 def test_branded_fallback_rejects_forged_or_stale_discovery_receipt(tmp_path):
@@ -189,15 +309,11 @@ def test_practical_branded_fallback_records_partial_provider_outage(tmp_path):
     parsed = parse_agent_plan(
         json.dumps(
             {
-                **branded_plan("practical", discovery["discovery_receipt"]),
-                "items": [
-                    {
-                        **branded_plan(
-                            "practical", discovery["discovery_receipt"]
-                        )["items"][0],
-                        "input": "Harris sandwich bread 80 g",
-                    }
-                ],
+                **branded_plan(
+                    "practical",
+                    discovery["discovery_receipt"],
+                    raw_input="Harris sandwich bread 80 g",
+                ),
             }
         )
     )
@@ -212,7 +328,7 @@ def test_practical_branded_fallback_records_partial_provider_outage(tmp_path):
     search = result["items"][0]["text_search"]
     assert search["status"] == "partial"
     assert search["providers"]["openfoodfacts"]["status"] == "unavailable"
-    assert search["brand_match_status"] == "no_usable_brand_match"
+    assert search["brand_match_status"] == "no_brand_candidates"
 
 
 def test_provider_text_brand_match_remains_probable_not_exact(tmp_path):
@@ -238,6 +354,9 @@ def test_provider_text_brand_match_remains_probable_not_exact(tmp_path):
                     "relation": "probable_brand_match",
                     "assumption": (
                         "Provider text match is probable only; barcode was not supplied."
+                    ),
+                    "semantic_attestation": attestation(
+                        "probable_brand_match", "Harris sandwich bread", "sandwich bread"
                     ),
                     "discovery_receipt": discovery["discovery_receipt"],
                 },
@@ -292,50 +411,39 @@ def test_balanced_requires_material_risk_and_exact_forbids_branded_fallback(tmp_
         off_client=EmptyOFF(),
         usda_client=usda,
     )
-    exact_plan = parse_agent_plan(
-        json.dumps(branded_plan("exact", exact_discovery["discovery_receipt"]))
-    )
     searches_before_exact_intake = list(usda.searches)
     refetches_before_exact_intake = list(usda.refetches)
     with pytest.raises(NomnomError) as forbidden:
-        resolve_agent_plan(
-            exact_plan,
-            provider_config=exact,
-            off_client=EmptyOFF(),
-            usda_client=usda,
+        parse_agent_plan(
+            json.dumps(branded_plan("exact", exact_discovery["discovery_receipt"]))
         )
-    assert forbidden.value.code == "accuracy_profile_exact_required"
+    assert forbidden.value.code == "agent_plan_invalid"
     assert usda.searches == searches_before_exact_intake
     assert usda.refetches == refetches_before_exact_intake
 
 
-def test_semantic_type_floor_rejects_egg_to_cheese_before_nutrition(tmp_path):
-    config = profile_config(tmp_path, "practical")
-    cheese = ReplayUSDA(generic_food("cheese", "7002"))
+def test_selection_without_semantic_attestation_is_rejected_before_provider_access():
+    cheese = ReplayUSDA(generic_food("cooked cheese", "7002"))
     legacy_plan = {
         "version": 1,
         "items": [
             {
-                "input": "egg 50 g",
+                "input": "50 g cooked egg",
                 "grams": 50,
                 "selection": {
                     "source_ref": "usda:7002",
                     "relation": "semantic_equivalent",
-                    "assumption": "Incorrect external semantic proposal.",
+                    "assumption": "Shared modifier is not semantic evidence.",
                 },
             }
         ],
     }
 
     with pytest.raises(NomnomError) as caught:
-        resolve_agent_plan(
-            parse_agent_plan(json.dumps(legacy_plan)),
-            provider_config=config,
-            off_client=EmptyOFF(),
-            usda_client=cheese,
-        )
+        parse_agent_plan(json.dumps(legacy_plan))
 
-    assert caught.value.code == "agent_semantic_type_mismatch"
+    assert caught.value.code == "agent_plan_invalid"
+    assert cheese.refetches == []
 
 
 def test_profile_defaults_preserve_legacy_upgrade_seams(tmp_path):
@@ -407,3 +515,36 @@ def test_exact_profile_rejects_fuzzy_portion_plan():
         parse_agent_plan(json.dumps(payload))
 
     assert caught.value.code == "agent_plan_invalid"
+
+
+def test_active_exact_profile_rejects_legacy_v1_estimate_before_refetch(tmp_path):
+    payload = {
+        "version": 1,
+        "items": [{"input": "one egg", "source_ref": "usda:7003"}],
+        "portion_estimates": {
+            "items": [
+                {
+                    "item_index": 0,
+                    "input": "one egg",
+                    "grams": 50,
+                    "lower_grams": 40,
+                    "upper_grams": 60,
+                    "confidence": 0.7,
+                    "method": "agent_estimate",
+                    "assumption": "Legacy external estimate.",
+                }
+            ]
+        },
+    }
+    usda = ReplayUSDA(generic_food("egg", "7003"))
+
+    with pytest.raises(NomnomError) as caught:
+        resolve_agent_plan(
+            parse_agent_plan(json.dumps(payload)),
+            provider_config=profile_config(tmp_path, "exact"),
+            off_client=EmptyOFF(),
+            usda_client=usda,
+        )
+
+    assert caught.value.code == "accuracy_profile_exact_required"
+    assert usda.refetches == []

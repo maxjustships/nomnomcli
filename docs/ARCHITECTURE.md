@@ -54,8 +54,8 @@ Identity modes have different guarantees:
   It remains approximate, never becomes `exact_product`, and carries source and assumption.
 
 Semantic food type is the absolute floor in every profile. `practical` estimates fuzzy portions
-through an explicit agent estimate and, after real text discovery finds no usable brand candidate,
-permits an explicit source-backed same-type branded generic fallback. `balanced` is the recommended
+through an explicit agent estimate and, after real text discovery plus explicit disposition of
+every brand candidate, permits an attested source-backed same-type branded generic fallback. `balanced` is the recommended
 new-user default and requires an explicit material-risk disposition for that fallback. `exact`
 requires measured/explicit fuzzy portions and exact brand evidence. No profile permits a different
 food type: never silently substitute one. No profile permits silent fallback or reuse of a generic
@@ -87,15 +87,21 @@ The approved agent-first runtime contract has two CLI phases:
    canonical SHA-256 discovery receipt, and opaque `off:BARCODE` or `usda:FDC_ID` references, never
    nutrition facts for the agent to copy into a plan.
    `agent_selection_eligible` identifies source-unbranded generic records that an external agent
-   may assess semantically; `pending_capture_required` and `identity_rejected` are not selectable.
+   may assess semantically. `brand_candidate_requires_semantic_assessment` identifies a same-brand
+   text candidate but does not establish product or food-type identity;
+   `pending_capture_required` and `identity_rejected` are not selectable.
 2. `nomnom agent intake --plan ... --json` accepts a strict version-2 plan containing the active
    accuracy profile and only raw item
    input, quantity or the existing external portion estimate, and exactly one direct source ref,
    external selection, or explicit pending-capture state. A selection contains only a source ref,
    `relation=semantic_equivalent`, `relation=probable_brand_match`, or the distinct
-   `relation=branded_same_type_generic`, plus required relation-specific evidence and a
-   human-readable assumption. The CLI re-runs discovery for branded relations, verifies the
-   input/profile-bound receipt and candidate eligibility, re-fetches the
+   `relation=branded_same_type_generic`, a human-readable assumption, and a strict versioned
+   semantic attestation binding the relation, raw identity, selected provider identity,
+   `same_food_type=true`, rationale, and bounded confidence. This is an external semantic judgment,
+   not a CLI claim that token overlap proves food type. A branded generic fallback also dismisses
+   every unselected brand candidate by receipt-bound source ref and structured reason. The CLI
+   re-runs discovery for branded relations, verifies the input/profile-bound receipt, candidate
+   eligibility, and complete dismissal set, re-fetches the
    exact ref, validates source integrity and complete finite nutrition, applies generic policy,
    calculates totals, and writes one journal event.
 
@@ -104,9 +110,10 @@ Discovery never reads or writes the user cache. Commit never trusts cached nutri
 ranking: a source reference is re-fetched through its provider adapter. An accepted selection must
 be a source-unbranded generic record and is journaled as `selection_mode=agent_generic`,
 `resolution_mode=generic_proxy`, and `provenance=agent_selected`, with raw input, canonical source
-name/ref, relation, assumption, accuracy profile, receipt, and deterministic search/provider status.
-The older version-1 plan and direct `source_ref` form retain strict compatibility and literal
-identity matching. A same-type branded fallback is `selection_mode=agent_branded_generic_fallback`
+name/ref, relation, assumption, semantic attestation, accuracy profile, receipt, dismissals, and
+deterministic search/provider status. The older version-1 envelope remains accepted, but selections
+require the same attestation; direct `source_ref` retains strict literal identity matching. A
+same-type branded fallback is `selection_mode=agent_branded_generic_fallback`
 and remains `generic_proxy`; a text-only brand match is
 `selection_mode=agent_probable_brand_match` and `probable_product`. Neither becomes exact without
 barcode/label evidence. Pending output includes stable event/item identifiers so correction remains

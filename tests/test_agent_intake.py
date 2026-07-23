@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 import requests
 
+from nomnomcli.agent import _identity_query
 from nomnomcli.cli import main
 from nomnomcli.db import connect
 from nomnomcli.off import OFF_PRODUCT_URL, OFF_SEARCH_URL
@@ -231,13 +232,32 @@ def pending(input_phrase):
     }
 
 
+SELECTED_IDENTITIES = {
+    "usda:105": "tomatoes, red, ripe, raw, year round average",
+    "usda:205": "milk, whole, fluid, 3.25% milkfat",
+    "usda:206": "whole milk",
+    "usda:207": "milk, fluid",
+    "off:0123456789012": "sandwich bread",
+}
+
+
 def selected(input_phrase, source_ref, assumption, *, grams=None):
+    relation = "semantic_equivalent"
     item = {
         "input": input_phrase,
         "selection": {
             "source_ref": source_ref,
-            "relation": "semantic_equivalent",
+            "relation": relation,
             "assumption": assumption,
+            "semantic_attestation": {
+                "version": 1,
+                "relation": relation,
+                "raw_identity": _identity_query(input_phrase),
+                "selected_identity": SELECTED_IDENTITIES[source_ref],
+                "same_food_type": True,
+                "rationale": "Synthetic actor selected the same food type.",
+                "confidence": 0.9,
+            },
         },
     }
     if grams is not None:
@@ -269,6 +289,7 @@ def test_agent_candidates_are_read_only_deterministic_and_type_safe(
         "candidate_status": "agent_selection_eligible",
         "direct_source_ref_eligible": True,
         "provider": "usda",
+        "semantic_identity": "raw tomato",
         "source_id": "101",
         "source_ref": "usda:101",
         "type": "Foundation",
@@ -685,7 +706,10 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
     )
     assert discovery_code == 0
     assert discovery["candidates"][0]["source_ref"] == "off:0123456789012"
-    assert discovery["candidates"][0]["candidate_status"] == "probable_brand_match"
+    assert (
+        discovery["candidates"][0]["candidate_status"]
+        == "brand_candidate_requires_semantic_assessment"
+    )
     assert not user_db.exists()
 
     code, error, _ = invoke_json(
@@ -710,6 +734,153 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
     assert error["error"]["details"]["action"] == "select_safe_candidate_or_pending"
     with connect(user_db) as connection:
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+
+
+def test_exact_profile_rejects_probable_brand_plan_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_ACCURACY_PROFILE", "exact")
+    raw = "Harry's sandwich bread 80 g"
+    discovery_code, discovery, _ = invoke_json(
+        ["agent", "candidates", "--input", raw],
+        capsys,
+    )
+    assert discovery_code == 0
+    relation = "probable_brand_match"
+    payload = {
+        "version": 2,
+        "accuracy_profile": "exact",
+        "items": [
+            {
+                "input": raw,
+                "grams": 80,
+                "selection": {
+                    "source_ref": "off:0123456789012",
+                    "relation": relation,
+                    "assumption": "Text-only brand candidate is not exact.",
+                    "semantic_attestation": {
+                        "version": 1,
+                        "relation": relation,
+                        "raw_identity": "Harry's sandwich bread",
+                        "selected_identity": "sandwich bread",
+                        "same_food_type": True,
+                        "rationale": "Synthetic same-food-type assessment.",
+                        "confidence": 0.9,
+                    },
+                    "discovery_receipt": discovery["discovery_receipt"],
+                },
+            }
+        ],
+    }
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", json.dumps(payload)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
+
+
+def test_exact_profile_rejects_legacy_estimate_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_ACCURACY_PROFILE", "exact")
+    payload = plan(
+        {"input": "one tomato", "source_ref": "usda:101"},
+        portion_estimates=[estimate(0, "one tomato", 60)],
+    )
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", payload],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "accuracy_profile_exact_required"
+    assert not user_db.exists()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown_field"])
+def test_semantic_attestation_schema_errors_write_nothing(
+    mutation, user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    item = selected(
+        "raw tomato 60 g",
+        "usda:105",
+        "Synthetic semantic selection.",
+        grams=60,
+    )
+    if mutation == "missing":
+        item["selection"].pop("semantic_attestation")
+    else:
+        item["selection"]["semantic_attestation"]["nutrition"] = {"kcal": 1}
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", plan(item)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
+
+
+def test_missing_brand_dismissal_field_writes_nothing(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    raw = "Harry's sandwich bread 80 g"
+    discovery_code, discovery, _ = invoke_json(
+        ["agent", "candidates", "--input", raw],
+        capsys,
+    )
+    assert discovery_code == 0
+    assert any(
+        candidate["candidate_status"]
+        == "brand_candidate_requires_semantic_assessment"
+        for candidate in discovery["candidates"]
+    )
+    relation = "branded_same_type_generic"
+    payload = {
+        "version": 2,
+        "accuracy_profile": "balanced",
+        "items": [
+            {
+                "input": raw,
+                "grams": 80,
+                "selection": {
+                    "source_ref": "usda:301",
+                    "relation": relation,
+                    "assumption": "Harry's brand/SKU was not exact; used generic bread.",
+                    "semantic_attestation": {
+                        "version": 1,
+                        "relation": relation,
+                        "raw_identity": "Harry's sandwich bread",
+                        "selected_identity": "sandwich bread",
+                        "same_food_type": True,
+                        "rationale": "Synthetic same-food-type assessment.",
+                        "confidence": 0.9,
+                    },
+                    "discovery_receipt": discovery["discovery_receipt"],
+                    "risk_disposition": "material_risk_accepted",
+                },
+            }
+        ],
+    }
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", json.dumps(payload)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
 
 
 def test_agent_intake_rejects_agent_selected_branded_usda_source_without_write(

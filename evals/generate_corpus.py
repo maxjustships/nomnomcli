@@ -189,7 +189,7 @@ def fuzzy_cases(start: int) -> list[dict]:
         ("a small scoop of hummus", "hummus"),
         ("one fist of pasta", "pasta"),
         ("a few walnuts", "walnuts"),
-        ("one ladle of soup", "vegetable soup"),
+        ("one ladle of soup", "soup"),
         ("a palm of chicken", "chicken"),
         ("half an avocado", "avocado"),
         ("two bites of cheesecake", "cheesecake"),
@@ -199,7 +199,7 @@ def fuzzy_cases(start: int) -> list[dict]:
         ("a spoonful of peanut butter", "peanut butter"),
         ("one mug of cocoa", "cocoa"),
         ("a small handful of raisins", "raisins"),
-        ("half a wrap", "vegetable wrap"),
+        ("half a wrap", "wrap"),
         ("one piece of cornbread", "cornbread"),
         ("a large serving of couscous", "couscous"),
     ]
@@ -231,7 +231,7 @@ def fuzzy_cases(start: int) -> list[dict]:
 def branded_cases(start: int) -> list[dict]:
     specs = [
         ("Harris sandwich bread", "sandwich bread", "Harris"),
-        ("North Farm yogurt", "plain yogurt", "North Farm"),
+        ("North Farm yogurt", "yogurt", "North Farm"),
         ("Blue Peak granola", "granola", "Blue Peak"),
         ("River oat milk", "oat milk", "River"),
         ("Sun Field tofu", "tofu", "Sun Field"),
@@ -255,7 +255,15 @@ def branded_cases(start: int) -> list[dict]:
     for index, (raw_name, identity, brand) in enumerate(specs):
         source_id = start + index
         item = f"{raw_name} 80 g"
-        if index < 5:
+        if index == 0:
+            barcode = f"02000000{source_id:05d}"[-13:]
+            off = [off_record("cheese", barcode, brand)]
+            usda = [usda_record(identity, source_id)]
+            refs = [f"usda:{source_id}"]
+            modes = ["generic_proxy"]
+            profile = "practical"
+            off_status = 200
+        elif index < 5:
             barcode = f"02000000{source_id:05d}"[-13:]
             off = [off_record(identity, barcode, brand)]
             usda = []
@@ -377,20 +385,21 @@ def cooking_cases(start: int) -> list[dict]:
 
 def ambiguity_cases(start: int) -> list[dict]:
     cases = []
-    right = ["egg", "milk", "tomato", "bread", "yogurt", "tofu"]
-    wrong = [
-        "cheese",
-        "milk crackers",
-        "tomato powder",
-        "bread candy",
-        "yogurt powder",
-        "tofu cake",
+    specs = [
+        ("cooked egg", "50 g cooked egg", ["cooked cheese"]),
+        ("milk", "60 g milk", ["chocolate milk", "condensed milk"]),
+        ("tomato", "60 g tomato", ["tomato powder"]),
+        ("bread", "60 g bread", ["bread crumbs", "bread crackers"]),
+        ("yogurt", "60 g yogurt", ["yogurt powder"]),
+        ("tofu", "60 g tofu", ["tofu cake"]),
     ]
-    for index, (identity, adversary) in enumerate(zip(right, wrong, strict=True)):
-        source_id = start + index * 2
-        item = f"60 g {identity}"
+    for index, (identity, item, adversaries) in enumerate(specs):
+        source_id = start + index * 10
         records = [
-            usda_record(adversary, source_id + 1),
+            *[
+                usda_record(adversary, source_id + offset + 1)
+                for offset, adversary in enumerate(adversaries)
+            ],
             usda_record(identity, source_id),
         ]
         cases.append(
@@ -404,13 +413,13 @@ def ambiguity_cases(start: int) -> list[dict]:
                 allowed_refs=[f"usda:{source_id}"],
                 allowed_identities=[identity],
                 allowed_modes=["generic_proxy"],
-                forbidden_identities=[adversary],
-                forbidden_tokens=[adversary],
-                envelopes=[[60, 60]],
+                forbidden_identities=adversaries,
+                forbidden_tokens=adversaries,
+                envelopes=[[50, 50]] if index == 0 else [[60, 60]],
             )
         )
     for index in range(6, 8):
-        source_id = start + index * 2
+        source_id = start + index * 10
         identity = ("egg", "milk")[index - 6]
         adversary = ("cheese", "crackers")[index - 6]
         item = f"one uncertain {identity}"
@@ -433,7 +442,7 @@ def ambiguity_cases(start: int) -> list[dict]:
             )
         )
     for index in range(8, 10):
-        source_id = start + index * 2
+        source_id = start + index * 10
         identity = ("lentils", "rice")[index - 8]
         item = f"70 g {identity}"
         search_record = usda_record(identity, source_id)

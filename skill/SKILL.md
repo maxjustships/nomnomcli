@@ -56,10 +56,10 @@ Follow this exact sequence:
 
 1. Preserve each raw voice/text/photo item phrase.
 2. Use `accuracy.profile` from `nomnom doctor --json`; configure with `nomnom setup --accuracy-profile practical|balanced|exact --json`.
-3. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Food type is a hard floor; preserve provider/search status and `discovery_receipt`.
+3. Run `nomnom agent candidates --input "RAW ITEM" --json` per item. Preserve provider/search status and `discovery_receipt`; `brand_candidate_requires_semantic_assessment` is not a probable or exact product by itself.
 4. Build a version-2 plan with `accuracy_profile`, raw `input`, optional positive `grams`, and one strict selection/direct ref/pending state. Unbranded selection uses `semantic_equivalent`.
-   Text-only brand match uses `probable_brand_match` plus receipt and is never exact. In Practical, only after no usable brand result, same-type generic fallback uses
-   `branded_same_type_generic`, receipt, and an assumption saying brand/SKU was not exact. Balanced
+   Every selection requires `semantic_attestation` with only version 1, matching relation, exact discovery query as `raw_identity`, exact candidate `semantic_identity` as `selected_identity`, `same_food_type:true`, concise rationale, and confidence 0..1. Assert it only after externally judging the identities; token overlap is not proof.
+   Text-only brand selection uses `probable_brand_match` plus receipt and is never exact. Practical generic fallback uses `branded_same_type_generic`, receipt, a brand/SKU-not-exact assumption, and `dismissed_brand_candidates` covering every brand candidate by source ref with `different_food_type`, `incompatible_variant`, or `incomplete_facts`. Balanced
    also requires `risk_disposition:"material_risk_accepted"` or pending; Exact requires exact evidence. Never include nutrition.
 5. Run `nomnom agent intake --plan 'JSON' --json`; it re-runs branded discovery, verifies receipt, re-fetches facts, calculates, and writes atomically. Show profile, source, relation, assumption, search status, totals, completeness, and pending IDs.
 

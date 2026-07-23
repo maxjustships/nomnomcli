@@ -2185,7 +2185,7 @@
         "generic_proxy"
       ],
       "allowed_semantic_identities": [
-        "vegetable soup"
+        "soup"
       ],
       "allowed_source_refs": [
         "usda:11008"
@@ -2222,7 +2222,7 @@
           "usda": [
             {
               "dataType": "Foundation",
-              "description": "vegetable soup",
+              "description": "soup",
               "fdcId": 11008,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
@@ -2981,7 +2981,7 @@
         "generic_proxy"
       ],
       "allowed_semantic_identities": [
-        "vegetable wrap"
+        "wrap"
       ],
       "allowed_source_refs": [
         "usda:11018"
@@ -3018,7 +3018,7 @@
           "usda": [
             {
               "dataType": "Foundation",
-              "description": "vegetable wrap",
+              "description": "wrap",
               "fdcId": 11018,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
@@ -3214,13 +3214,13 @@
     },
     {
       "allowed_resolution_modes": [
-        "probable_product"
+        "generic_proxy"
       ],
       "allowed_semantic_identities": [
         "sandwich bread"
       ],
       "allowed_source_refs": [
-        "off:0200000012001"
+        "usda:12001"
       ],
       "category": "branded",
       "expected": {
@@ -3267,10 +3267,43 @@
                 "fat_100g": 2,
                 "proteins_100g": 3
               },
-              "product_name": "sandwich bread"
+              "product_name": "cheese"
             }
           ],
-          "usda": []
+          "usda": [
+            {
+              "dataType": "Foundation",
+              "description": "sandwich bread",
+              "fdcId": 12001,
+              "foodCategory": "Synthetic eval food",
+              "foodNutrients": [
+                {
+                  "nutrientId": 1008,
+                  "nutrientName": "Energy",
+                  "unitName": "KCAL",
+                  "value": 81
+                },
+                {
+                  "nutrientId": 1003,
+                  "nutrientName": "Protein",
+                  "unitName": "G",
+                  "value": 15
+                },
+                {
+                  "nutrientId": 1004,
+                  "nutrientName": "Total lipid (fat)",
+                  "unitName": "G",
+                  "value": 2
+                },
+                {
+                  "nutrientId": 1005,
+                  "nutrientName": "Carbohydrate, by difference",
+                  "unitName": "G",
+                  "value": 16
+                }
+              ]
+            }
+          ]
         },
         "responses": {
           "openfoodfacts_search_status": 200,
@@ -3284,7 +3317,7 @@
         "probable_product"
       ],
       "allowed_semantic_identities": [
-        "plain yogurt"
+        "yogurt"
       ],
       "allowed_source_refs": [
         "off:0200000012002"
@@ -3334,7 +3367,7 @@
                 "fat_100g": 3,
                 "proteins_100g": 4
               },
-              "product_name": "plain yogurt"
+              "product_name": "yogurt"
             }
           ],
           "usda": []
@@ -7452,7 +7485,7 @@
         "generic_proxy"
       ],
       "allowed_semantic_identities": [
-        "egg"
+        "cooked egg"
       ],
       "allowed_source_refs": [
         "usda:15001"
@@ -7464,25 +7497,25 @@
         "text_search_must_be_attempted": true
       },
       "forbidden_identities": [
-        "cheese"
+        "cooked cheese"
       ],
       "forbidden_tokens": [
-        "cheese"
+        "cooked cheese"
       ],
       "gram_envelopes": [
         [
-          60,
-          60
+          50,
+          50
         ]
       ],
       "id": "ambiguity-01",
       "items": [
         {
-          "input": "60 g egg"
+          "input": "50 g cooked egg"
         }
       ],
       "profile": "practical",
-      "raw_input": "60 g egg",
+      "raw_input": "50 g cooked egg",
       "steps": [],
       "synthetic_providers": {
         "candidates": {
@@ -7490,7 +7523,7 @@
           "usda": [
             {
               "dataType": "Foundation",
-              "description": "cheese",
+              "description": "cooked cheese",
               "fdcId": 15002,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
@@ -7522,7 +7555,7 @@
             },
             {
               "dataType": "Foundation",
-              "description": "egg",
+              "description": "cooked egg",
               "fdcId": 15001,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
@@ -7569,7 +7602,7 @@
         "milk"
       ],
       "allowed_source_refs": [
-        "usda:15003"
+        "usda:15011"
       ],
       "category": "ambiguity_failure",
       "expected": {
@@ -7578,10 +7611,12 @@
         "text_search_must_be_attempted": true
       },
       "forbidden_identities": [
-        "milk crackers"
+        "chocolate milk",
+        "condensed milk"
       ],
       "forbidden_tokens": [
-        "milk crackers"
+        "chocolate milk",
+        "condensed milk"
       ],
       "gram_envelopes": [
         [
@@ -7604,65 +7639,97 @@
           "usda": [
             {
               "dataType": "Foundation",
-              "description": "milk crackers",
-              "fdcId": 15004,
+              "description": "chocolate milk",
+              "fdcId": 15012,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 204
+                  "value": 212
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 12
+                  "value": 2
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 5
+                  "value": 1
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 49
+                  "value": 57
+                }
+              ]
+            },
+            {
+              "dataType": "Foundation",
+              "description": "condensed milk",
+              "fdcId": 15013,
+              "foodCategory": "Synthetic eval food",
+              "foodNutrients": [
+                {
+                  "nutrientId": 1008,
+                  "nutrientName": "Energy",
+                  "unitName": "KCAL",
+                  "value": 213
+                },
+                {
+                  "nutrientId": 1003,
+                  "nutrientName": "Protein",
+                  "unitName": "G",
+                  "value": 3
+                },
+                {
+                  "nutrientId": 1004,
+                  "nutrientName": "Total lipid (fat)",
+                  "unitName": "G",
+                  "value": 2
+                },
+                {
+                  "nutrientId": 1005,
+                  "nutrientName": "Carbohydrate, by difference",
+                  "unitName": "G",
+                  "value": 58
                 }
               ]
             },
             {
               "dataType": "Foundation",
               "description": "milk",
-              "fdcId": 15003,
+              "fdcId": 15011,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 203
+                  "value": 211
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 11
+                  "value": 19
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 4
+                  "value": 12
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 48
+                  "value": 56
                 }
               ]
             }
@@ -7683,7 +7750,7 @@
         "tomato"
       ],
       "allowed_source_refs": [
-        "usda:15005"
+        "usda:15021"
       ],
       "category": "ambiguity_failure",
       "expected": {
@@ -7719,64 +7786,64 @@
             {
               "dataType": "Foundation",
               "description": "tomato powder",
-              "fdcId": 15006,
+              "fdcId": 15022,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 206
+                  "value": 222
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 14
+                  "value": 12
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 7
+                  "value": 11
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 51
+                  "value": 12
                 }
               ]
             },
             {
               "dataType": "Foundation",
               "description": "tomato",
-              "fdcId": 15005,
+              "fdcId": 15021,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 205
+                  "value": 221
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 13
+                  "value": 11
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 6
+                  "value": 10
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 50
+                  "value": 11
                 }
               ]
             }
@@ -7797,7 +7864,7 @@
         "bread"
       ],
       "allowed_source_refs": [
-        "usda:15007"
+        "usda:15031"
       ],
       "category": "ambiguity_failure",
       "expected": {
@@ -7806,10 +7873,12 @@
         "text_search_must_be_attempted": true
       },
       "forbidden_identities": [
-        "bread candy"
+        "bread crumbs",
+        "bread crackers"
       ],
       "forbidden_tokens": [
-        "bread candy"
+        "bread crumbs",
+        "bread crackers"
       ],
       "gram_envelopes": [
         [
@@ -7832,21 +7901,21 @@
           "usda": [
             {
               "dataType": "Foundation",
-              "description": "bread candy",
-              "fdcId": 15008,
+              "description": "bread crumbs",
+              "fdcId": 15032,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 208
+                  "value": 232
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 16
+                  "value": 4
                 },
                 {
                   "nutrientId": 1004,
@@ -7858,27 +7927,59 @@
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 53
+                  "value": 22
                 }
               ]
             },
             {
               "dataType": "Foundation",
-              "description": "bread",
-              "fdcId": 15007,
+              "description": "bread crackers",
+              "fdcId": 15033,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 207
+                  "value": 233
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 15
+                  "value": 5
+                },
+                {
+                  "nutrientId": 1004,
+                  "nutrientName": "Total lipid (fat)",
+                  "unitName": "G",
+                  "value": 10
+                },
+                {
+                  "nutrientId": 1005,
+                  "nutrientName": "Carbohydrate, by difference",
+                  "unitName": "G",
+                  "value": 23
+                }
+              ]
+            },
+            {
+              "dataType": "Foundation",
+              "description": "bread",
+              "fdcId": 15031,
+              "foodCategory": "Synthetic eval food",
+              "foodNutrients": [
+                {
+                  "nutrientId": 1008,
+                  "nutrientName": "Energy",
+                  "unitName": "KCAL",
+                  "value": 231
+                },
+                {
+                  "nutrientId": 1003,
+                  "nutrientName": "Protein",
+                  "unitName": "G",
+                  "value": 3
                 },
                 {
                   "nutrientId": 1004,
@@ -7890,7 +7991,7 @@
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 52
+                  "value": 21
                 }
               ]
             }
@@ -7911,7 +8012,7 @@
         "yogurt"
       ],
       "allowed_source_refs": [
-        "usda:15009"
+        "usda:15041"
       ],
       "category": "ambiguity_failure",
       "expected": {
@@ -7947,64 +8048,64 @@
             {
               "dataType": "Foundation",
               "description": "yogurt powder",
-              "fdcId": 15010,
+              "fdcId": 15042,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 210
+                  "value": 242
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 18
+                  "value": 14
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 11
+                  "value": 7
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 55
+                  "value": 32
                 }
               ]
             },
             {
               "dataType": "Foundation",
               "description": "yogurt",
-              "fdcId": 15009,
+              "fdcId": 15041,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 209
+                  "value": 241
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 17
+                  "value": 13
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 10
+                  "value": 6
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 54
+                  "value": 31
                 }
               ]
             }
@@ -8025,7 +8126,7 @@
         "tofu"
       ],
       "allowed_source_refs": [
-        "usda:15011"
+        "usda:15051"
       ],
       "category": "ambiguity_failure",
       "expected": {
@@ -8061,64 +8162,64 @@
             {
               "dataType": "Foundation",
               "description": "tofu cake",
-              "fdcId": 15012,
+              "fdcId": 15052,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 212
+                  "value": 252
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 2
+                  "value": 6
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 1
+                  "value": 5
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 57
+                  "value": 42
                 }
               ]
             },
             {
               "dataType": "Foundation",
               "description": "tofu",
-              "fdcId": 15011,
+              "fdcId": 15051,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 211
+                  "value": 251
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 19
+                  "value": 5
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 12
+                  "value": 4
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 56
+                  "value": 41
                 }
               ]
             }
@@ -8168,20 +8269,20 @@
             {
               "dataType": "Foundation",
               "description": "cheese",
-              "fdcId": 15013,
+              "fdcId": 15061,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 213
+                  "value": 261
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 3
+                  "value": 15
                 },
                 {
                   "nutrientId": 1004,
@@ -8193,7 +8294,7 @@
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 58
+                  "value": 51
                 }
               ]
             }
@@ -8243,32 +8344,32 @@
             {
               "dataType": "Foundation",
               "description": "crackers",
-              "fdcId": 15015,
+              "fdcId": 15071,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 215
+                  "value": 271
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 5
+                  "value": 7
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 4
+                  "value": 12
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 5
+                  "value": 6
                 }
               ]
             }
@@ -8314,32 +8415,32 @@
             {
               "dataType": "Foundation",
               "description": "lentils",
-              "fdcId": 15017,
+              "fdcId": 15081,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 217
+                  "value": 281
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 7
+                  "value": 17
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 6
+                  "value": 10
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 7
+                  "value": 16
                 }
               ]
             }
@@ -8348,35 +8449,35 @@
         "responses": {
           "openfoodfacts_search_status": 200,
           "refetch_overrides": {
-            "15017": {
+            "15081": {
               "dataType": "Foundation",
               "description": "lentils mismatched source",
-              "fdcId": 15018,
+              "fdcId": 15082,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 218
+                  "value": 282
                 },
                 {
                   "nutrientId": 1003,
                   "nutrientName": "Protein",
                   "unitName": "G",
-                  "value": 8
+                  "value": 18
                 },
                 {
                   "nutrientId": 1004,
                   "nutrientName": "Total lipid (fat)",
                   "unitName": "G",
-                  "value": 7
+                  "value": 11
                 },
                 {
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 8
+                  "value": 17
                 }
               ]
             }
@@ -8418,14 +8519,14 @@
             {
               "dataType": "Foundation",
               "description": "rice",
-              "fdcId": 15019,
+              "fdcId": 15091,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 219
+                  "value": 291
                 },
                 {
                   "nutrientId": 1003,
@@ -8443,7 +8544,7 @@
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 9
+                  "value": 26
                 }
               ]
             }
@@ -8452,17 +8553,17 @@
         "responses": {
           "openfoodfacts_search_status": 200,
           "refetch_overrides": {
-            "15019": {
+            "15091": {
               "dataType": "Foundation",
               "description": "rice mismatched source",
-              "fdcId": 15020,
+              "fdcId": 15092,
               "foodCategory": "Synthetic eval food",
               "foodNutrients": [
                 {
                   "nutrientId": 1008,
                   "nutrientName": "Energy",
                   "unitName": "KCAL",
-                  "value": 220
+                  "value": 292
                 },
                 {
                   "nutrientId": 1003,
@@ -8480,7 +8581,7 @@
                   "nutrientId": 1005,
                   "nutrientName": "Carbohydrate, by difference",
                   "unitName": "G",
-                  "value": 10
+                  "value": 27
                 }
               ]
             }

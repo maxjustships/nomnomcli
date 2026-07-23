@@ -144,7 +144,103 @@ def render_command(template: str, values: dict[str, str]) -> list[str]:
 
 
 def default_actor_command() -> str:
-    return f"{shlex.quote(sys.executable)} -m evals.fake_actor --prompt {{prompt}}"
+    return f"{shlex.quote(sys.executable)} -m evals.fake_actor --request {{request}}"
+
+
+def split_items(raw_input: str) -> list[str]:
+    return [part.strip() for part in raw_input.split(";") if part.strip()]
+
+
+def invoke_cli(
+    arguments: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path,
+    timeout: int = 30,
+) -> tuple[int, dict]:
+    completed = subprocess.run(
+        [sys.executable, "-m", "nomnomcli", *arguments, "--json"],
+        cwd=cwd,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    stream = completed.stdout if completed.returncode == 0 else completed.stderr
+    try:
+        payload = json.loads(stream)
+    except json.JSONDecodeError:
+        payload = {
+            "error": {
+                "code": "eval_cli_output_invalid",
+                "message": "CLI subprocess did not return JSON",
+            }
+        }
+    return completed.returncode, payload
+
+
+def sanitize_discovery(payload: dict) -> dict:
+    candidate_fields = {
+        "brand",
+        "candidate_status",
+        "canonical_name",
+        "category",
+        "direct_source_ref_eligible",
+        "provider",
+        "semantic_identity",
+        "source_id",
+        "source_ref",
+        "type",
+    }
+    return {
+        "version": payload["version"],
+        "accuracy_profile": payload["accuracy_profile"],
+        "input": payload["input"],
+        "query": payload["query"],
+        "candidates": [
+            {key: candidate.get(key) for key in sorted(candidate_fields)}
+            for candidate in payload["candidates"]
+        ],
+        "text_search": payload["text_search"],
+        "discovery_receipt": payload["discovery_receipt"],
+    }
+
+
+def actor_prompt(request: dict) -> str:
+    return (
+        "Return exactly one strict nomnom agent plan JSON object and no prose. "
+        "You have no tools and must use only the sanitized request below. Never return "
+        "nutrition facts. For every selection, include semantic_attestation with exactly "
+        "version=1, relation matching the selection relation, raw_identity matching the "
+        "discovery query, selected_identity matching candidate.semantic_identity, "
+        "same_food_type=true, a concise rationale, and confidence from 0 to 1. Only assert "
+        "same_food_type when the identities truly denote the same food type; otherwise use "
+        "pending_capture. A brand_candidate_requires_semantic_assessment is not exact. "
+        "For branded_same_type_generic, include dismissed_brand_candidates covering every "
+        "brand candidate, each with source_ref and reason different_food_type, "
+        "incompatible_variant, or incomplete_facts. Exact profile must use pending_capture "
+        "for fuzzy portions or text-only branded identity. Use plan version 2 and the supplied "
+        "accuracy profile. Sanitized request:\n"
+        + json.dumps(request, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def allowlisted_actor_env(host_env: dict[str, str], actor_home: Path) -> dict[str, str]:
+    actor_home.mkdir(parents=True, exist_ok=True)
+    for name in ("config", "cache", "data", "state"):
+        (actor_home / name).mkdir(exist_ok=True)
+    return {
+        "HOME": str(actor_home),
+        "XDG_CONFIG_HOME": str(actor_home / "config"),
+        "XDG_CACHE_HOME": str(actor_home / "cache"),
+        "XDG_DATA_HOME": str(actor_home / "data"),
+        "XDG_STATE_HOME": str(actor_home / "state"),
+        "PATH": host_env.get("PATH", os.defpath),
+        "PYTHONPATH": str(ROOT),
+        "LANG": host_env.get("LANG", "C.UTF-8"),
+        "LC_ALL": host_env.get("LC_ALL", "C.UTF-8"),
+    }
 
 
 def read_events(db_path: Path) -> list[dict]:
@@ -265,6 +361,25 @@ def evaluate(
     allowed_names = {name.casefold() for name in case["allowed_semantic_identities"]}
     forbidden_names = {name.casefold() for name in case["forbidden_identities"]}
     forbidden_tokens = {token.casefold() for token in case["forbidden_tokens"]}
+    for run in actor_runs:
+        for planned_item in run.get("plan", {}).get("items", []):
+            selection = planned_item.get("selection")
+            if not isinstance(selection, dict):
+                continue
+            attestation = selection.get("semantic_attestation")
+            if not isinstance(attestation, dict):
+                hard.append("actor_semantic_attestation_missing")
+                continue
+            selected_identity = str(attestation.get("selected_identity", "")).casefold()
+            if allowed_names and selected_identity not in allowed_names:
+                hard.append(f"actor_semantic_identity_not_allowed:{selected_identity}")
+            if selected_identity in forbidden_names or any(
+                re.search(rf"\b{re.escape(token)}\b", selected_identity)
+                for token in forbidden_tokens
+            ):
+                hard.append(
+                    f"actor_forbidden_semantic_attestation:{selected_identity}"
+                )
     nutrition = expected_per_100(case)
     envelopes = dict(zip(expected_inputs, case["gram_envelopes"], strict=True))
     for item in resolved:
@@ -327,30 +442,32 @@ def evaluate(
 def run_actor(
     *,
     actor_command: str,
-    prompt: str,
-    env: dict[str, str],
+    request: dict,
+    host_env: dict[str, str],
     episode_dir: Path,
     suffix: str,
+    auth_launcher_command: str | None,
 ) -> dict:
     actor_result = episode_dir / f"actor-{suffix}.json"
-    actor_env = {
-        **env,
-        "NOMNOM_ACTOR_TRACE_PATH": str(actor_result),
-    }
+    actor_home = episode_dir / f"actor-home-{suffix}"
+    actor_env = allowlisted_actor_env(host_env, actor_home)
+    request_json = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
+    prompt = actor_prompt(request)
+    command_template = auth_launcher_command or actor_command
     command = render_command(
-        actor_command,
+        command_template,
         {
             "prompt": prompt,
+            "request": request_json,
             "sandbox": str(episode_dir),
-            "db_path": env["NOMNOM_DB_PATH"],
             "actor_result": str(actor_result),
-            "max_turns": "6",
+            "max_turns": "1",
         },
     )
     completed = subprocess.run(
         command,
         cwd=episode_dir,
-        env=actor_env,
+        env=host_env if auth_launcher_command else actor_env,
         check=False,
         capture_output=True,
         text=True,
@@ -365,7 +482,7 @@ def run_actor(
 
     if completed.returncode != 0:
         return persist({
-            "cli_returncode": completed.returncode,
+            "actor_returncode": completed.returncode,
             "actor_process_error": "actor command returned a nonzero status",
         })
     candidates = [completed.stdout.strip()]
@@ -380,9 +497,9 @@ def run_actor(
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
-            return persist(payload)
+            return persist({"actor_returncode": 0, "plan": payload})
     return persist({
-        "cli_returncode": 70,
+        "actor_returncode": 70,
         "actor_process_error": "actor stdout did not contain one parseable JSON object",
     })
 
@@ -394,12 +511,12 @@ def run_episode(
     actor_command: str,
     output_root: Path,
     judge_command: str | None,
+    auth_launcher_command: str | None,
 ) -> dict:
     episode_id = f"{case['id']}-r{repeat_index + 1:02d}"
     episode_dir = output_root / "episodes" / episode_id
     episode_dir.mkdir(parents=True, exist_ok=True)
     db_path = episode_dir / "nomnom.sqlite3"
-    checkout_cli = episode_dir / "nomnom"
     actor_runs = []
     with ReplayServer(case) as replay:
         environment = {
@@ -417,18 +534,6 @@ def run_episode(
             "PYTHONPATH": str(ROOT),
             "PATH": f"{episode_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         }
-        checkout_cli.write_text(
-            "#!/bin/sh\n"
-            f"export NOMNOM_DB_PATH={shlex.quote(str(db_path))}\n"
-            f"export NOMNOM_ACCURACY_PROFILE={shlex.quote(case['profile'])}\n"
-            "export NOMNOM_USDA_KEY=synthetic-eval-placeholder\n"
-            "export NOMNOM_EVAL_MODE=1\n"
-            f"export NOMNOM_EVAL_PROVIDER_URL={shlex.quote(replay.url)}\n"
-            f"export PYTHONPATH={shlex.quote(str(ROOT))}\n"
-            f"exec {shlex.quote(sys.executable)} -m nomnomcli \"$@\"\n",
-            encoding="utf-8",
-        )
-        checkout_cli.chmod(0o700)
         prompts = (
             [step["raw_input"] for step in case["steps"]]
             if case["steps"]
@@ -464,23 +569,69 @@ def run_episode(
                     text=True,
                     timeout=30,
                 )
-            actor_runs.append(
-                run_actor(
-                    actor_command=actor_command,
-                    prompt=(
-                        prompt
-                        if "evals.fake_actor" in actor_command
-                        else (
-                            "Use the nomnom skill to log exactly this meal. Run only the "
-                            f"sandbox CLI {checkout_cli}; do not run setup or doctor. Return "
-                            f"only the final machine-readable CLI JSON. User input: {prompt}"
-                        )
-                    ),
+            discoveries = []
+            discovery_failed = None
+            for raw_item in split_items(prompt):
+                discovery_code, discovery_payload = invoke_cli(
+                    ["agent", "candidates", "--input", raw_item],
                     env=environment,
+                    cwd=episode_dir,
+                )
+                if discovery_code != 0:
+                    discovery_failed = {
+                        "cli_returncode": discovery_code,
+                        "cli": discovery_payload,
+                    }
+                    break
+                discoveries.append(
+                    {
+                        "input": raw_item,
+                        "discovery": sanitize_discovery(discovery_payload),
+                    }
+                )
+            if discovery_failed is not None:
+                actor_run = discovery_failed
+            else:
+                request = {
+                    "protocol_version": 1,
+                    "raw_input": prompt,
+                    "accuracy_profile": case["profile"],
+                    "items": discoveries,
+                }
+                actor_run = run_actor(
+                    actor_command=actor_command,
+                    request=request,
+                    host_env=os.environ.copy(),
                     episode_dir=episode_dir,
                     suffix=f"{index + 1:02d}",
+                    auth_launcher_command=auth_launcher_command,
                 )
-            )
+                plan = actor_run.get("plan")
+                if plan is None:
+                    actor_run["cli_returncode"] = actor_run.get("actor_returncode", 70)
+                    actor_run["cli"] = {
+                        "error": {
+                            "code": "eval_actor_failed",
+                            "message": actor_run.get(
+                                "actor_process_error", "Actor returned no plan"
+                            ),
+                        }
+                    }
+                else:
+                    intake_code, intake_payload = invoke_cli(
+                        [
+                            "agent",
+                            "intake",
+                            "--plan",
+                            json.dumps(plan, ensure_ascii=False),
+                        ],
+                        env=environment,
+                        cwd=episode_dir,
+                    )
+                    actor_run["cli_returncode"] = intake_code
+                    actor_run["cli"] = intake_payload
+                    actor_run["request"] = request
+            actor_runs.append(actor_run)
             if step.get("action_after") == "remove_logged_event":
                 log_id = actor_runs[-1].get("cli", {}).get("log_id")
                 if log_id is not None:
@@ -529,7 +680,9 @@ def run_episode(
                 completed = subprocess.run(
                     command,
                     cwd=ROOT,
-                    env=environment,
+                    env=allowlisted_actor_env(
+                        os.environ, episode_dir / "judge-home"
+                    ),
                     check=False,
                     capture_output=True,
                     text=True,
@@ -556,7 +709,7 @@ def run_episode(
     return result
 
 
-def summarize(results: list[dict], repeats: int) -> dict:
+def summarize(results: list[dict], repeats: int, *, actor_kind: str) -> dict:
     categories = defaultdict(lambda: {"passed": 0, "total": 0})
     for result in results:
         category = categories[result["category"]]
@@ -565,10 +718,18 @@ def summarize(results: list[dict], repeats: int) -> dict:
     practical = [result for result in results if result["profile"] == "practical"]
     complete = sum(result["outcome"] == "complete" for result in practical)
     followup = sum(result["followups"] > 0 for result in practical)
-    hard_counts = Counter(
+    all_hard_counts = Counter(
         failure for result in results for failure in result["hard_failures"]
     )
-    ux_counts = Counter(failure for result in results for failure in result["ux_failures"])
+    all_ux_counts = Counter(
+        failure for result in results for failure in result["ux_failures"]
+    )
+    practical_hard_counts = Counter(
+        failure for result in practical for failure in result["hard_failures"]
+    )
+    practical_ux_counts = Counter(
+        failure for result in practical for failure in result["ux_failures"]
+    )
     portion_results = [
         result
         for result in practical
@@ -581,16 +742,16 @@ def summarize(results: list[dict], repeats: int) -> dict:
     practical_metrics = {
         "catastrophic_semantic_substitutions": sum(
             count
-            for failure, count in hard_counts.items()
+            for failure, count in practical_hard_counts.items()
             if failure.startswith("catastrophic_semantic_substitution")
         ),
         "invented_nutrition_or_source": sum(
             count
-            for failure, count in hard_counts.items()
+            for failure, count in practical_hard_counts.items()
             if failure.startswith(("invented_nutrition", "source_not_allowed"))
         ),
-        "lost_input_items": hard_counts["lost_input_item"],
-        "incorrect_complete_status": hard_counts["incorrect_complete_status"],
+        "lost_input_items": practical_hard_counts["lost_input_item"],
+        "incorrect_complete_status": practical_hard_counts["incorrect_complete_status"],
         "one_pass_completion_rate": complete / len(practical) if practical else 0,
         "meals_requiring_followup_rate": followup / len(practical) if practical else 0,
         "max_followups_per_meal": max(
@@ -600,7 +761,7 @@ def summarize(results: list[dict], repeats: int) -> dict:
             portion_inside / len(portion_results) if portion_results else 1
         ),
         "approximation_provenance_rate": (
-            0 if hard_counts["approximation_assumption_missing"] else 1
+            0 if practical_hard_counts["approximation_assumption_missing"] else 1
         ),
     }
     release_gate = {
@@ -620,18 +781,35 @@ def summarize(results: list[dict], repeats: int) -> dict:
             practical_metrics["approximation_provenance_rate"] == 1
         ),
     }
+    gate_metrics_passed = all(release_gate.values())
+    release_evidence = actor_kind == "external"
+    failed = sum(not result["pass"] for result in results)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "actor_kind": actor_kind,
+        "release_evidence": release_evidence,
         "episodes": len(results),
         "repeats": repeats,
         "passed": sum(result["pass"] for result in results),
-        "failed": sum(not result["pass"] for result in results),
+        "failed": failed,
         "categories": dict(sorted(categories.items())),
-        "hard_failures": dict(sorted(hard_counts.items())),
-        "ux_failures": dict(sorted(ux_counts.items())),
+        "hard_failures": dict(sorted(all_hard_counts.items())),
+        "ux_failures": dict(sorted(all_ux_counts.items())),
+        "all_profile_counters": {
+            "hard_failures": dict(sorted(all_hard_counts.items())),
+            "ux_failures": dict(sorted(all_ux_counts.items())),
+        },
+        "practical_counters": {
+            "hard_failures": dict(sorted(practical_hard_counts.items())),
+            "ux_failures": dict(sorted(practical_ux_counts.items())),
+        },
         "practical_metrics": practical_metrics,
         "release_gate": release_gate,
-        "release_gate_passed": all(release_gate.values()),
+        "gate_metrics_passed": gate_metrics_passed,
+        "release_gate_passed": release_evidence and gate_metrics_passed,
+        "harness_self_test_passed": (
+            actor_kind == "fake" and gate_metrics_passed and failed == 0
+        ),
         "results": results,
     }
 
@@ -643,7 +821,16 @@ def markdown_report(report: dict) -> str:
         f"- Episodes: {report['episodes']}",
         f"- Passed: {report['passed']}",
         f"- Failed: {report['failed']}",
-        f"- Practical release gate: {'PASS' if report['release_gate_passed'] else 'FAIL'}",
+        f"- Actor kind: {report['actor_kind']}",
+        f"- Decision-grade release evidence: {'yes' if report['release_evidence'] else 'no'}",
+        (
+            "- Practical external-model release gate: "
+            f"{'PASS' if report['release_gate_passed'] else 'NOT ESTABLISHED'}"
+        ),
+        (
+            "- Deterministic harness self-test: "
+            f"{'PASS' if report['harness_self_test_passed'] else 'not applicable'}"
+        ),
         "",
         "| Category | Passed | Total | Rate |",
         "|---|---:|---:|---:|",
@@ -668,9 +855,20 @@ def markdown_report(report: dict) -> str:
         )
     )
     lines.extend(["", "## Reproduction", "", "```sh"])
-    lines.append(
-        "PYTHONPATH=. python -m evals.run --mode full --repeat 1 --concurrency 4"
-    )
+    if report["actor_kind"] == "external":
+        lines.extend(
+            [
+                "PYTHONPATH=. python -m evals.run --mode full --repeat 3 --concurrency 4 \\",
+                "  --actor-kind external \\",
+                "  --actor-auth-launcher-command "
+                "'hermes chat -Q --provider openai-codex -m gpt-5.6-luna "
+                "--safe-mode --max-turns 1 -q {prompt}'",
+            ]
+        )
+    else:
+        lines.append(
+            "PYTHONPATH=. python -m evals.run --mode full --repeat 1 --concurrency 4"
+        )
     lines.extend(["```", ""])
     return "\n".join(lines)
 
@@ -681,6 +879,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--actor-command", default=default_actor_command())
+    parser.add_argument("--actor-kind", choices=("fake", "external"))
+    parser.add_argument(
+        "--actor-auth-launcher-command",
+        help=(
+            "Explicit trusted launcher boundary for external provider authentication; "
+            "the launcher receives the host environment and must keep the model tool-free"
+        ),
+    )
     parser.add_argument("--judge-command")
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
@@ -688,6 +894,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    actor_kind = args.actor_kind or (
+        "fake" if args.actor_command == default_actor_command() else "external"
+    )
     if args.repeat < 1:
         raise SystemExit("--repeat must be at least 1")
     if not 1 <= args.concurrency <= 16:
@@ -716,13 +925,14 @@ def main() -> int:
                 actor_command=args.actor_command,
                 output_root=output_root,
                 judge_command=args.judge_command,
+                auth_launcher_command=args.actor_auth_launcher_command,
             )
             for case, repeat_index in jobs
         ]
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
     results.sort(key=lambda result: (result["id"], result["trace"]))
-    report = summarize(results, args.repeat)
+    report = summarize(results, args.repeat, actor_kind=actor_kind)
     (output_root / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -735,12 +945,16 @@ def main() -> int:
                 "episodes": report["episodes"],
                 "passed": report["passed"],
                 "failed": report["failed"],
+                "actor_kind": report["actor_kind"],
+                "release_evidence": report["release_evidence"],
+                "gate_metrics_passed": report["gate_metrics_passed"],
                 "release_gate_passed": report["release_gate_passed"],
+                "harness_self_test_passed": report["harness_self_test_passed"],
             },
             sort_keys=True,
         )
     )
-    return 0 if report["failed"] == 0 and report["release_gate_passed"] else 1
+    return 0 if report["failed"] == 0 and report["gate_metrics_passed"] else 1
 
 
 if __name__ == "__main__":
