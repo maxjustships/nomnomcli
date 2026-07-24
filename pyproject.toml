@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.5"]
+dev = ["pytest>=8,<9", "ruff>=0.5", "setuptools>=68"]
 
 [project.scripts]
 nomnom = "nomnomcli.cli:main"
