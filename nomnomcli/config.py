@@ -9,10 +9,17 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from nomnomcli.accuracy import (
+    ACCURACY_PROFILES,
+    DEFAULT_ACCURACY_PROFILE,
+    profile_spec,
+    validate_accuracy_profile,
+)
 from nomnomcli.errors import NomnomError
 from nomnomcli.portions import DEFAULT_PORTION_POLICY, validate_portion_policy
 
 USDA_ENV_VAR = "NOMNOM_USDA_KEY"
+ACCURACY_PROFILE_ENV_VAR = "NOMNOM_ACCURACY_PROFILE"
 GENERIC_PROXY_POLICY_ENV_VAR = "NOMNOM_GENERIC_PROXY_POLICY"
 GENERIC_PROXY_POLICIES = (
     "allow_for_unbranded",
@@ -75,6 +82,25 @@ class ProviderConfig:
             )
         return self._validate_generic_proxy_policy(stored_policy, "user_config")
 
+    def accuracy_profile(self) -> str:
+        environment_profile = self._environ.get(ACCURACY_PROFILE_ENV_VAR, "").strip()
+        if environment_profile:
+            return self._validate_accuracy_profile(environment_profile, "environment")
+        payload = self._stored_payload()
+        try:
+            stored_profile = payload.get("resolution", {}).get("accuracy_profile")
+        except AttributeError as exc:
+            raise self._invalid_config_error() from exc
+        if stored_profile is None:
+            return DEFAULT_ACCURACY_PROFILE
+        if not isinstance(stored_profile, str):
+            raise NomnomError(
+                "accuracy_profile_invalid",
+                "accuracy_profile in provider configuration must be a string",
+                details={"path": str(self.path), "allowed": list(ACCURACY_PROFILES)},
+            )
+        return self._validate_accuracy_profile(stored_profile, "user_config")
+
     def portion_policy(self) -> str:
         environment_policy = self._environ.get(PORTION_POLICY_ENV_VAR, "").strip()
         if environment_policy:
@@ -85,6 +111,9 @@ class ProviderConfig:
         except AttributeError as exc:
             raise self._invalid_config_error() from exc
         if stored_policy is None:
+            explicit_profile = self._explicit_accuracy_profile(payload)
+            if explicit_profile is not None:
+                return profile_spec(explicit_profile).default_portion_policy
             return DEFAULT_PORTION_POLICY
         if not isinstance(stored_policy, str):
             raise NomnomError(
@@ -108,6 +137,32 @@ class ProviderConfig:
                 },
             )
         return policy
+
+    def _validate_accuracy_profile(self, value: str, source: str) -> str:
+        try:
+            return validate_accuracy_profile(value, source=source, path=str(self.path))
+        except NomnomError as exc:
+            exc.details["environment_variable"] = ACCURACY_PROFILE_ENV_VAR
+            raise
+
+    def _explicit_accuracy_profile(self, payload: dict | None = None) -> str | None:
+        environment_profile = self._environ.get(ACCURACY_PROFILE_ENV_VAR, "").strip()
+        if environment_profile:
+            return self._validate_accuracy_profile(environment_profile, "environment")
+        stored = payload if payload is not None else self._stored_payload()
+        try:
+            value = stored.get("resolution", {}).get("accuracy_profile")
+        except AttributeError as exc:
+            raise self._invalid_config_error() from exc
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise NomnomError(
+                "accuracy_profile_invalid",
+                "accuracy_profile in provider configuration must be a string",
+                details={"path": str(self.path), "allowed": list(ACCURACY_PROFILES)},
+            )
+        return self._validate_accuracy_profile(value, "user_config")
 
     def _invalid_config_error(self) -> NomnomError:
         return NomnomError(
@@ -148,11 +203,11 @@ class ProviderConfig:
         if not key or any(ord(character) < 32 for character in key):
             raise NomnomError("usda_key_invalid", "USDA API key must not be empty")
 
-        destination = self.path
         payload = self._stored_payload()
         try:
             stored_policy = payload.get("resolution", {}).get("generic_proxy_policy")
             stored_portion_policy = payload.get("resolution", {}).get("portion_policy")
+            stored_accuracy_profile = payload.get("resolution", {}).get("accuracy_profile")
         except AttributeError as exc:
             raise self._invalid_config_error() from exc
         if stored_policy is not None and not isinstance(stored_policy, str):
@@ -177,19 +232,90 @@ class ProviderConfig:
             if stored_portion_policy is not None
             else None
         )
+        if stored_accuracy_profile is not None and not isinstance(
+            stored_accuracy_profile, str
+        ):
+            raise NomnomError(
+                "accuracy_profile_invalid",
+                "accuracy_profile in provider configuration must be a string",
+                details={"path": str(self.path), "allowed": list(ACCURACY_PROFILES)},
+            )
+        accuracy_profile = (
+            self._validate_accuracy_profile(stored_accuracy_profile, "user_config")
+            if stored_accuracy_profile is not None
+            else None
+        )
+        content = f"[providers.usda]\napi_key = {json.dumps(key, ensure_ascii=False)}\n"
+        content += self._resolution_content(
+            generic_proxy_policy=policy,
+            portion_policy=portion_policy,
+            accuracy_profile=accuracy_profile,
+        )
+        return self._secure_write(content)
+
+    def store_accuracy_profile(self, profile: str) -> Path:
+        accuracy_profile = self._validate_accuracy_profile(profile, "command_line")
+        payload = self._stored_payload()
+        try:
+            api_key = payload.get("providers", {}).get("usda", {}).get("api_key")
+            stored_policy = payload.get("resolution", {}).get("generic_proxy_policy")
+            stored_portion_policy = payload.get("resolution", {}).get("portion_policy")
+        except AttributeError as exc:
+            raise self._invalid_config_error() from exc
+        if api_key is not None and not isinstance(api_key, str):
+            raise self._invalid_config_error()
+        policy = (
+            self._validate_generic_proxy_policy(stored_policy, "user_config")
+            if isinstance(stored_policy, str)
+            else None
+        )
+        if stored_policy is not None and not isinstance(stored_policy, str):
+            raise self._invalid_config_error()
+        portion_policy = (
+            validate_portion_policy(stored_portion_policy, source="user_config")
+            if isinstance(stored_portion_policy, str)
+            else None
+        )
+        if stored_portion_policy is not None and not isinstance(stored_portion_policy, str):
+            raise self._invalid_config_error()
+        content = ""
+        if api_key:
+            content = (
+                "[providers.usda]\n"
+                f"api_key = {json.dumps(api_key.strip(), ensure_ascii=False)}\n"
+            )
+        content += self._resolution_content(
+            generic_proxy_policy=policy,
+            portion_policy=portion_policy,
+            accuracy_profile=accuracy_profile,
+        )
+        return self._secure_write(content)
+
+    def _resolution_content(
+        self,
+        *,
+        generic_proxy_policy: str | None,
+        portion_policy: str | None,
+        accuracy_profile: str | None,
+    ) -> str:
+        values = {
+            "accuracy_profile": accuracy_profile,
+            "generic_proxy_policy": generic_proxy_policy,
+            "portion_policy": portion_policy,
+        }
+        present = {key: value for key, value in values.items() if value is not None}
+        if not present:
+            return ""
+        content = "\n[resolution]\n"
+        for key, value in present.items():
+            content += f"{key} = {json.dumps(value, ensure_ascii=False)}\n"
+        return content
+
+    def _secure_write(self, content: str) -> Path:
+        destination = self.path
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with suppress(OSError):
             destination.parent.chmod(0o700)
-        content = f"[providers.usda]\napi_key = {json.dumps(key, ensure_ascii=False)}\n"
-        if policy is not None:
-            content += (
-                "\n[resolution]\n"
-                f"generic_proxy_policy = {json.dumps(policy, ensure_ascii=False)}\n"
-            )
-        if portion_policy is not None:
-            if policy is None:
-                content += "\n[resolution]\n"
-            content += f"portion_policy = {json.dumps(portion_policy, ensure_ascii=False)}\n"
         temporary_name: str | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(

@@ -1,5 +1,36 @@
 # Test Plan
 
+## Final Review Repair Source
+- Task: Close four blocking semantic/eval/auth findings on `feat/universal-approx-evals`.
+- Plan file: `docs/plans.md`
+- Status file: `docs/status.md`
+- Last updated: 2026-07-23
+
+## Final Review Repair Validation Scope
+- In scope: all three selection relations, discovery/source revalidation, tomato-to-chicken no-write atomicity, exact expected eval error codes, actor process/timeout/parse failures, derived actor provenance, external/fake contradiction rejection, auth-launcher environment isolation, deterministic corpus regeneration, and compatible docs.
+- Out of scope: live providers, real user SQLite, provider credentials, secret persistence, new data/ontology/alias/portion corpora, dependencies, schemas, migrations, merge, push, or release publication.
+
+## Final Review Repair Fixtures and Network Rules
+- All food/provider responses are intentionally tiny synthetic mocks or the loopback eval replay server.
+- Every SQLite path is a pytest temporary path or episode-local synthetic database; inherited/default user paths remain untouched.
+- Launcher tests use synthetic subprocesses and sentinel secret variables only; no real credential value is read or persisted.
+
+## Final Review Repair Negative / Edge Cases
+- `60 g tomato` selecting refetched `raw chicken` fails with a structured semantic-evidence error and creates no database.
+- `semantic_equivalent`, `branded_same_type_generic`, and `probable_brand_match` reject candidate/source identities that lack deterministic compatibility.
+- An ambiguity error episode returning the wrong CLI error code fails; actor process, timeout, and parse errors fail regardless of expected outcome.
+- `--actor-kind external` cannot reclassify the built-in fake actor, and release evidence requires verified derived provenance.
+- An unrelated secret environment variable is absent from the auth-launcher subprocess and artifacts.
+
+## Final Review Repair Acceptance Gates
+- [x] Focused blocker regressions witnessed RED — 7 expected failures.
+- [x] Egg, milk, tomato, pasta, branded fallback, and probable-brand positive cases remain green.
+- [x] Generated corpus exactly equals `evals/generate_corpus.py` output.
+- [~] `PYTHONPATH=. pytest -q` — 362 passed; 2 loopback replay tests could not create an `AF_INET` socket in the managed sandbox.
+- [x] `ruff check .`
+- [x] `git diff --check`
+- [~] Complete diff/status audit passed; local commit was blocked because the linked worktree Git administration directory is read-only. No push or merge occurred.
+
 ## Issue #31 Validation
 - In scope: `strict|ask|estimate` policy precedence, exact inline-JSON schema/mapping, fuzzy descriptor/fraction/bare-count parsing, all-or-nothing validation and writes, portion provenance in log/stats/text, explicit grams, old logs, docs, and agent guidance.
 - Fixtures: temporary SQLite databases and monkeypatched deterministic generic provider foods only; no live traffic, user database, bundled weights, or repository food data.

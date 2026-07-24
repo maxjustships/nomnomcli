@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +56,7 @@ def test_sdist_ships_and_runs_architecture_guardrails(tmp_path):
     extracted = tmp_path / "extracted"
     extracted.mkdir()
     with tarfile.open(archives[0], "r:gz") as source_archive:
+        source_archive_names = {member.name for member in source_archive.getmembers()}
         for member in source_archive.getmembers():
             member_path = PurePosixPath(member.name)
             assert not member_path.is_absolute()
@@ -82,3 +84,25 @@ def test_sdist_ships_and_runs_architecture_guardrails(tmp_path):
         capture_output=True,
         text=True,
     )
+
+    wheel_dist = tmp_path / "wheel-dist"
+    wheel_dist.mkdir()
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from setuptools.build_meta import build_wheel; "
+            "build_wheel(__import__('sys').argv[1])",
+            str(wheel_dist),
+        ],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(wheel_dist.glob("*.whl"))
+    assert len(wheels) == 1
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        wheel_paths = set(wheel.namelist())
+    assert not any("evals/" in path or path.endswith("corpus.json") for path in wheel_paths)
+    assert not any("evals/" in name for name in source_archive_names)

@@ -1,15 +1,38 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import requests
 
 from nomnomcli.errors import ProviderUnavailableError
 
 RETRYABLE_STATUS_CODES = frozenset({429, *range(500, 600)})
+
+
+def provider_url(default: str, replay_path: str) -> str:
+    """Use loopback-only frozen provider replay when eval mode is explicitly enabled."""
+    if os.getenv("NOMNOM_EVAL_MODE", "").strip() != "1":
+        return default
+    base = os.getenv("NOMNOM_EVAL_PROVIDER_URL", "").strip()
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
+        raise ProviderUnavailableError(
+            "eval_replay",
+            "eval_provider_url_invalid",
+            "Eval provider replay URL must be an explicit loopback HTTP(S) URL",
+            retryable=False,
+            details={"host": parsed.hostname, "eval_mode": True},
+        )
+    return f"{base.rstrip('/')}/{replay_path.lstrip('/')}"
 
 
 @dataclass(frozen=True, slots=True)

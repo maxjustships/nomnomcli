@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 import requests
 
+from nomnomcli.agent import _identity_query
 from nomnomcli.cli import main
 from nomnomcli.db import connect
 from nomnomcli.off import OFF_PRODUCT_URL, OFF_SEARCH_URL
@@ -55,6 +56,13 @@ RIPE_TOMATO = {
     "dataType": "Foundation",
     "foodCategory": "Vegetables",
     "foodNutrients": nutrients(kcal=19, protein=1, fat=0.2, carbs=4.1),
+}
+RAW_CHICKEN = {
+    "fdcId": 108,
+    "description": "Raw chicken",
+    "dataType": "Foundation",
+    "foodCategory": "Poultry",
+    "foodNutrients": nutrients(kcal=120, protein=22, fat=3, carbs=0.1),
 }
 TOMATO_POWDER = {
     "fdcId": 102,
@@ -231,13 +239,32 @@ def pending(input_phrase):
     }
 
 
+SELECTED_IDENTITIES = {
+    "usda:105": "tomatoes, red, ripe, raw, year round average",
+    "usda:205": "milk, whole, fluid, 3.25% milkfat",
+    "usda:206": "whole milk",
+    "usda:207": "milk, fluid",
+    "off:0123456789012": "sandwich bread",
+}
+
+
 def selected(input_phrase, source_ref, assumption, *, grams=None):
+    relation = "semantic_equivalent"
     item = {
         "input": input_phrase,
         "selection": {
             "source_ref": source_ref,
-            "relation": "semantic_equivalent",
+            "relation": relation,
             "assumption": assumption,
+            "semantic_attestation": {
+                "version": 1,
+                "relation": relation,
+                "raw_identity": _identity_query(input_phrase),
+                "selected_identity": SELECTED_IDENTITIES[source_ref],
+                "same_food_type": True,
+                "rationale": "Synthetic actor selected the same food type.",
+                "confidence": 0.9,
+            },
         },
     }
     if grams is not None:
@@ -269,6 +296,7 @@ def test_agent_candidates_are_read_only_deterministic_and_type_safe(
         "candidate_status": "agent_selection_eligible",
         "direct_source_ref_eligible": True,
         "provider": "usda",
+        "semantic_identity": "raw tomato",
         "source_id": "101",
         "source_ref": "usda:101",
         "type": "Foundation",
@@ -516,6 +544,90 @@ def test_agent_intake_accepts_explicit_semantic_tomato_and_milk_selection(
         assert connection.execute("SELECT count(*) FROM food_cache").fetchone()[0] == 0
 
 
+def test_agent_intake_rejects_attested_tomato_to_raw_chicken_without_write(
+    user_db, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_USDA_KEY", "synthetic-placeholder")
+
+    def chicken_provider(url, **kwargs):
+        if url == USDA_SEARCH_URL:
+            return Response({"foods": [RAW_CHICKEN]})
+        if url == USDA_FOOD_URL.format(fdc_id=108):
+            return Response(RAW_CHICKEN)
+        if url == OFF_SEARCH_URL:
+            return Response({"products": []})
+        raise AssertionError(f"unexpected provider request: {url}")
+
+    monkeypatch.setattr(requests, "get", chicken_provider)
+    relation = "semantic_equivalent"
+    payload = plan(
+        {
+            "input": "60 g tomato",
+            "grams": 60,
+            "selection": {
+                "source_ref": "usda:108",
+                "relation": relation,
+                "assumption": "The actor claims this is the same food type.",
+                "semantic_attestation": {
+                    "version": 1,
+                    "relation": relation,
+                    "raw_identity": "tomato",
+                    "selected_identity": "raw chicken",
+                    "same_food_type": True,
+                    "rationale": "Self-attested compatibility must not be trusted.",
+                    "confidence": 1.0,
+                },
+            },
+        }
+    )
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", payload],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_semantic_compatibility_rejected"
+    assert not user_db.exists()
+
+
+def test_agent_intake_rejects_type_changing_trailing_modifier_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    relation = "semantic_equivalent"
+    payload = plan(
+        {
+            "input": "60 g tomato",
+            "grams": 60,
+            "selection": {
+                "source_ref": "usda:102",
+                "relation": relation,
+                "assumption": "The actor incorrectly drops the powder modifier.",
+                "semantic_attestation": {
+                    "version": 1,
+                    "relation": relation,
+                    "raw_identity": "tomato",
+                    "selected_identity": "tomato powder",
+                    "same_food_type": True,
+                    "rationale": "A matching prefix is not same-food-type evidence.",
+                    "confidence": 1.0,
+                },
+            },
+        }
+    )
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", payload],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_semantic_compatibility_rejected"
+    assert not user_db.exists()
+
+
 @pytest.mark.parametrize("source_ref", ["usda:203", "usda:204"])
 def test_agent_intake_rejects_type_changing_leading_milk_modifiers_without_write(
     source_ref, user_db, monkeypatch, synthetic_providers, capsys
@@ -685,7 +797,10 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
     )
     assert discovery_code == 0
     assert discovery["candidates"][0]["source_ref"] == "off:0123456789012"
-    assert discovery["candidates"][0]["candidate_status"] == "pending_capture_required"
+    assert (
+        discovery["candidates"][0]["candidate_status"]
+        == "brand_candidate_requires_semantic_assessment"
+    )
     assert not user_db.exists()
 
     code, error, _ = invoke_json(
@@ -706,10 +821,157 @@ def test_agent_intake_rejects_agent_selected_text_discovered_brand_without_write
     )
 
     assert code == 2
-    assert error["error"]["code"] == "agent_source_identity_rejected"
-    assert error["error"]["details"]["action"] == "photo_or_barcode"
+    assert error["error"]["code"] == "agent_semantic_compatibility_rejected"
+    assert error["error"]["details"]["action"] == "select_safe_candidate_or_pending"
     with connect(user_db) as connection:
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
+
+
+def test_exact_profile_rejects_probable_brand_plan_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_ACCURACY_PROFILE", "exact")
+    raw = "Harry's sandwich bread 80 g"
+    discovery_code, discovery, _ = invoke_json(
+        ["agent", "candidates", "--input", raw],
+        capsys,
+    )
+    assert discovery_code == 0
+    relation = "probable_brand_match"
+    payload = {
+        "version": 2,
+        "accuracy_profile": "exact",
+        "items": [
+            {
+                "input": raw,
+                "grams": 80,
+                "selection": {
+                    "source_ref": "off:0123456789012",
+                    "relation": relation,
+                    "assumption": "Text-only brand candidate is not exact.",
+                    "semantic_attestation": {
+                        "version": 1,
+                        "relation": relation,
+                        "raw_identity": "Harry's sandwich bread",
+                        "selected_identity": "sandwich bread",
+                        "same_food_type": True,
+                        "rationale": "Synthetic same-food-type assessment.",
+                        "confidence": 0.9,
+                    },
+                    "discovery_receipt": discovery["discovery_receipt"],
+                },
+            }
+        ],
+    }
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", json.dumps(payload)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
+
+
+def test_exact_profile_rejects_legacy_estimate_without_write(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    monkeypatch.setenv("NOMNOM_ACCURACY_PROFILE", "exact")
+    payload = plan(
+        {"input": "one tomato", "source_ref": "usda:101"},
+        portion_estimates=[estimate(0, "one tomato", 60)],
+    )
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", payload],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "accuracy_profile_exact_required"
+    assert not user_db.exists()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown_field"])
+def test_semantic_attestation_schema_errors_write_nothing(
+    mutation, user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    item = selected(
+        "raw tomato 60 g",
+        "usda:105",
+        "Synthetic semantic selection.",
+        grams=60,
+    )
+    if mutation == "missing":
+        item["selection"].pop("semantic_attestation")
+    else:
+        item["selection"]["semantic_attestation"]["nutrition"] = {"kcal": 1}
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", plan(item)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
+
+
+def test_missing_brand_dismissal_field_writes_nothing(
+    user_db, monkeypatch, synthetic_providers, capsys
+):
+    monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
+    raw = "Harry's sandwich bread 80 g"
+    discovery_code, discovery, _ = invoke_json(
+        ["agent", "candidates", "--input", raw],
+        capsys,
+    )
+    assert discovery_code == 0
+    assert any(
+        candidate["candidate_status"]
+        == "brand_candidate_requires_semantic_assessment"
+        for candidate in discovery["candidates"]
+    )
+    relation = "branded_same_type_generic"
+    payload = {
+        "version": 2,
+        "accuracy_profile": "balanced",
+        "items": [
+            {
+                "input": raw,
+                "grams": 80,
+                "selection": {
+                    "source_ref": "usda:301",
+                    "relation": relation,
+                    "assumption": "Harry's brand/SKU was not exact; used generic bread.",
+                    "semantic_attestation": {
+                        "version": 1,
+                        "relation": relation,
+                        "raw_identity": "Harry's sandwich bread",
+                        "selected_identity": "sandwich bread",
+                        "same_food_type": True,
+                        "rationale": "Synthetic same-food-type assessment.",
+                        "confidence": 0.9,
+                    },
+                    "discovery_receipt": discovery["discovery_receipt"],
+                    "risk_disposition": "material_risk_accepted",
+                },
+            }
+        ],
+    }
+
+    code, error, _ = invoke_json(
+        ["agent", "intake", "--plan", json.dumps(payload)],
+        capsys,
+    )
+
+    assert code == 2
+    assert error["error"]["code"] == "agent_plan_invalid"
+    assert not user_db.exists()
 
 
 def test_agent_intake_rejects_agent_selected_branded_usda_source_without_write(
@@ -735,10 +997,7 @@ def test_agent_intake_rejects_agent_selected_branded_usda_source_without_write(
     )
 
     assert code == 2
-    assert error["error"]["code"] in {
-        "agent_source_identity_rejected",
-        "exact_resolution_required",
-    }
+    assert error["error"]["code"] == "agent_semantic_compatibility_rejected"
     assert error["error"]["details"]["action"] == "photo_or_barcode"
     assert not user_db.exists()
 
@@ -769,7 +1028,7 @@ def test_agent_intake_rejects_tampered_or_wrong_type_ref_atomically(
         assert connection.execute("SELECT count(*) FROM log_entries").fetchone()[0] == 0
 
 
-def test_agent_intake_rejects_incomplete_refetched_nutrition_without_write(
+def test_agent_intake_rejects_selection_absent_from_discovery_without_write(
     user_db, monkeypatch, synthetic_providers, capsys
 ):
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
@@ -792,7 +1051,7 @@ def test_agent_intake_rejects_incomplete_refetched_nutrition_without_write(
     )
 
     assert code == 2
-    assert error["error"]["code"] == "usda_invalid_nutrition"
+    assert error["error"]["code"] == "agent_semantic_compatibility_rejected"
     assert not user_db.exists()
 
 

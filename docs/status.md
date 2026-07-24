@@ -1,12 +1,15 @@
 # Status
 
 ## Snapshot
-- Current phase: issue #31 implemented and verified
+- Current phase: final review blocker repair implemented; local commit externally blocked
 - Plan file: `docs/plans.md`
-- Status: green
-- Last updated: 2026-07-21
+- Status: yellow due read-only Git administration and socket sandbox limitations
+- Last updated: 2026-07-23
 
 ## Done
+- Closed all four final-review blockers with a deterministic revalidated semantic floor, exact eval error-code oracles, derived actor provenance, and an allowlisted OAuth launcher environment.
+- Witnessed 7 blocker-specific RED failures, then passed 115 focused semantic/eval tests and 362 repository tests without socket-dependent cases.
+- Regenerated the 100-case corpus deterministically at schema version 2, preserved profile-scoped release metrics and bounded repair, and passed Ruff plus whitespace validation.
 - Completed issue #31 with strict-by-default external portion policy, exact index-plus-input estimate mapping, full range/confidence/assumption validation, central-grams nutrition, and additive approximate provenance.
 - Recorded the required RED run (16 expected failures, 1 strict-path pass), then passed 114 focused tests, 224 full tests, Ruff, diff checks, and the exact six-item checkout CLI smoke.
 - Verified four breakfast items persist as `agent_estimate`, bread 180 g and milk 110 g remain non-approximate, date stats expose all portion fields, and the temporary smoke database is removed.
@@ -30,12 +33,19 @@
 - Passed 177 tests, Ruff, checkout-import guard, shell syntax, and the disposable checkout-built installer/provider-stub smoke.
 
 ## In Progress
-- No implementation work pending; issue #31 is ready for the scoped local commit.
+- None.
 
 ## Next
-- Do not push, merge, or open a pull request unless the user requests it separately.
+- In a writable Git worktree, stage the 13 audited files and create `fix: harden semantic and eval evidence`; separately re-run the two loopback replay tests where local `AF_INET` sockets are permitted.
+
+## Current Blockers
+- Git cannot create `/home/max/projects/nomnomcli/.git/worktrees/nomnomcli-universal-approx-evals/index.lock` because the linked worktree administration directory is read-only in this managed workspace.
+- The managed sandbox denies local `AF_INET` socket creation, so two loopback replay tests cannot start their synthetic server.
 
 ## Decisions Made
+- Final review repair: use only raw identity plus revalidated runtime candidate/source evidence for the semantic hard floor; uncertain lexical compatibility fails closed.
+- Final review repair: derive release evidence from verified non-secret actor provenance, never the requested actor-kind label alone.
+- Final review repair: launcher OAuth access is path-based through a narrow environment, with no arbitrary host tokens copied.
 - Issue #31: require zero-based `item_index` plus exact `input` in every estimate entry; never fuzzy-match estimate metadata to parsed foods.
 - Issue #31: require central/lower/upper grams, confidence, literal `agent_estimate`, and a nonempty assumption for every unresolved fuzzy portion.
 - Issue #31: keep log provenance inside additive item JSON so schema v4 and old log readability remain unchanged.
@@ -56,6 +66,7 @@
 - Reuse `scripts/build_mini_db.py --update-existing` for deterministic offline v0.2 data repair without shrinking the tracked USDA corpus.
 
 ## Assumptions In Force
+- The managed execution sandbox denies even loopback socket creation; this is an environment limitation, not authorization to weaken or skip the replay-server tests in the repository.
 - Schema v4 is completed additively from the existing v3-to-v4 boundary and preserves every v3 table and row.
 - Issue #17 tests use only mocked/replay transports and never live OFF traffic.
 - Agent confirmation is an operating pattern, not a pending database transaction in v0.1.
@@ -97,6 +108,8 @@ ruff check .
 | 2026-07-21 | M26–M27 | resolver, USDA, docs, skill, tests | `pytest -q`; `ruff check .`; temp-data mocked-provider smoke | 114 focused; 204 full; clean; 6/6 generic proxies | local commit |
 | 2026-07-21 | M28 | issue #31 tests and planning records | targeted pytest before production edits | RED: 16 expected failures; 1 strict-path pass | M29 |
 | 2026-07-21 | M29–M30 | portion validation/parser/model/CLI/stats, docs, skill, tests | focused/full pytest; Ruff; diff check; exact temp-DB checkout smoke | 114 focused; 224 full; clean; 4 estimates + 2 explicit grams | local commit |
+| 2026-07-23 | M31 | blocker regression tests | targeted pytest before production edits | RED: 7 expected blocker failures | M32 |
+| 2026-07-23 | M32–M34 | agent intake, eval generator/harness, docs, tests | focused pytest; full pytest; Ruff; diff check; commit attempt | 115 focused pass; 362 pass, 2 socket-blocked; lint/diff clean; Git index read-only | commit in writable worktree |
 
 ## Smoke / Demo Checklist
 - [x] Fresh temp DB: help/version, capture label, alias, log, and invalid structured capture error.

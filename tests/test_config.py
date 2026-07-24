@@ -216,6 +216,11 @@ def test_doctor_report_is_deterministic_and_never_contains_key(tmp_path):
     )
 
     assert report == {
+        "accuracy": {
+            "profile": "balanced",
+            "portion_policy": "strict",
+            "branded_generic_fallback": "material_risk_only",
+        },
         "providers": {
             "openfoodfacts": {
                 "configured": True,

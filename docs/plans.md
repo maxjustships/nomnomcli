@@ -1,5 +1,77 @@
 # Plans
 
+## Final Review Repair Source
+- Task: Fix the four blocking findings from the final read-only review of `feat/universal-approx-evals`.
+- Canonical input: User-provided blocker list dated 2026-07-23, with strict TDD, synthetic temporary databases, offline providers, cohesive commit, and no-push/no-merge constraints.
+- Repo context: agent selection intake, eval oracle/corpus, actor provenance, launcher environment isolation, tests, and compatible docs.
+- Last updated: 2026-07-23
+
+## Final Review Repair Assumptions
+- Deterministic semantic compatibility may use only the raw identity and revalidated provider candidate identity/evidence; lexical evidence that cannot establish compatibility must fail closed.
+- External release evidence requires derived executable/command provenance and cannot be enabled by `--actor-kind` alone.
+- The Hermes OAuth boundary may expose the host authentication home/config paths to the launcher, but not arbitrary host environment variables or secret values.
+
+## Final Review Repair Milestone Order
+| ID | Title | Depends on | Status |
+| --- | --- | --- | --- |
+| M31 | Freeze blocker regressions and witness RED | M30 | [x] |
+| M32 | Enforce semantic evidence and exact eval errors | M31 | [x] |
+| M33 | Verify actor provenance and isolate launcher auth | M32 | [x] |
+| M34 | Regenerate, document, validate, audit, and commit | M33 | [~] |
+
+## M31. Freeze blocker regressions and witness RED `[x]`
+### Goal
+- Focused tests reproduce tomato-to-raw-chicken acceptance, wrong actor errors for an error episode, spoofed external labels, and launcher secret leakage before production changes.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_agent_intake.py tests/test_accuracy_profiles.py tests/test_evals.py
+```
+
+### Stop-and-Fix Rule
+- Record the expected blocker-specific RED failures before changing runtime or eval behavior.
+
+## M32. Enforce semantic evidence and exact eval errors `[x]`
+### Goal
+- Every selection is checked against revalidated discovery/candidate evidence and a deterministic fail-closed food-type floor; error episodes pass only for declared CLI error codes and actor process/parse failures always fail.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_agent_intake.py tests/test_accuracy_profiles.py tests/test_evals.py
+```
+
+### Stop-and-Fix Rule
+- Any incompatible selection write, egg/milk/tomato/pasta regression, accepted wrong error code, or weakened atomicity gate blocks M33.
+
+## M33. Verify actor provenance and isolate launcher auth `[x]`
+### Goal
+- Reports carry non-secret derived actor provenance/fingerprints, contradictory actor-kind claims are rejected, and auth launchers receive only a narrow OAuth-capable environment.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q tests/test_evals.py
+```
+
+### Stop-and-Fix Rule
+- A label-only release pass, secret value in an artifact/environment, or broken documented Hermes launcher boundary blocks M34.
+
+## M34. Regenerate, document, validate, audit, and commit `[~]`
+### Goal
+- The checked corpus matches its deterministic generator, documentation reflects the hardened boundaries, all focused/full gates pass, the complete diff is scoped, and one cohesive local commit is created.
+
+### Validation
+```sh
+PYTHONPATH=. pytest -q
+ruff check .
+git diff --check
+```
+
+### Stop-and-Fix Rule
+- Do not commit until the generated corpus is deterministic, all tests are offline/tmp-only, and the complete diff/status audit is clean.
+
+### External Blocker
+- Validation and diff audit are complete, but the managed workspace exposes the linked worktree Git administration directory as read-only, so Git cannot create its `index.lock` or local commit.
+
 ## Issue #31 Source
 - Task: Add opt-in externally agent-estimated fuzzy portions with explicit provenance.
 - Canonical input: GitHub issue #31 latest product decision and the user's strict TDD, atomicity, smoke, commit, and no-push requirements.

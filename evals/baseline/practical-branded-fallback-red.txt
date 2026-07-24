@@ -1,0 +1,14 @@
+Command:
+  PYTHONPATH=. pytest -q tests/test_accuracy_profiles.py
+
+Observed before implementation at commit 4a7593a:
+  Pytest: 0 passed, 1 failed
+
+  Failures:
+       tests/test_accuracy_profiles.py:29: in test_practical_plan_schema_accepts_search_first_branded_sa...
+       nomnomcli/agent.py:159: in parse_agent_plan
+       E   nomnomcli.errors.NomnomError: Agent plan contains missing or unknown top-level fields
+
+This retained RED artifact records the real pre-change failure: the v1 strict plan rejected the
+normative accuracy_profile field before it could represent a search-first branded same-type
+generic fallback.

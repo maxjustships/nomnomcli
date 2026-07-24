@@ -19,7 +19,10 @@ REMOVED_FOOD_INPUTS = (
     "nomnomcli/data/aliases.json",
 )
 STRUCTURED_DATA_SUFFIXES = {".csv", ".db", ".json", ".sqlite", ".sqlite3"}
-ALLOWED_STRUCTURED_FIXTURES = {"tests/fixtures/foods.json"}
+ALLOWED_STRUCTURED_DATA = {
+    "evals/corpus.json",
+    "tests/fixtures/foods.json",
+}
 GENERATED_DIRECTORY_NAMES = {
     ".git",
     ".mypy_cache",
@@ -148,8 +151,13 @@ def test_tracked_structured_data_is_limited_to_intentional_tiny_fixtures():
     payloads = {
         path for path in tracked_paths() if Path(path).suffix.lower() in STRUCTURED_DATA_SUFFIXES
     }
-    assert payloads == ALLOWED_STRUCTURED_FIXTURES
-    assert all((ROOT / path).stat().st_size <= 10_000 for path in payloads)
+    expected = {
+        path for path in ALLOWED_STRUCTURED_DATA if (ROOT / path).exists()
+    }
+    assert payloads == expected
+    assert (ROOT / "tests" / "fixtures" / "foods.json").stat().st_size <= 10_000
+    if (ROOT / "evals" / "corpus.json").exists():
+        assert (ROOT / "evals" / "corpus.json").stat().st_size <= 500_000
 
 
 def test_package_metadata_has_no_food_data_patterns():
@@ -175,6 +183,8 @@ def test_runtime_has_no_bundled_food_references():
         "synonyms_ru.json",
     )
     assert [reference for reference in forbidden_references if reference in runtime] == []
+    assert "evals.corpus" not in runtime
+    assert "corpus.json" not in runtime
 
 
 def test_food_fixture_corpus_is_limited_to_ten_records():

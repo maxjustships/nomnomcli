@@ -566,6 +566,21 @@ def test_cli_setup_status_json_is_prompt_free_and_actionable(monkeypatch, capsys
     assert json.loads(captured.out) == expected
 
 
+def test_cli_setup_stores_accuracy_profile_without_provider_prompt(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    assert main(["setup", "--accuracy-profile", "practical", "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["accuracy_profile"] == "practical"
+    assert result["recommended"] is False
+    config_path = tmp_path / "nomnomcli" / "config.toml"
+    assert result["config_path"] == str(config_path)
+    assert 'accuracy_profile = "practical"' in config_path.read_text(encoding="utf-8")
+
+
 def test_cli_off_alternatives_are_additive_json(user_db, monkeypatch, capsys):
     monkeypatch.setenv("NOMNOM_DB_PATH", str(user_db))
     matches = [
